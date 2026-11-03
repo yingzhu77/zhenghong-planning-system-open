@@ -1,0 +1,62 @@
+/* 填报人项目资料。样式限定本页，不改变其他角色的档案页。 */
+.reporter-archive{min-width:0}
+.reporter-archive-toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.reporter-archive-project{display:flex;align-items:center;gap:10px;min-width:0}
+.reporter-archive-project label{margin:0;white-space:nowrap}
+.reporter-archive-project select{min-width:200px;max-width:100%}
+.reporter-archive-version{margin-left:auto;font-size:13px;color:var(--ink2,#3c506b)}
+.reporter-archive-tabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:thin;border-bottom:1px solid var(--line,#e1e7ef);margin:0 0 18px;padding:0 0 1px}
+.reporter-archive-tabs button{flex:0 0 auto;min-height:44px;padding:10px 18px;border:0;border-bottom:3px solid transparent;border-radius:8px 8px 0 0;background:transparent;color:var(--ink2,#3c506b);font-size:14px}
+.reporter-archive-tabs button:hover{background:#eaf2fc}
+.reporter-archive-tabs button.on{border-bottom-color:var(--planning-blue,#124a8e);color:var(--planning-blue,#124a8e);background:#eaf2fc;font-weight:600}
+.reporter-archive-plan-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}
+.reporter-archive .reporter-archive-section{min-width:0}
+.reporter-archive .cardhd h3{margin:0}
+.reporter-archive .cardhd .hint{margin:0}
+.reporter-archive-empty{min-height:130px;display:flex;align-items:center;justify-content:center;padding:26px 18px;text-align:center;color:var(--mut,#65758b);background:#f7f9fc;border:1px dashed #d3deeb;border-radius:8px;font-size:14px}
+.reporter-archive-plan-columns .reporter-archive-empty{min-height:340px}
+.reporter-archive-files{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;min-width:0}
+.reporter-archive-files-large{grid-template-columns:minmax(0,1fr)}
+.reporter-archive-file{min-width:0;border:1px solid var(--line,#e1e7ef);border-radius:8px;overflow:hidden;background:#fff}
+.reporter-archive-preview{display:block;min-width:0;background:#f3f6fa}
+.reporter-archive-preview img{display:block;width:100%;height:180px;object-fit:contain}
+.reporter-archive-files-large .reporter-archive-preview img{height:420px}
+.reporter-archive-document{display:flex;min-height:180px;gap:16px;flex-direction:column;align-items:center;justify-content:center;background:#f3f6fa;color:var(--mut,#65758b)}
+.reporter-archive-files-large .reporter-archive-document{min-height:340px}
+.reporter-archive-caption{display:flex;flex-direction:column;gap:4px;padding:12px;overflow-wrap:anywhere;font-size:14px}
+.reporter-archive-details{min-width:0}
+.reporter-archive-details>summary{cursor:pointer;color:var(--ink,#172b46);font-weight:600;min-height:30px;line-height:30px}
+.reporter-archive-details[open]>summary{margin-bottom:16px}
+.reporter-archive-fields{width:100%;table-layout:fixed}
+.reporter-archive-fields th{width:36%;color:var(--mut,#65758b);font-weight:400;text-align:left}
+.reporter-archive-fields td{white-space:pre-line;overflow-wrap:anywhere}
+.reporter-archive-total{background:#f3f6fa;font-weight:600}
+.reporter-archive-ratio{display:block;width:110px;max-width:100%;height:5px;background:#edf1f6;border-radius:3px;margin-top:5px;overflow:hidden}
+.reporter-archive-ratio>span{display:block;height:100%;background:var(--planning-blue,#124a8e)}
+.reporter-archive-print-project{display:none}
+@media(max-width:900px){
+  .reporter-archive-plan-columns{grid-template-columns:minmax(0,1fr);gap:0}
+  .reporter-archive-version{margin-left:0}
+  .reporter-archive-tabs button{padding-left:14px;padding-right:14px}
+  .reporter-archive-files-large .reporter-archive-preview img{height:340px}
+}
+@media(max-width:480px){
+  .reporter-archive-toolbar{gap:8px}
+  .reporter-archive-project{width:100%}
+  .reporter-archive-project select{flex:1;min-width:0}
+  .reporter-archive-tabs{margin-bottom:14px;flex-wrap:wrap;overflow-x:visible}
+  .reporter-archive-files{grid-template-columns:minmax(0,1fr)}
+  .reporter-archive-plan-columns .reporter-archive-empty{min-height:220px}
+  .reporter-archive-files-large .reporter-archive-preview img{height:280px}
+  .reporter-archive-fields th{width:45%}
+}
+@media print{
+  .reporter-archive-print-project{display:inline}
+  .reporter-archive-plan-columns{display:block}
+  .reporter-archive .reporter-archive-section{break-inside:avoid}
+  .reporter-archive .reporter-archive-preview img{height:auto;max-height:150mm;object-fit:contain}
+  .reporter-archive .reporter-archive-tabs{display:none}
+  .reporter-archive-fields{min-width:0!important}
+  .reporter-archive-details:not([open]){display:none}
+  .reporter-archive .reporter-archive-empty{min-height:50px}
+}

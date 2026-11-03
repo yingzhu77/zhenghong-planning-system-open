@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#124a8e">
+<title>工程建设数字化服务平台</title>
+<link rel="icon" type="image/png" href="logo.png">
+<style>__PAGE_STYLES__</style>
+<link rel="preload" as="image" type="image/avif" href="login-bg-desktop.avif" media="(min-width:901px)" fetchpriority="high">
+<link rel="preload" as="image" type="image/avif" href="login-bg-mobile.avif" media="(max-width:900px)" fetchpriority="high">
+<script id="planning-assets" type="application/json">__ASSET_MANIFEST__</script>
+<script src="cloud-compat.js" defer></script>
+<script src="login-boot.js" defer></script>
+</head>
+<body>
+<div id="root"><div class="authpage planning-auth" data-initial-login><picture class="auth-background" aria-hidden="true"><source type="image/avif" media="(max-width:900px)" srcset="login-bg-mobile.avif"><source type="image/avif" media="(min-width:901px)" srcset="login-bg-desktop.avif"><source type="image/webp" media="(max-width:900px)" srcset="login-bg-mobile.webp"><img src="login-bg-desktop.webp" alt="" fetchpriority="high" decoding="async"></picture><div class="authcard">
+<div class="ac-brand"><img src="logo.png" alt="正弘置业 ZHENGHONG PROPERTY"><div class="ac-name">工程建设数字化服务平台</div></div>
+<div class="authtabs"><button type="button" class="on" data-login-action="tab" data-tab="pwd">密码登录</button><button type="button" data-login-action="tab" data-tab="otp">验证码登录</button><button type="button" data-login-action="tab" data-tab="reg">注册</button></div>
+<form id="authForm" onsubmit="if(!window.App){event.preventDefault();return false}"><div class="afields">
+<div class="authrow"><label for="email">邮箱</label><input id="email" type="email" placeholder="请输入邮箱" autocomplete="username"></div>
+<div class="authrow"><label for="password">密码</label><input id="password" type="password" placeholder="请输入密码" autocomplete="current-password"></div>
+<div class="authrow full"><button class="btn primary" style="width:100%" type="submit">登录</button></div>
+</div><div id="msg" role="status" aria-live="polite" class="authmsg "></div></form>
+<div class="auth-assist"><button type="button" class="btn link" data-login-action="forgot">忘记密码</button></div>
+</div></div></div>
+</body>
+</html>

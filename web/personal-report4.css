@@ -1,0 +1,19 @@
+/* Compact personal overview and saved milestone details. */
+.planning-shell .personal-overview .card{padding:16px 18px;margin-bottom:14px}
+.planning-shell .personal-overview .cardhd{margin-bottom:10px;gap:8px 16px}
+.planning-shell .personal-overview .empty{padding:14px 12px;min-height:0}
+.planning-shell .personal-overview .kpis{gap:10px;margin:10px 0 0}
+.planning-shell .personal-overview .kpi{padding:12px 14px}
+.planning-shell .personal-overview table td{padding:8px 10px;line-height:1.65}
+.planning-shell .personal-overview .subh{margin:14px 0 8px}
+.planning-shell .personal-priority-summary>summary{cursor:pointer;color:#244b78;font-weight:600;line-height:1.7}
+.planning-shell .personal-priority-summary[open]>summary{margin-bottom:10px}
+.planning-shell .personal-priority-summary>p{margin:8px 0 12px;font-size:12px}
+.planning-shell .personal-nodes .personal-node-note{margin-bottom:6px;line-height:1.6;overflow-wrap:anywhere}
+.planning-shell .personal-nodes .notice{margin:10px 0;font-size:13px;line-height:1.7}
+.planning-shell .personal-nodes .reporter-node-project td{vertical-align:top}
+@media(max-width:760px){
+  .planning-shell .personal-overview .card{padding:13px 12px;margin-bottom:12px}
+  .planning-shell .personal-overview .cardhd{align-items:flex-start}
+  .planning-shell .personal-overview .cardhd>.hint{flex-basis:100%;font-size:12px}
+}

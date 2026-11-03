@@ -1,0 +1,76 @@
+.reporter-meetings .cardhd,.reporter-followups .cardhd{gap:12px;flex-wrap:wrap}
+.reporter-meetings .pm-assignment-table th:first-child{width:16%}.reporter-meetings .pm-assignment-table th:nth-child(2),.reporter-meetings .pm-assignment-table td:nth-child(2){width:32%;white-space:normal}.reporter-meetings .pm-assignment-table td{padding:10px;line-height:1.65}.reporter-unassigned-leaders{margin-top:16px;padding:12px;border:1px solid var(--line,#d8e0df);border-radius:8px}.reporter-unassigned-leaders article{padding:10px 0;border-bottom:1px solid var(--line,#d8e0df)}.reporter-unassigned-leaders article:last-child{border-bottom:0}.reporter-unassigned-leaders p{margin:6px 0}.overview-meeting-table .overview-col-module{width:14%}
+.reporter-meetings table{min-width:720px}
+.reporter-meetings th:first-child{width:34%}
+.reporter-meetings td{vertical-align:top;overflow-wrap:anywhere}
+.reporter-meetings td b+div{margin-top:6px}
+.reporter-row-actions,.reporter-admin-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.reporter-admin-controls select{min-width:200px;max-width:100%}.reporter-meetings td:nth-child(2),.reporter-meetings th:nth-child(2){white-space:nowrap}.reporter-meetings .btn{white-space:nowrap}.reporter-meeting-source{padding:14px;border-radius:10px;background:var(--bg,#f4f7f7)}.reporter-meeting-source>b+div{margin-top:8px}.reporter-meeting-source p{margin-bottom:0}.reporter-meetings-admin td:nth-child(3),.reporter-meetings-admin th:nth-child(3){white-space:nowrap}
+.reporter-meeting-form{margin:16px 0;padding:20px;border:1px solid var(--line,#d8e0df);border-radius:12px;background:var(--paper,#fff)}
+.reporter-meeting-form h4{margin:0 0 10px}
+.reporter-meeting-form label,.reporter-feedback label{display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:600}
+.reporter-meeting-form>label{margin:14px 0}
+.reporter-meeting-form textarea,.reporter-feedback textarea{min-height:76px;resize:vertical;width:100%}
+.reporter-meeting-form input,.reporter-meeting-form select,.reporter-feedback select{width:100%;min-height:38px}
+.reporter-meeting-meta{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.reporter-meeting-actions{display:flex;gap:10px;margin-top:16px}
+.reporter-followup-list{display:grid;gap:14px}
+.reporter-followup{border:1px solid var(--line,#d8e0df);border-radius:12px;padding:16px;overflow-wrap:anywhere}
+.reporter-source{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:10px}
+.reporter-followup-what{white-space:normal;margin-bottom:8px}
+.reporter-feedback{display:grid;grid-template-columns:150px 1fr;gap:16px;margin-top:14px}
+.reporter-source-note{font-size:12px;color:#9a6324;margin:8px 0}
+.reporter-followup-snapshot>h4{margin-top:20px}
+.reporter-followup-snapshot .reporter-followup{margin-top:10px}
+@media(max-width:640px){.reporter-meeting-form{padding:14px}.reporter-meeting-meta,.reporter-feedback{grid-template-columns:1fr;gap:12px}.reporter-followup{padding:13px}.reporter-meetings .cardhd .btn,.reporter-followups .cardhd .btn{white-space:normal}}
+@media print{.reporter-followup{break-inside:avoid}.reporter-source-note{color:#333}}
+@media(max-width:640px){.plan-form .plan-context-period{flex:1 1 100%;width:100%}.plan-form .plan-context-period #pmPeriod{width:100%;max-width:100%;font-size:16px}}
+/* Personal fourth batch: one feedback table and a compact read-only overview. */
+.planning-shell .reporter-followup-table{width:100%;min-width:920px;table-layout:fixed;border-collapse:collapse}
+.reporter-followup-table th:nth-child(1){width:12%}.reporter-followup-table th:nth-child(2){width:16%}.reporter-followup-table th:nth-child(3){width:27%}.reporter-followup-table th:nth-child(4){width:12%}.reporter-followup-table th:nth-child(5){width:33%}
+.planning-shell .reporter-followup-table th{padding:9px 10px;background:#214f82;color:#fff;font-weight:600;text-align:left;border-right:1px solid #fff;white-space:nowrap}
+.planning-shell .reporter-followup-table td{padding:9px 10px;vertical-align:top;background:#e5eef8;line-height:1.55;border:1px solid #fff;overflow-wrap:anywhere}
+.planning-shell .reporter-followup-table tbody tr:nth-child(even)>td{background:#dce8f5}
+.reporter-followup-table td[data-label="提出人"]>.muted,.reporter-followup-table td[data-label="完成时间"]>.muted{font-size:11px;line-height:1.45;margin-top:4px}
+.reporter-followup-table td[data-label="完成时间"]{font-variant-numeric:tabular-nums}
+.reporter-followup-status{display:flex;align-items:center;gap:7px;font-size:12px;color:#4a627b;margin:0 0 5px}
+.reporter-followup-status select{min-height:30px;width:auto;max-width:100%;padding:4px 22px 4px 7px;font-size:12px}
+.planning-shell .reporter-followup-table textarea,.planning-shell .reporter-followup-table .rich-input .ql-editor{width:100%;min-height:50px;padding:7px 8px;font-size:13px;line-height:1.55}
+.planning-shell .reporter-followup-table .rich-input{margin:0}
+.reporter-followup-table .completion-actions{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin:0}
+.reporter-followup-actions{margin-top:8px}
+.reporter-followup-table .completion-actions>.btn{padding:5px 7px;min-height:30px;white-space:normal;font-size:12px}
+.reporter-conflict-actions{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.reporter-followup-table .reporter-source-note{margin:5px 0;font-size:11px;line-height:1.5}
+.planning-shell .reporter-meetings .reporter-personal-task-table{min-width:830px}
+.planning-shell .reporter-meetings .reporter-personal-task-table th:first-child{width:15%}
+.planning-shell .reporter-meetings .reporter-personal-task-table th:nth-child(2),.planning-shell .reporter-meetings .reporter-personal-task-table td:nth-child(2){width:31%;white-space:normal}
+.reporter-personal-task-table th:nth-child(3){width:12%}.reporter-personal-task-table th:nth-child(4){width:25%}.reporter-personal-task-table th:nth-child(5){width:17%}
+.planning-shell .reporter-meetings .reporter-personal-task-table td,.planning-shell .reporter-meetings .reporter-personal-task-table th{padding:8px 10px;line-height:1.5}
+.reporter-personal-task-table .reporter-row-actions{gap:4px;align-items:flex-start}
+.reporter-personal-task-table .reporter-row-actions .btn{padding:5px 7px;min-height:30px;font-size:12px;white-space:normal}
+.reporter-feedback-state{font-size:11px;color:#64758a;margin-top:4px}
+.reporter-personal-task-table .completion-actions{margin:0;display:flex;align-items:flex-start;gap:4px;flex-wrap:wrap}
+.reporter-personal-task-table .completion-badge{font-size:11px;padding:3px 5px}
+.reporter-meetings>p.muted,.reporter-followups>p.muted{font-size:12px;line-height:1.5;margin:7px 0 10px}
+@media(max-width:640px){.reporter-followup-scroll{max-width:100%}.planning-shell .reporter-followup-table td,.planning-shell .reporter-followup-table th{padding:8px}.planning-shell .reporter-followup-table .rich-input .ql-editor,.planning-shell .reporter-followup-table textarea{font-size:16px}.reporter-feedback-link{white-space:normal}}
+@media print{.planning-shell .reporter-followup-table{min-width:0;table-layout:auto}.reporter-followup-table .rich-input .ql-editor{min-height:0!important}.reporter-followup-table .reporter-conflict-actions,.reporter-personal-task-table .reporter-row-actions{display:none!important}}
+
+/* One workbench list, with the existing per-item processing dialog. */
+.planning-shell .reporter-pending table{width:100%;min-width:960px;table-layout:fixed}
+.reporter-pending th:nth-child(1){width:12%}.reporter-pending th:nth-child(2){width:12%}.reporter-pending th:nth-child(3){width:28%}.reporter-pending th:nth-child(4){width:12%}.reporter-pending th:nth-child(5){width:21%}.reporter-pending th:nth-child(6){width:15%}
+.planning-shell .reporter-pending th,.planning-shell .reporter-pending td{padding:12px;line-height:1.6;vertical-align:top;overflow-wrap:anywhere;font-size:14px}
+.reporter-pending .reporter-row-actions{gap:8px}.reporter-pending .reporter-row-actions .btn{min-height:36px;font-size:14px}.reporter-pending .reporter-feedback-state{font-size:14px}
+@media(max-width:640px){.planning-shell .reporter-pending table{min-width:0;table-layout:auto}.reporter-pending thead{display:none}.reporter-pending tbody,.reporter-pending tr,.reporter-pending td{display:block;width:auto!important}.reporter-pending tr{padding:12px 0;border-bottom:1px solid var(--line,#d8e0df)}.planning-shell .reporter-pending td{padding:5px 0;background:transparent;border:0}.reporter-pending td[data-label]::before{content:attr(data-label);display:inline-block;min-width:6em;color:#52677f;margin-right:8px}.reporter-pending .reporter-row-actions .btn{min-height:44px}}
+
+@media(max-width:640px){html .planning-shell .reporter-pending table.reporter-personal-task-table tbody tr:nth-child(n)>td{background:transparent}}
+
+@media(max-width:640px){
+  .planning-shell .tablewrap>table.reporter-followup-table{display:block;min-width:0;table-layout:auto}
+  .reporter-followup-table thead{display:none}
+  .reporter-followup-table tbody,.reporter-followup-table tr,.reporter-followup-table td{display:block;width:auto!important}
+  .reporter-followup-table tr{padding:12px 0;border-bottom:1px solid #c8d9ec}
+  html .planning-shell .reporter-followup-table tbody tr:nth-child(n)>td{padding:5px 0;border:0;background:transparent}
+  .reporter-followup-table td[data-label]::before{content:attr(data-label);display:block;color:#52677f;font-size:12px;margin-bottom:4px}
+  .reporter-followup-table .completion-actions>.btn{min-height:44px}
+}
+@media print{.reporter-followup-actions{display:none!important}}

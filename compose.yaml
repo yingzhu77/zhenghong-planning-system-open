@@ -1,0 +1,134 @@
+name: ${COMPOSE_PROJECT_NAME:-planning-system}
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-planning}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run node scripts/setup-env.mjs first}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Run node scripts/setup-env.mjs first}
+      TZ: Asia/Shanghai
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./db/000-role.sh:/docker-entrypoint-initdb.d/000-role.sh:ro
+      - ./db/001-schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+      - ./db/002-import.sql:/docker-entrypoint-initdb.d/002-import.sql:ro
+      - ./db/003-security.sql:/docker-entrypoint-initdb.d/003-security.sql:ro
+      - ./db/004-auth.sql:/docker-entrypoint-initdb.d/004-auth.sql:ro
+      - ./db/005-rich-text.sql:/docker-entrypoint-initdb.d/005-rich-text.sql:ro
+      - ./db/006-reporter-tasks.sql:/docker-entrypoint-initdb.d/006-reporter-tasks.sql:ro
+      - ./db/007-completion-review.sql:/docker-entrypoint-initdb.d/007-completion-review.sql:ro
+      - ./db/008-report-attachments.sql:/docker-entrypoint-initdb.d/008-report-attachments.sql:ro
+      - ./db/009-commercial-test-access.sql:/docker-entrypoint-initdb.d/009-commercial-test-access.sql:ro
+      - ./db/010-first-password-change.sql:/docker-entrypoint-initdb.d/010-first-password-change.sql:ro
+      - ./db/011-project-manager-scope.sql:/docker-entrypoint-initdb.d/011-project-manager-scope.sql:ro
+      - ./db/012-commercial-module-split.sql:/docker-entrypoint-initdb.d/012-commercial-module-split.sql:ro
+      - ./db/013-operator-meetings.sql:/docker-entrypoint-initdb.d/013-operator-meetings.sql:ro
+      - ./db/014-completion-extensions.sql:/docker-entrypoint-initdb.d/014-completion-extensions.sql:ro
+      - ./db/015-admin-plan-scopes.sql:/docker-entrypoint-initdb.d/015-admin-plan-scopes.sql:ro
+      - ./db/016-coordination-origin-review.sql:/docker-entrypoint-initdb.d/016-coordination-origin-review.sql:ro
+      - ./db/017-independent-coordination.sql:/docker-entrypoint-initdb.d/017-independent-coordination.sql:ro
+      - ./db/018-monthly-plans.sql:/docker-entrypoint-initdb.d/018-monthly-plans.sql:ro
+      - ./db/019-meeting-categories.sql:/docker-entrypoint-initdb.d/019-meeting-categories.sql:ro
+      - ./db/020-project-library.sql:/docker-entrypoint-initdb.d/020-project-library.sql:ro
+      - ./db/021-report-scopes.sql:/docker-entrypoint-initdb.d/021-report-scopes.sql:ro
+      - ./db/022-coordination-rich-text.sql:/docker-entrypoint-initdb.d/022-coordination-rich-text.sql:ro
+      - ./db/023-completion-rich-text.sql:/docker-entrypoint-initdb.d/023-completion-rich-text.sql:ro
+      - ./db/024-management-viewers.sql:/docker-entrypoint-initdb.d/024-management-viewers.sql:ro
+      - ./db/025-monthly-module-format.sql:/docker-entrypoint-initdb.d/025-monthly-module-format.sql:ro
+      - ./db/026-residential-monthly-plans.sql:/docker-entrypoint-initdb.d/026-residential-monthly-plans.sql:ro
+      - ./db/027-monthly-plan-withdrawal.sql:/docker-entrypoint-initdb.d/027-monthly-plan-withdrawal.sql:ro
+      - ./db/028-planning-ai-memory.sql:/docker-entrypoint-initdb.d/028-planning-ai-memory.sql:ro
+      - ./db/029-scoped-residential-monthly-plans.sql:/docker-entrypoint-initdb.d/029-scoped-residential-monthly-plans.sql:ro
+      - ./db/030-merged-professional-reporting.sql:/docker-entrypoint-initdb.d/030-merged-professional-reporting.sql:ro
+      - ./db/031-admin-individual-monthly-plans.sql:/docker-entrypoint-initdb.d/031-admin-individual-monthly-plans.sql:ro
+      - ./db/032-hongfang-design-department.sql:/docker-entrypoint-initdb.d/032-hongfang-design-department.sql:ro
+      - ./db/033-monthly-plan-summaries.sql:/docker-entrypoint-initdb.d/033-monthly-plan-summaries.sql:ro
+      - ./db/034-shenzhen-merged-reporting.sql:/docker-entrypoint-initdb.d/034-shenzhen-merged-reporting.sql:ro
+      - ./db/035-admin-monthly-batch-withdrawal.sql:/docker-entrypoint-initdb.d/035-admin-monthly-batch-withdrawal.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+  api:
+    image: ${APP_IMAGE:-planning-system-api:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      DATABASE_URL: postgresql://app_runtime:${APP_DB_PASSWORD:?Run node scripts/setup-env.mjs first}@db:5432/${POSTGRES_DB:-planning}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+      APP_ADDITIONAL_ORIGINS: ${APP_ADDITIONAL_ORIGINS:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SESSION_SECRET: ${SESSION_SECRET:?Run node scripts/setup-env.mjs first}
+      SESSION_IDLE_HOURS: ${SESSION_IDLE_HOURS:-12}
+      UPLOAD_DIR: /app/uploads
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      TZ: Asia/Shanghai
+    ports:
+      - '${BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:3000'
+    volumes:
+      - uploads:/app/uploads
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+  admin:
+    profiles: [tools]
+    image: ${APP_IMAGE:-planning-system-api:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    user: '0:0'
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://app_runtime:${APP_DB_PASSWORD:?Run node scripts/setup-env.mjs first}@db:5432/${POSTGRES_DB:-planning}
+      ADMIN_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Run node scripts/setup-env.mjs first}@db:5432/${POSTGRES_DB:-planning}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./.local:/app/.local
+    command: [node, scripts/create-user.mjs, --help]
+
+volumes:
+  database:
+  uploads:
+    name: ${UPLOADS_VOLUME:-planning-system_uploads}

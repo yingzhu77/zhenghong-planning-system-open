@@ -1,0 +1,12 @@
+/* Personal selected-text controls live outside tables so scrolling never clips them. */
+.rich-input[data-selection-rich="true"] .rich-surface,.rich-input[data-selection-rich="true"] .ql-editor{height:auto}
+.selection-format-toolbar{position:fixed;z-index:12000;display:flex;gap:4px;align-items:center;padding:5px;background:#183d67;color:#fff;border:1px solid #466a91;border-radius:7px;box-shadow:0 5px 20px #102c4933;max-width:calc(100vw - 16px);box-sizing:border-box}
+.selection-format-toolbar[hidden]{display:none!important}
+.selection-format-toolbar button{font:inherit;font-size:13px;line-height:1.4;min-height:34px;padding:6px 10px;border:1px solid transparent;border-radius:4px;background:transparent;color:#fff;white-space:nowrap;cursor:pointer;touch-action:manipulation}
+.selection-format-toolbar button[data-format="bold"]{font-weight:700}
+.selection-format-toolbar button[data-format="red"]{color:#ffc6c0}
+.selection-format-toolbar button[aria-pressed="true"]{background:#e3edfc;color:#163f76}
+.selection-format-toolbar button:hover{background:#345a85;color:#fff}
+.selection-format-toolbar button:focus-visible{outline:2px solid #fff;outline-offset:1px}
+@media(max-width:600px){.selection-format-toolbar button{min-height:40px;padding:7px 11px}}
+@media print{.selection-format-toolbar{display:none!important}}

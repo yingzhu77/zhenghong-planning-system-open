@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.png -text
+*.jpg -text
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.sql text eol=lf

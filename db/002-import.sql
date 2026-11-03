@@ -1,0 +1,3 @@
+-- Source-only initialization: no real business records or accounts are imported.
+-- Use the explicit seed:demo command for anonymous local evaluation.
+-- Restore existing business data separately from a verified private backup.

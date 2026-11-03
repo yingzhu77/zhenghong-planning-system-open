@@ -1,0 +1,61 @@
+/* Personal reporting controls and compact month-plan rows. */
+.rich-toolbar-shared{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin:0;max-width:100%}
+.rich-toolbar-shared button{min-height:32px;flex:none}
+.rich-toolbar-shared button:disabled{opacity:.48;cursor:default}
+.rich-toolbar-target{font-size:12px;color:#65758b;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:5px}
+[data-shared-rich-toolbar]{min-width:0}
+[data-shared-rich-editor] .rich-input[data-shared-rich="true"]{margin:0}
+.planning-shell .report3-monthly-table{width:100%;table-layout:fixed}
+.planning-shell .report3-monthly-table>thead>tr>th,.planning-shell .report3-monthly-table>tbody>tr>td{padding:9px 10px;vertical-align:top;overflow-wrap:anywhere}
+.report3-monthly-table th:nth-child(1){width:15%}.report3-monthly-table th:nth-child(2){width:32%}
+.report3-monthly-table th:nth-child(3){width:13%}.report3-monthly-table th:nth-child(4){width:40%}
+.monthly-next-plan .plan-form-table{width:100%;table-layout:fixed}
+.monthly-next-plan th:nth-child(1){width:20%}.monthly-next-plan th:nth-child(2){width:43%}
+.monthly-next-plan th:nth-child(3){width:25%}.monthly-next-plan th:nth-child(4){width:12%}
+.planning-shell .report3-monthly-table .rich-input .ql-editor{min-height:54px;padding:8px 10px;line-height:1.65}
+.planning-shell .report3-monthly-table .rich-input .rich-surface,.planning-shell .report3-monthly-table .rich-input .ql-editor{height:auto}
+.planning-shell .report3-monthly-table textarea{min-height:54px;line-height:1.65}
+.plan-item-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px}
+.report3-monthly-table .pm-col-action .btn{padding:6px 8px;min-height:32px;white-space:normal}
+.report3-monthly-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.planning-header-tools{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;margin-left:auto;flex:0 1 auto}
+.planning-header:has(.planning-header-tools){gap:18px}
+.planning-header-tools .tb-field{width:auto;min-width:0;max-width:230px}
+.planning-header-tools .tb-field label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+.planning-header-tools select{min-height:36px;height:36px;font-size:13px;padding:6px 25px 6px 10px;background:#fff;color:#17385e;border:1px solid #ffffff59;border-radius:6px;max-width:230px;width:100%}
+.planning-header-tools>.btn{min-height:36px;padding:6px 9px;white-space:nowrap;border:1px solid #ffffff59;background:#ffffff14;color:#fff;font-size:12px}
+.planning-header-tools>.btn:hover{background:#ffffff26;color:#fff}
+@media(max-width:1360px){
+  .planning-header:has(.planning-header-tools){flex-wrap:wrap;padding-top:10px;padding-bottom:10px;gap:8px 16px}
+  .planning-header:has(.planning-header-tools) .planning-brand{order:0}
+  .planning-header:has(.planning-header-tools) .planning-identity{order:1;margin-left:auto}
+  .planning-header:has(.planning-header-tools) .planning-mainnav{order:2;flex:1 1 auto}
+  .planning-header-tools{order:3;margin-left:auto}
+}
+@media(max-width:980px){
+  .planning-header:has(.planning-header-tools) .planning-mainnav{flex:1 1 100%}
+  .planning-header-tools{flex:1 1 100%;justify-content:flex-end}
+  .planning-header-tools .tb-field{flex:1 1 auto;max-width:none}
+  .planning-header-tools select{max-width:none}
+}
+@media(max-width:760px){
+  .report3-monthly-heading{align-items:flex-start}
+  .rich-toolbar-target{max-width:180px;margin-left:0}
+  .planning-shell .report3-monthly-table,.planning-shell .report3-monthly-table>tbody{display:block;min-width:0!important}
+  .planning-shell .report3-monthly-table>thead{display:none}
+  .planning-shell .report3-monthly-table>tbody>tr{display:block;padding:12px;border:1px solid #e0e7f0;border-radius:8px;margin:0 0 10px;background:#fafcfe}
+  .planning-shell .report3-monthly-table>tbody>tr>td{display:block;width:100%!important;padding:0 0 10px;border:0;background:transparent!important}
+  .planning-shell .report3-monthly-table>tbody>tr>td:last-child{padding-bottom:0}
+  .report3-monthly-table td[data-label]::before{content:attr(data-label);display:block;font-size:12px;color:#596e89;margin-bottom:5px;font-weight:500}
+  .planning-shell .report3-monthly-table .rich-input .ql-editor{font-size:16px;min-height:58px}
+  .planning-shell .report3-monthly-table textarea{font-size:16px;min-height:58px}
+}
+@media print{
+  [data-shared-rich-toolbar],.planning-header-tools{display:none!important}
+  .planning-shell .report3-monthly-table{display:table!important;table-layout:auto}
+  .planning-shell .report3-monthly-table>thead{display:table-header-group!important}
+  .planning-shell .report3-monthly-table>tbody{display:table-row-group!important}
+  .planning-shell .report3-monthly-table>tbody>tr{display:table-row!important;padding:0;margin:0;border:0}
+  .planning-shell .report3-monthly-table>tbody>tr>td{display:table-cell!important;padding:5px 7px;border-bottom:1px solid #ddd}
+  .report3-monthly-table td[data-label]::before{display:none!important}
+}

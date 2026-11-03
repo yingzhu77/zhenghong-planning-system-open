@@ -1,0 +1,37 @@
+{
+  "name": "zhenghong-planning-system",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/app.mjs",
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs tests/frontend-render.mjs",
+    "test:render": "node tests/frontend-render.mjs",
+    "test:db": "node --test tests/source-database.test.mjs",
+    "user:create": "node --env-file-if-exists=.env scripts/create-user.mjs",
+    "seed:demo": "node --env-file-if-exists=.env scripts/seed-demo.mjs",
+    "setup": "node scripts/setup-env.mjs",
+    "prestart": "node scripts/vendor-editor.mjs",
+    "assets:vendor": "node scripts/vendor-editor.mjs",
+    "check:source": "node scripts/check-source.mjs"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "1.1.1",
+    "express": "5.3.0",
+    "fast-xml-parser": "5.11.2",
+    "nodemailer": "10.3.1",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.4.299",
+    "pg": "8.16.3",
+    "quill": "2.0.3",
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.4.1",
+    "@playwright/test": "1.64.1"
+  }
+}

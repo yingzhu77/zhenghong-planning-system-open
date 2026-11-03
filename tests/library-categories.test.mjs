@@ -1,0 +1,61 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {readFile,mkdtemp,rm} from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import vm from 'node:vm';
+import sharp from 'sharp';
+import {initializedDatabase,testPool} from './helpers/pglite-pool.mjs';
+import {seedDemo} from '../scripts/seed-demo.mjs';
+import {listProjectLibrary,uploadProjectDocument,withdrawProjectDocument} from '../server/project-library.mjs';
+
+test('project library category choices survive name/category filters and follow project and withdrawn scope',async t=>{
+ const db=await initializedDatabase(),admin=testPool(db,null),pool=testPool(db),dir=await mkdtemp(path.join(os.tmpdir(),'library-categories-'));
+ t.after(async()=>{await rm(dir,{recursive:true,force:true});await db.close();});
+ await seedDemo(admin);
+ const body=await sharp({create:{width:20,height:20,channels:3,background:'#fff'}}).png().toBuffer();
+ const pm={id:'demo-pm-com'},outside={id:'demo-pm-res'},session='a'.repeat(64);
+ const upload=(user,pid,category,title)=>uploadProjectDocument(pool,user,dir,{project_id:pid,filename:title+'.png',category,title},body);
+ await upload(pm,'demo-com','图纸','匿名图纸');
+ await upload(pm,'demo-com','会议资料','匿名会议');
+ await upload(pm,'demo-com','图纸','匿名图纸另一版本');
+ const withdrawn=await upload(pm,'demo-com','已归档分类','匿名已撤回资料');
+ await withdrawProjectDocument(pool,pm,{id:withdrawn.id});
+ await upload(outside,'demo-res','其他项目专有分类','匿名其他项目');
+ const filtered=await listProjectLibrary(pool,pm,{project_id:'demo-com',category:'图纸',q:'匿名图纸'},session);
+ assert.equal(filtered.items.length,2);
+ assert.deepEqual([...filtered.categories].sort(),['会议资料','图纸'].sort());
+ const empty=await listProjectLibrary(pool,pm,{project_id:'demo-com',q:'没有匹配名称'},session);
+ assert.equal(empty.items.length,0);
+ assert.deepEqual([...empty.categories].sort(),['会议资料','图纸'].sort());
+ const history=await listProjectLibrary(pool,pm,{project_id:'demo-com',category:'会议资料',include_withdrawn:true},session);
+ assert.equal(history.items.length,1);
+ assert.deepEqual([...history.categories].sort(),['会议资料','图纸','已归档分类'].sort());
+ await assert.rejects(listProjectLibrary(pool,outside,{project_id:'demo-com'},session),error=>error.status===403);
+ const own=await listProjectLibrary(pool,outside,{project_id:'demo-res'},session);
+ assert.deepEqual(own.categories,['其他项目专有分类']);
+});
+
+test('library UI keeps all project categories available after filtering while allowing free upload categories',async()=>{
+ const code=await readFile(new URL('../web/project-library.js',import.meta.url),'utf8'),requests=[];
+ const S={uid:'anonymous-library-user',session:{}},sandbox={Map,Set,Promise,URLSearchParams,document:{getElementById:()=>null}};
+ sandbox.window=sandbox;vm.createContext(sandbox);vm.runInContext(code,sandbox);
+ let selected='p1';
+ const cfg={S,esc:value=>String(value??'').replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;'),projectId:()=>selected,render(){},toast(){},
+  request:async(url,body)=>{requests.push({url,body});return {data:{items:body.q?[]:[{id:'one',title:'匿名图纸',name:'one.png',category:'图纸',mime:'image/png',size:20,version:1}],categories:['会议资料','图纸'],configured:false}};}};
+ const api=sandbox.ProjectLibrary;api.configure(cfg);api.html('p1');await new Promise(resolve=>setImmediate(resolve));
+ api.edit('category','图纸');await api.reload();
+ let html=api.html('p1');
+ assert.match(html,/<option value="会议资料">会议资料<\/option>/);
+ assert.match(html,/<option value="图纸" selected>图纸<\/option>/);
+ api.edit('q','没有匹配名称');await api.reload();html=api.html('p1');
+ assert.match(html,/暂无符合条件的共享资料/);
+ assert.match(html,/<option value="会议资料">会议资料<\/option>/);
+ api.edit('uploadCategory','既有自定义分类<&');html=api.html('p1');
+ assert.match(html,/value="既有自定义分类&lt;&amp;" list="library-category-suggestions"/);
+ assert.match(html,/分类（可选）/);
+ assert.doesNotMatch(html,/<input[^>]*list="library-category-suggestions"[^>]*required/);
+ assert.equal(requests.at(-1).body.category,'图纸');
+ selected='p2';html=api.html('p2');
+ assert.doesNotMatch(html,/既有自定义分类|<option value="会议资料">会议资料<\/option>/,'category options from the previous project must not appear while a new project loads');
+});

@@ -1,0 +1,50 @@
+/* Reporter-only additions: existing shared layouts and management pages stay intact. */
+.reporter-workbench .reporter-line-filters{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 20px;padding:14px 16px;background:#f7f9fc;border:1px solid var(--line);border-radius:8px}
+.reporter-workbench .reporter-line-filters>div{min-width:220px;flex:1;max-width:420px}
+.reporter-workbench .reporter-line-filters label{display:block;margin-bottom:6px;color:#546780;font-size:12px}
+.reporter-workbench .reporter-line-filters select{width:100%;min-height:40px}
+.reporter-workbench .reporter-node-project+.reporter-node-project{margin-top:26px}
+.reporter-workbench .reporter-node-project h4,.reporter-workbench .reporter-flow-project>h4{font-size:15px;margin:18px 0 12px;color:#153d6e;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.reporter-workbench .reporter-node-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:18px}
+.reporter-workbench .reporter-flow-explainer{margin:0 0 20px;padding:10px 12px;background:#f7f9fc;border-left:3px solid #a7bfdc;line-height:1.8}
+.reporter-workbench .reporter-flow-project+.reporter-flow-project{margin-top:28px;border-top:1px solid var(--line);padding-top:8px}
+.reporter-workbench .reporter-flow-stages{display:flex;flex-direction:column;gap:12px}
+.reporter-workbench .reporter-flow-stage{border:1px solid #dfe7f1;border-radius:8px;overflow:hidden}
+.reporter-workbench .reporter-flow-stage-head{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#edf3fa;color:#173f70;font-size:13px}
+.reporter-workbench .reporter-flow-stage-head>span{font-size:12px;color:#64758a}
+.reporter-workbench .reporter-flow-lanes{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:14px;padding:14px}
+.reporter-workbench .reporter-flow-lane{min-width:0}
+.reporter-workbench .reporter-flow-lane h5{margin:0 0 8px;font-size:12px;font-weight:600;color:#60728a}
+.reporter-workbench .reporter-flow-lane ul{padding:0;margin:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.reporter-workbench .reporter-flow-node{background:#f9fbfe;border:1px solid #e2eaf4;border-radius:6px;padding:10px 12px;overflow-wrap:anywhere}
+.reporter-workbench .reporter-flow-node-name{font-size:13px;font-weight:600;color:#253f60;line-height:1.6}
+.reporter-workbench .reporter-flow-dates{display:flex;gap:4px 14px;flex-wrap:wrap;margin:6px 0;color:#69798b;font-size:12px;font-variant-numeric:tabular-nums}
+.reporter-workbench .reporter-flow-node.is-done{background:#f7f8fa;border-color:#e6e8ec}
+.reporter-workbench .reporter-flow-done{margin-top:10px;font-size:12px;color:#64758a}
+.reporter-workbench .reporter-flow-done summary{cursor:pointer;padding:7px 0}
+/* 按到期优先级分组，沿用月度汇总的深蓝表头和浅蓝分行。 */
+.pm-priority-group{min-width:0;margin:0 0 12px;border:1px solid #cbd9e9;border-radius:8px;overflow:hidden;background:#fff}
+.pm-priority-group:last-child{margin-bottom:0}
+.pm-priority-group>summary{display:flex;align-items:center;gap:10px;min-height:46px;padding:10px 14px;cursor:pointer;list-style:none;background:#edf3fa;color:#244b78;font-weight:600;font-size:14px}
+.pm-priority-group>summary::-webkit-details-marker{display:none}
+.pm-priority-group>summary::before{content:"";width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);margin-right:3px;flex:none}
+.pm-priority-group[open]>summary::before{transform:rotate(45deg);margin-top:-4px}
+.pm-priority-group>summary>.muted,.pm-priority-group>summary>.hint{font-weight:400;font-size:12px}
+.pm-priority-group[data-priority="P0"]>summary,.pm-priority-group.is-p0>summary{background:#fff0ed;color:#a34238}
+.pm-priority-group[data-priority="P1"]>summary,.pm-priority-group.is-p1>summary{background:#fff7e8;color:#946023}
+.pm-priority-group .tablewrap{width:100%;overflow-x:auto}
+.planning-shell .pm-priority-group table,.planning-shell table.pm-assignment-table{width:100%;min-width:850px;table-layout:fixed;border-collapse:separate;border-spacing:0}
+.planning-shell .pm-priority-group th,.planning-shell .pm-assignment-table th{position:static;background:#214f82;color:#fff;font-weight:600;white-space:nowrap;word-break:normal;overflow-wrap:normal;line-height:1.55;padding:11px 12px;border-right:2px solid #fff;border-bottom:2px solid #fff}
+.planning-shell .pm-priority-group td,.planning-shell .pm-assignment-table td{vertical-align:top;padding:11px 12px;line-height:1.75;background:#e5eef8;border-right:2px solid #fff;border-bottom:2px solid #fff;overflow-wrap:anywhere}
+.planning-shell .pm-priority-group tbody tr:nth-child(even)>td,.planning-shell .pm-assignment-table tbody tr:nth-child(even)>td{background:#dce8f5}
+.planning-shell .pm-priority-group tbody tr:hover>td,.planning-shell .pm-assignment-table tbody tr:hover>td{background:#d4e3f3}
+.planning-shell .pm-priority-group tr>*:last-child,.planning-shell .pm-assignment-table tr>*:last-child{border-right:0}
+.planning-shell .pm-priority-group tbody tr:last-child>td,.planning-shell .pm-assignment-table tbody tr:last-child>td{border-bottom:0}
+.pm-priority-group .pm-col-date,.pm-assignment-table .pm-col-date{width:136px}
+.pm-priority-group .pm-col-action,.pm-assignment-table .pm-col-action{width:160px}
+.pm-priority-group td[data-label="完成时间"],.pm-priority-group td[data-label="计划完成时间"],.pm-priority-group td[data-label="预计完成时间"],.pm-priority-group td[data-label="截止时间"],.pm-priority-group td[data-label="截止日期"],.pm-assignment-table td[data-label="完成时间"],.pm-assignment-table td[data-label="截止时间"],.pm-assignment-table td[data-label="截止日期"],.pm-priority-group td.pm-col-date,.pm-assignment-table td.pm-col-date{white-space:nowrap;overflow-wrap:normal;font-variant-numeric:tabular-nums}
+.pm-priority-group .completion-inline,.pm-assignment-table .completion-inline{margin-top:0}
+.pm-priority-group .completion-inline .btn,.pm-assignment-table .completion-inline .btn{max-width:100%;min-height:34px;font-size:12px;padding:5px 9px}
+@media(max-width:600px){.pm-priority-group>summary{gap:7px;flex-wrap:wrap;padding:10px 12px}.planning-shell .pm-priority-group th,.planning-shell .pm-priority-group td,.planning-shell .pm-assignment-table th,.planning-shell .pm-assignment-table td{padding:10px;font-size:13px}}
+@media(max-width:600px){.reporter-workbench .reporter-line-filters{padding:12px;gap:12px}.reporter-workbench .reporter-line-filters>div{min-width:0;flex-basis:100%;max-width:none}.reporter-workbench .reporter-flow-lanes{padding:10px;gap:10px}.reporter-workbench .reporter-flow-node{padding:9px 10px}}
+@media print{.reporter-workbench .reporter-flow-done>ul{display:block!important}.reporter-workbench .reporter-flow-node{break-inside:avoid}.reporter-workbench .reporter-flow-stage{overflow:visible}.pm-priority-group{overflow:visible}.pm-priority-group:not([open]){display:none}.pm-priority-group>summary{break-after:avoid}.planning-shell .pm-priority-group table,.planning-shell table.pm-assignment-table{min-width:0;table-layout:auto}}

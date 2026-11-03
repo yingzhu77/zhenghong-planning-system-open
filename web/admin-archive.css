@@ -1,0 +1,35 @@
+/* 维护表单只作用于管理员项目档案。 */
+.admin-archive .admin-archive-editor fieldset,.admin-archive .admin-archive-phase-editor fieldset,.admin-archive .admin-archive-drawing-editor fieldset{border:0;padding:0;margin:0;min-width:0}
+.admin-archive fieldset:disabled{opacity:.75}
+.admin-archive-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 22px}
+.admin-archive-field{display:flex;flex-direction:column;gap:7px;margin:0;min-width:0;font-size:14px}
+.admin-archive-field>span{color:var(--ink2,#3c506b);overflow-wrap:anywhere}
+.admin-archive-field input,.admin-archive-field select,.admin-archive-field textarea{width:100%;max-width:100%;box-sizing:border-box}
+.admin-archive-field:has(textarea){grid-column:1/-1}
+.admin-archive-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:18px 0 4px}
+.admin-archive-actions .hint{margin:0}
+.admin-archive .admin-archive-array{margin-top:18px;width:100%;min-width:540px}
+.admin-archive-array th:nth-child(1){width:40%}.admin-archive-array th:nth-child(2){width:25%}
+.admin-archive-array td input{width:100%;min-width:100px}
+.admin-archive-array td:nth-child(3){white-space:nowrap}
+.admin-archive-phase-editor>summary,.admin-archive-saved>summary{cursor:pointer;color:var(--ink,#172b46);font-weight:600;min-height:32px;line-height:32px}
+.admin-archive-phase-editor[open]>summary,.admin-archive-saved[open]>summary{margin-bottom:16px}
+.admin-archive-phase-editor table{min-width:1100px}
+.admin-archive-phase-editor td input{width:100%;min-width:80px}
+.admin-archive-phase-editor td:first-child input{min-width:130px}
+.admin-archive-drawing-list{margin-top:20px;border-top:1px solid var(--line,#e1e7ef)}
+.admin-archive-drawing-list>div{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line,#e1e7ef)}
+.admin-archive-drawing-list>div>span{display:flex;flex-direction:column;gap:4px;min-width:0;overflow-wrap:anywhere}
+.admin-archive-drawing-list small{color:var(--mut,#65758b)}
+.admin-archive-drawing-list button{flex:0 0 auto}
+.admin-archive-saved>.reporter-archive-section:last-child{margin-bottom:0}
+@media(max-width:640px){
+  .admin-archive-grid{grid-template-columns:minmax(0,1fr);gap:14px}
+  .admin-archive-actions{align-items:flex-start;gap:8px}
+  .admin-archive-actions>.hint{width:100%}
+  .admin-archive-drawing-list>div{gap:10px}
+}
+@media print{
+  .admin-archive-editor,.admin-archive-phase-editor,.admin-archive-drawing-editor{display:none!important}
+  .admin-archive-saved>summary{display:none}
+}
