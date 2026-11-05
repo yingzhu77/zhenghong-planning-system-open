@@ -55,10 +55,84 @@ test('实际HTTP与Edge：商业总览在零周报时显示本月已确认计划
  await f.admin.query("INSERT INTO public.projects(id,name,project_type,sort_order) VALUES($1,'匿名商业确认计划验收','com',1)",[project]);await f.admin.query("INSERT INTO public.project_members(user_id,project_id) VALUES('demo-pm-com',$1)",[project]);
  const response=await page.request.post(f.url+'/api/admin-plans/save',{headers:{Origin:f.url},data:{operation_id:randomUUID(),plans:[{project_id:project,line,owner_id:'demo-pm-com',month:f.month,expected_plan_id:null,items:[{source_id:'preview-source',mod:'主体施工',name,due:f.month+'-28'}],rich_text:{v:1,fields:{'items.0.name':{ops:[{insert:name,attributes:{bold:true}}]}}}}]}});assert.equal(response.status(),200);
  await page.reload();await expect(page.locator('.planning-mainnav')).toBeVisible();await page.getByRole('button',{name:'计划总览',exact:true}).click();await page.getByRole('button',{name:'商业计划总览',exact:true}).click();await page.locator('#overviewFilter').selectOption(line);
- const group=page.locator('.overview-project[data-project-id="'+project+'"]');await expect(group).toContainText('本期 0 份填报');const table=group.locator('.overview-data-table[data-section="plans"]');await expect(table).toContainText(name);await expect(table.locator('strong')).toContainText(name);await expect(table).toContainText('月计划已确认，本周尚未提交');
- const evidence=path.resolve('.local/overview-plan-layout-20261102');await mkdir(evidence,{recursive:true});await page.screenshot({path:path.join(evidence,'commercial-confirmed-plan.png'),fullPage:true});
+ const group=page.locator('.overview-project[data-project-id="'+project+'"]');await expect(group).toContainText('本期 0 份填报');const table=group.locator('.overview-data-table[data-section="plans"]');await expect(table).toContainText(name);await expect(table.locator('strong')).toContainText(name);await expect(table).toContainText('本周未提交');await expect(table.locator('.overview-empty[title]')).toHaveAttribute('title','月计划已确认，本周尚未提交');
+ const evidence=path.resolve('.local/admin-ui-20261105/overview');await mkdir(evidence,{recursive:true});await page.screenshot({path:path.join(evidence,'commercial-confirmed-plan.png'),fullPage:true});
  const periods=await page.locator('#overviewPeriod option').evaluateAll(nodes=>nodes.map(node=>node.value));const historical=periods.find(value=>value.slice(0,7)!==f.month);assert.ok(historical);await page.locator('#overviewPeriod').selectOption(historical);await expect(group).not.toContainText(name);await page.locator('#overviewPeriod').selectOption(f.week);await expect(group).toContainText(name);
  await page.locator('#overviewFilter').selectOption('机电工程');await expect(group).not.toContainText(name);assert.equal((await f.admin.query('SELECT count(*)::int n FROM public.reports WHERE project_id=$1',[project])).rows[0].n,0);assert.deepEqual(errors,[]);
+});
+
+test('实际HTTP与Edge：商业当月计划按长模块和进展内容分配空间，窄屏完整显示', {timeout:120000}, async t=>{
+ const f=await runtime(t),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];t.after(()=>browser.close());
+ const admin=await login(browser,f,'demo-ops',errors),employee=await login(browser,f,'demo-pm-com',errors),line='土建工程（东地块）';
+ const emptyProject='browser-commercial-layout-empty',progressProject='browser-commercial-layout-progress';
+ const longModule='山丘-草帽钢结构、贝壳采光顶立面钢结构、玻璃盒子钢结构（2个）（施工单位甲）';
+ const emptyItems=[
+  {source_id:'layout-long-module',mod:longModule,name:'施工',due:f.month+'-28'},
+  {source_id:'layout-material',mod:'材料封样（东地块-施工单位乙）',name:'材料封样',due:f.month+'-20'},
+  {source_id:'layout-short',mod:'楼栋幕墙',name:'施工',due:f.month+'-25'}
+ ];
+ const progressItems=[
+  {source_id:'layout-progress-main',mod:'主体结构',name:'施工',due:f.month+'-28'},
+  {source_id:'layout-progress-check',mod:'现场',name:'验收',due:f.month+'-20'}
+ ];
+ for(const [project,name] of [[emptyProject,'匿名长模块与空进展'],[progressProject,'匿名短事项与长进展']]){
+  await f.admin.query('INSERT INTO public.projects(id,name,project_type,sort_order) VALUES($1,$2,\'com\',1)',[project,name]);
+  await f.admin.query("INSERT INTO public.project_members(user_id,project_id) VALUES('demo-pm-com',$1)",[project]);
+ }
+ async function savePlan(project,items){
+  const rich={v:1,fields:{'items.0.mod':{ops:[{insert:items[0].mod,attributes:{bold:true}}]},'items.0.name':{ops:[{insert:items[0].name,attributes:{bold:true}}]}}};
+  const response=await admin.request.post(f.url+'/api/admin-plans/save',{headers:{Origin:f.url},data:{operation_id:randomUUID(),plans:[{project_id:project,line,owner_id:'demo-pm-com',month:f.month,expected_plan_id:null,items,rich_text:rich}]}});
+  assert.equal(response.status(),200);const plan=(await response.json()).data.plans[0];assert.equal(plan.owner_id,'demo-pm-com');assert.deepEqual(plan.items,items);assert.deepEqual(plan.rich_text,rich);return plan;
+ }
+ const emptyPlan=await savePlan(emptyProject,emptyItems),progressPlan=await savePlan(progressProject,progressItems);
+ const progress='钢结构已完成加工并进场，现场正在按已确认的施工方案安装支撑构件。屋面防水基层完成后安排后续吊装；各区域分别核对加工、运输、进场和安装条件，保留当前完成情况及下周计划。';
+ const reportItems=progressItems.map((item,index)=>({...item,prog:index===0?progress:'已完成现场核对，后续按验收计划推进。',blocker:''}));
+ const submitted=await employee.request.post(f.url+'/api/db',{headers:{Origin:f.url},data:{table:'reports',operation:'upsert',onConflict:'project_id,period,line',values:{project_id:progressProject,line,period:f.week,biz:{form_version:2,monthly_plan_id:progressPlan.id,monthly_plan_month:f.month,nodes:[],handover:[],items:reportItems},rich_text:{v:1,fields:{'biz.items.0.mod':progressPlan.rich_text.fields['items.0.mod'],'biz.items.0.name':progressPlan.rich_text.fields['items.0.name']}}}}});
+ assert.equal(submitted.status(),200);const report=(await submitted.json()).data[0];assert.equal(report.author_id,'demo-pm-com');assert.equal(report.biz.monthly_plan_id,progressPlan.id);assert.deepEqual(report.biz.items.map(item=>item.source_id),progressItems.map(item=>item.source_id));
+ await admin.reload();await expect(admin.locator('.planning-mainnav')).toBeVisible();await admin.getByRole('button',{name:'计划总览',exact:true}).click();await admin.getByRole('button',{name:'商业计划总览',exact:true}).click();await admin.locator('#overviewFilter').selectOption(line);
+ const emptyGroup=admin.locator('.overview-project[data-project-id="'+emptyProject+'"]'),progressGroup=admin.locator('.overview-project[data-project-id="'+progressProject+'"]');
+ const emptyTable=emptyGroup.locator('.overview-data-table[data-section="plans"]'),progressTable=progressGroup.locator('.overview-data-table[data-section="plans"]');
+ await expect(emptyGroup).toContainText('本期 0 份填报');await expect(progressGroup).toContainText('本期 1 份填报');
+ await expect(emptyTable).toContainText(longModule);await expect(emptyTable.locator('strong')).toContainText([longModule,'施工']);await expect(progressTable).toContainText(progress);
+ const evidence=path.resolve('.local/admin-ui-20261105/overview'),measurements=[],layoutProblems=[];await mkdir(evidence,{recursive:true});
+ async function measure(table){return table.evaluate(element=>{
+  const rows=[...element.querySelectorAll('tbody tr')];const first=rows[0],cells=[...first.querySelectorAll('td')];
+  const bounds=cell=>{const range=document.createRange();range.selectNodeContents(cell);const style=getComputedStyle(cell),fontSize=parseFloat(style.fontSize),lineHeight=parseFloat(style.lineHeight)||fontSize*1.4,textHeight=range.getBoundingClientRect().height;return {label:cell.dataset.label,text:cell.innerText,width:cell.getBoundingClientRect().width,clientWidth:cell.clientWidth,scrollWidth:cell.scrollWidth,clientHeight:cell.clientHeight,scrollHeight:cell.scrollHeight,fontSize,lineHeight,textHeight,textLines:Math.ceil(textHeight/lineHeight)};};
+  return {width:element.getBoundingClientRect().width,cells:cells.map(bounds),headers:[...element.querySelectorAll('thead th')].map(bounds),overflow:rows.flatMap(row=>[...row.querySelectorAll('td')]).concat([...element.querySelectorAll('thead th')]).map(bounds).filter(cell=>cell.scrollWidth>cell.clientWidth+1 || cell.scrollHeight>cell.clientHeight+1)};
+ });}
+ for(const width of [1920,1440,390]){
+  await admin.setViewportSize({width,height:1000});await expect(emptyTable).toContainText(longModule);await expect(progressTable).toContainText(progress);
+  const empty=await measure(emptyTable),filled=await measure(progressTable),pageWidth=await admin.evaluate(()=>({viewport:innerWidth,document:document.documentElement.scrollWidth}));
+  if(pageWidth.document!==pageWidth.viewport)layoutProblems.push({width,problem:'全页水平溢出',...pageWidth});if(empty.overflow.length)layoutProblems.push({width,problem:'长模块或短事项被裁切',cells:empty.overflow});if(filled.overflow.length)layoutProblems.push({width,problem:'长进展被裁切',cells:filled.overflow});
+  if(width>700){
+   const module=empty.cells.find(cell=>cell.label==='模块或类别'),name=empty.cells.find(cell=>cell.label==='事项内容'),date=empty.cells.find(cell=>cell.label==='完成时间'),emptyProgress=empty.cells.find(cell=>cell.label==='完成情况及本周计划'),longProgress=filled.cells.find(cell=>cell.label==='完成情况及本周计划');
+   if(module.width<=name.width)layoutProblems.push({width,problem:'长模块应比短事项获得更多空间',module:module.width,name:name.width});if(module.textLines>(width===1920?2:3))layoutProblems.push({width,problem:'长模块不应逐字挤窄',textLines:module.textLines,module:module.width});if(module.width<=date.width)layoutProblems.push({width,problem:'日期不应挤占长模块空间',module:module.width,date:date.width});if(longProgress.width<=emptyProgress.width)layoutProblems.push({width,problem:'有长正文的进展列应比空进展列分配更多空间',longProgress:longProgress.width,emptyProgress:emptyProgress.width});
+  }
+  measurements.push({width,pageWidth,empty,filled});await emptyGroup.screenshot({path:path.join(evidence,'empty-progress-'+width+'.png'),style:'.planning-header{visibility:hidden!important}'});await progressGroup.screenshot({path:path.join(evidence,'long-progress-'+width+'.png'),style:'.planning-header{visibility:hidden!important}'});
+ }
+ await writeFile(path.join(evidence,'overview-content-measurements.json'),JSON.stringify({measurements,layoutProblems},null,2));assert.deepEqual(layoutProblems,[],'正文列分配及裁切检查');
+ const savedEmpty=(await f.admin.query('SELECT items,rich_text,confirmed_by FROM public.monthly_plans WHERE id=$1',[emptyPlan.id])).rows[0];assert.deepEqual(savedEmpty.items,emptyItems);assert.equal(savedEmpty.confirmed_by,'demo-pm-com');assert.deepEqual(savedEmpty.rich_text,emptyPlan.rich_text);
+ assert.equal((await f.admin.query('SELECT count(*)::int n FROM public.reports WHERE project_id=$1',[emptyProject])).rows[0].n,0);
+ await admin.setViewportSize({width:1440,height:1000});const periods=await admin.locator('#overviewPeriod option').evaluateAll(nodes=>nodes.map(node=>node.value)),historical=periods.find(value=>value.slice(0,7)!==f.month);assert.ok(historical);await admin.locator('#overviewPeriod').selectOption(historical);await expect(emptyGroup).not.toContainText(longModule);await admin.locator('#overviewPeriod').selectOption(f.week);await expect(emptyGroup).toContainText(longModule);await admin.locator('#overviewFilter').selectOption('机电工程');await expect(emptyGroup).not.toContainText(longModule);assert.deepEqual(errors,[]);
+});
+
+test('实际HTTP与Edge：默认月度会议同屏读取前月总结及本月完整确认计划，关闭后清理控制台', {timeout:120000},async t=>{
+ const f=await runtime(t),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];t.after(()=>browser.close());const page=await login(browser,f,'demo-ops',errors),project='browser-monthly-meeting',line='土建工程（东地块）';
+ await f.admin.query("INSERT INTO public.projects(id,name,project_type,sort_order) VALUES($1,'匿名月度会议读取验收','com',1)",[project]);await f.admin.query("INSERT INTO public.project_members(user_id,project_id) VALUES('demo-pm-com',$1)",[project]);
+ const previousDate=new Date(f.month+'-01T00:00:00Z');previousDate.setUTCMonth(previousDate.getUTCMonth()-1);const previous=previousDate.toISOString().slice(0,7),summaryName='匿名前月工作总结';
+ const items=[{source_id:'monthly-full-one',mod:'长模块施工范围',name:'保留加粗的本月确认事项',due:f.month+'-28'},{source_id:'monthly-full-two',mod:'材料封样',name:'本月第二项完整确认事项',due:f.month+'-20'},{source_id:'monthly-full-three',mod:'现场',name:'本月第三项完整确认事项',due:f.month+'-25'}];
+ const rich={v:1,fields:{'items.0.name':{ops:[{insert:items[0].name,attributes:{bold:true}}]}}};
+ const saved=await page.request.post(f.url+'/api/admin-plans/save',{headers:{Origin:f.url},data:{operation_id:randomUUID(),plans:[{project_id:project,line,owner_id:'demo-pm-com',month:f.month,expected_plan_id:null,items,rich_text:rich}],summaries:[{project_id:project,line,owner_id:'demo-pm-com',month:previous,expected_summary_id:null,items:[{source_id:'previous-summary-source',mod:'现场',name:summaryName,due:previous+'-20',progress:'1、施工完成；2、现场复核完成。'}]}]}});assert.equal(saved.status(),200);const plan=(await saved.json()).data.plans[0];
+ await page.reload();await expect(page.locator('.planning-mainnav')).toBeVisible();await page.getByRole('button',{name:'计划总览',exact:true}).click();await page.getByRole('button',{name:'商业计划总览',exact:true}).click();await page.locator('#overviewFilter').selectOption(line);await page.setViewportSize({width:1920,height:1080});
+ const originalTable=page.locator('.overview-project[data-project-id="'+project+'"] .overview-data-table[data-section="plans"]');await expect(originalTable.locator('tbody tr')).toHaveCount(items.length);
+ page.context().on('page',child=>child.on('pageerror',error=>errors.push(error.message)));const popupPromise=page.waitForEvent('popup');await page.getByRole('button',{name:'开启会议投影',exact:true}).click();const popup=await popupPromise;await popup.setViewportSize({width:1920,height:1080});
+ const controller=page.locator('.meeting-control');await expect(controller).toBeVisible();await expect(controller.getByLabel('投影内容')).toHaveValue('monthly');await expect(controller.getByLabel('总结月份')).toHaveValue(previous);
+ const summary=popup.locator('[data-projection-section="monthly-summary"]'),monthlyPlans=popup.locator('[data-projection-section="monthly-plans"]');await expect(summary).toContainText(summaryName);await expect(summary).toContainText('施工完成');await expect(monthlyPlans.locator('tbody tr')).toHaveCount(items.length);
+ for(const item of items)await expect(monthlyPlans).toContainText(item.name);await expect(monthlyPlans.locator('strong')).toContainText(items[0].name);await expect(monthlyPlans).toContainText('演示土建负责人');await expect(monthlyPlans).toContainText('已确认');
+ const visible=await popup.evaluate(()=>[...document.querySelectorAll('[data-projection-section="monthly-summary"],[data-projection-section="monthly-plans"]')].map(element=>{const rect=element.getBoundingClientRect();return {top:rect.top,bottom:rect.bottom,viewport:innerHeight};}));assert.equal(visible.length,2);assert.ok(visible.every(rect=>rect.top>=0 && rect.bottom<=rect.viewport),'前月总结与本月完整计划应在同一屏可见');
+ const evidence=path.resolve('.local/admin-ui-20261105/overview');await mkdir(evidence,{recursive:true});await popup.screenshot({path:path.join(evidence,'monthly-meeting-real-http.png'),fullPage:true});await writeFile(path.join(evidence,'monthly-meeting-visible.json'),JSON.stringify({previous,current:f.month,visible},null,2));
+ await popup.close();await expect(controller).toHaveCount(0);await expect(originalTable.locator('tbody tr')).toHaveCount(items.length);await expect(originalTable).toContainText(items[2].name);
+ const persisted=(await f.admin.query('SELECT items,rich_text,confirmed_by FROM public.monthly_plans WHERE id=$1',[plan.id])).rows[0];assert.deepEqual(persisted.items,items);assert.deepEqual(persisted.rich_text,rich);assert.equal(persisted.confirmed_by,'demo-pm-com');assert.equal((await f.admin.query('SELECT count(*)::int n FROM public.reports WHERE project_id=$1',[project])).rows[0].n,0);assert.deepEqual(errors,[]);
 });
 
 test('实际HTTP与Edge：刷新后可查保存批次，确认完整跨月范围后整批撤回，恢复原计划和汇总', {timeout:120000},async t=>{

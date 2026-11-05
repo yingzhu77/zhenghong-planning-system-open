@@ -118,11 +118,11 @@
   function totalsHtml(totals) {
     var measures = [['total', '基准节点总量'], ['completed', '已完成节点'], ['incomplete', '未完成'], ['overdue', '当前逾期'], ['forecast_delayed', '预计延期'], ['due_next30', '未来30天到期'], ['insufficient', '日期不足']];
     return '<div class="project-statistics-totals">' + measures.map(function (item) { return '<div><span>' + item[1] + '</span><strong>' + count(totals[item[0]]) + '</strong></div>'; }).join('') + '</div>'
-      + '<div class="project-statistics-rates"><p><b>节点完成比例 ' + rate(totals.completion_rate) + '</b><span>' + count(totals.completed) + ' / ' + count(totals.total) + ' 个基准节点</span></p>'
-      + '<p><b>按时完成 ' + (totals.timeliness_covered ? rate(count(totals.on_time) / totals.timeliness_covered * 100) : '—') + '</b><span>覆盖 ' + count(totals.timeliness_covered) + ' 项有真实完成日和可核验截止日的完成记录；无法判断按时性 ' + count(totals.timeliness_unknown) + ' 项</span></p></div>';
+      + '<div class="project-statistics-rates"><p><b title="按节点数量计算，不代表工程实体进度">节点完成比例 ' + rate(totals.completion_rate) + '</b><span>' + count(totals.completed) + ' / ' + count(totals.total) + ' 个基准节点</span></p>'
+      + '<p><b title="仅使用真实完成日和可核验截止日计算">按时完成 ' + (totals.timeliness_covered ? rate(count(totals.on_time) / totals.timeliness_covered * 100) : '—') + '</b><span>可核验 ' + count(totals.timeliness_covered) + ' 项 · 无法判断按时性 ' + count(totals.timeliness_unknown) + ' 项</span></p></div>';
   }
   function projectsHtml(projects) {
-    return '<section class="project-statistics-comparison"><h4>项目对比</h4><p class="muted">按当前全部筛选条件比较。逾期、预计延期及日期不足可互相重叠。</p>'
+    return '<section class="project-statistics-comparison"><h4 title="逾期、预计延期及日期不足可相互重叠">项目对比</h4>'
       + (projects.length ? '<div class="tablewrap" tabindex="0" aria-label="项目对比表，可横向滚动"><table><thead><tr><th>项目展示组</th><th>实际项目／分期</th><th>完成比例</th><th>完成／总量</th><th>当前逾期</th><th>日期不足</th></tr></thead><tbody>'
         + projects.map(function (project) { var width = typeof project.completion_rate === 'number' && Number.isFinite(project.completion_rate) ? Math.max(0, Math.min(100, project.completion_rate)) : 0;
           return '<tr><td>' + esc(project.display_group || project.name) + '</td><td>' + esc(project.name) + (projectType(project) ? '<small>' + projectType(project) + '</small>' : '') + '</td><td><div class="project-statistics-bar"><span aria-hidden="true"><i style="width:' + width + '%"></i></span><b>' + rate(project.completion_rate) + '</b></div></td><td>' + count(project.completed) + ' / ' + count(project.total) + '</td><td>' + count(project.overdue) + '</td><td>' + count(project.insufficient) + '</td></tr>';
@@ -130,7 +130,7 @@
   }
   function rowsHtml(rows) {
     var heads = ['项目／分期', '专业 / 模块／层级', '基准节点', '原计划日', '有效截止日', '预计完成日', '预计偏差', '完成状态', '实际完成日', '按时性', '风险／数据'];
-    return '<section class="project-statistics-details"><h4>计划明细 <span class="muted">' + rows.length + ' 项</span></h4><p class="muted project-statistics-scrollhint">表格可横向滚动查看全部日期和状态。</p><div class="tablewrap" tabindex="0" aria-label="计划明细表，可横向滚动"><table><thead><tr>' + heads.map(function (head) { return '<th>' + head + '</th>'; }).join('') + '</tr></thead><tbody>'
+    return '<section class="project-statistics-details"><h4>计划明细 <span class="muted">' + rows.length + ' 项</span></h4><p class="muted project-statistics-scrollhint">横向滚动查看全部列</p><div class="tablewrap" tabindex="0" aria-label="计划明细表，可横向滚动"><table><thead><tr>' + heads.map(function (head) { return '<th>' + head + '</th>'; }).join('') + '</tr></thead><tbody>'
       + (rows.length ? rows.map(function (row) {
         return '<tr><td><strong>' + esc(row.project_name) + '</strong><small>' + esc([projectType(row), row.display_group].filter(Boolean).join(' · ')) + '</small></td><td>' + esc(row.discipline || row.module || '未归属') + (row.module && row.module !== row.discipline ? '<small>' + esc(row.module) + '</small>' : '') + (row.level ? '<small>' + esc(row.level) + '</small>' : '') + '</td><td class="project-statistics-title">' + esc(row.title) + (row.is_key ? '<small>关键节点</small>' : '') + '</td>'
           + '<td>' + esc(due(row.plan_due)) + '</td><td>' + esc(due(row.effective_due)) + (row.extension_approved ? '<small>已批准延期</small>' : '') + '</td>'
@@ -142,15 +142,13 @@
     if (!allowed()) return '<section class="card"><div class="empty">仅获授权管理角色可查看项目计划统计。</div></section>';
     var current = data && dataKey === key() ? data : null;
     var html = '<section class="card project-plan-statistics"><div class="cardhd"><h3>项目计划统计</h3><button type="button" class="btn" onclick="ProjectPlanStatistics.exportCsv()"' + (!current || busy || error ? ' disabled' : '') + '>导出当前明细</button></div>'
-      + '<p class="project-statistics-explain">来源：已授权住宅与商业项目的基准节点，按历史完成标记或当前有效完成审核去重。默认纳入全部原计划日期，关键节点可另行筛选。完成比例表示节点数量比例，不代表工程实体进度。'
-      + ' 当前状态按北京时间盘点，日期筛选使用原计划完成日。原计划日与批准延期后的有效截止日分别保留，延期批准后事项仍未完成。</p>' + filtersHtml();
+      + filtersHtml();
     if (error) html += '<p class="project-statistics-error" role="alert">' + esc(error) + '</p>';
     if (busy) html += '<p role="status" aria-live="polite">正在汇总授权项目范围内的计划…</p>';
     if (current && !error) {
       html += '<p class="project-statistics-scope">当前状态：<b>' + esc(current.today) + '</b> · ' + count(current.totals.group_count) + ' 个展示组 / ' + count(current.totals.project_count) + ' 个实际项目／分期 · 原计划日：' + esc(DATE[filters.date_mode] || '')
         + (filters.date_mode === 'custom' ? ' ' + esc(filters.start) + ' 至 ' + esc(filters.end) : '') + '</p>'
-        + totalsHtml(current.totals) + projectsHtml(current.projects) + rowsHtml(current.rows)
-        + '<p class="project-statistics-footnote muted">卡片、项目对比、明细和导出均来自当前同一筛选集合，按原来源去重。当前逾期比较有效截止日与今天；预计偏差比较原计划日与基准保存的预计完成日，缺日期显示无法判断，已完成节点不再展示预测风险。按时完成另以可核验日期计算并显示覆盖数量。商业模块使用基准明确归属，未归属节点仍纳入分母。原确认月计划、反馈及历史审批保留在原入口；会议、协调和员工完成统计继续使用各自入口。</p>';
+        + totalsHtml(current.totals) + projectsHtml(current.projects) + rowsHtml(current.rows);
     } else if (!busy && !error) html += '<div class="empty">点击查询读取当前计划统计。</div>';
     return html + '</section>';
   }

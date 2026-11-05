@@ -189,6 +189,7 @@ h2{font-size:20px}h3{font-size:16px}h4{font-size:14px}
 .overview-report-grid>section{min-width:0;overflow-wrap:anywhere}
 .overview-report-grid h4,.overview-subsection h5{margin:0 0 10px;font-size:15px;font-weight:600;color:#214f82}
 .overview-report-grid>section+section{border:0;padding:0}
+.plan-overview .overview-core-nodes>p.empty{min-height:0;padding:12px 0;margin:8px 0;text-align:left}
 .overview-table-scroll{min-width:0;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;border:1px solid #c9d9eb;border-radius:5px;background:#dfe9f5}
 .planning-shell .overview-data-table{width:100%;min-width:0;border-collapse:separate;border-spacing:0;table-layout:fixed;background:#dfe9f5}
 .planning-shell .overview-table-scroll>.overview-data-table{min-width:0;max-width:100%}
@@ -202,6 +203,21 @@ h2{font-size:20px}h3{font-size:16px}h4{font-size:14px}
 .planning-shell .overview-data-table .muted,.overview-data-table .overview-meta{color:#485e78}
 .overview-data-table .overview-col-seq{width:56px}.overview-data-table .overview-col-module{width:136px}.overview-data-table .overview-col-date{width:136px}
 .overview-data-table .overview-col-content{width:36%}.overview-data-table .overview-col-progress{width:auto}
+.overview-plan-adaptive{container-type:inline-size}
+.overview-plan-adaptive .overview-col-source{width:var(--plan-col-source)}
+.overview-plan-adaptive .overview-col-seq{width:var(--plan-col-seq)}
+.overview-plan-adaptive .overview-col-module{width:var(--plan-col-module)}
+.overview-plan-adaptive .overview-col-content{width:var(--plan-col-content)}
+.overview-plan-adaptive .overview-col-date{width:var(--plan-col-date)}
+.overview-plan-adaptive .overview-col-progress{width:var(--plan-col-progress)}
+.planning-shell .overview-plan-adaptive .overview-data-table td{padding:10px 12px;line-height:1.55;vertical-align:top}
+.planning-shell .overview-plan-adaptive .overview-data-table td.overview-cell-module{text-align:left;overflow-wrap:anywhere}
+.planning-shell .overview-plan-adaptive .overview-data-table th:nth-last-child(3),.planning-shell .overview-plan-adaptive .overview-data-table th:last-child{white-space:normal}
+.planning-shell .overview-plan-adaptive .overview-data-table td.overview-cell-date{padding-inline:6px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.planning-shell .overview-plan-adaptive .overview-data-table td.overview-cell-seq{padding-inline:4px;font-variant-numeric:tabular-nums}
+.planning-shell .overview-plan-adaptive .overview-data-table th.overview-head-seq{padding-inline:4px}
+.planning-shell .overview-plan-adaptive .overview-data-table th.overview-head-date{padding-inline:6px}
+.overview-plan-adaptive .overview-empty{padding:0;line-height:1.55}
 .overview-data-table[data-section="coord"] .overview-col-content,.overview-data-table[data-section="handover"] .overview-col-content{width:auto}
 .planning-shell .overview-data-table tbody td{text-align:left}
 .planning-shell .overview-data-table td.overview-cell-seq,.planning-shell .overview-data-table td.overview-cell-module,.planning-shell .overview-data-table td.overview-cell-date{text-align:center}
@@ -540,6 +556,18 @@ h2{font-size:20px}h3{font-size:16px}h4{font-size:14px}
 .planning-ai-entry{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12px;padding:10px 2px 14px;color:#586e90;font-size:14px}
 @media(max-width:680px){.planning-ai-entry{justify-content:space-between}.planning-ai-entry .btn{min-height:44px}}
 @media print{.planning-ai-entry{display:none!important}}
+
+@media screen and (max-width:700px){
+  .planning-shell .overview-plan-adaptive{border:0;background:transparent;overflow:visible}
+  .planning-shell .overview-plan-adaptive .overview-data-table{display:block;min-width:0;max-width:100%;background:transparent}
+  .overview-plan-adaptive colgroup,.overview-plan-adaptive thead{display:none}
+  .overview-plan-adaptive tbody{display:block}
+  .overview-plan-adaptive tbody tr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-bottom:12px;padding:14px;border:1px solid #c9d9eb;border-radius:8px;background:#f3f7fc}
+  .planning-shell .overview-plan-adaptive .overview-data-table tbody td{display:block;min-width:0;padding:0;border:0;text-align:left;background:transparent;white-space:normal}
+  .planning-shell .overview-plan-adaptive .overview-data-table tbody tr:nth-child(n)>td{background:transparent}
+  .overview-plan-adaptive .overview-cell-source,.overview-plan-adaptive .overview-cell-module,.overview-plan-adaptive .overview-cell-content,.overview-plan-adaptive .overview-cell-progress,.overview-plan-adaptive .overview-cell-empty{grid-column:1/-1}
+  .overview-plan-adaptive td[data-label]::before{content:attr(data-label);display:block;margin-bottom:4px;font-size:12px;font-weight:600;color:#526985}
+}
 
 /* Imported monthly summaries: compact metadata, readable numbered narratives. */
 .monthly-summary-group{container-type:inline-size}.monthly-summary-table,.meeting-section .monthly-summary-table{width:100%;table-layout:fixed;border-collapse:collapse}.monthly-summary-table col:nth-child(n){width:auto}.monthly-summary-table th:nth-child(n){width:auto}.monthly-summary-table th,.monthly-summary-table td{padding:7px 10px;text-align:left;vertical-align:top}.monthly-summary-table td[data-label="完成时间"]{white-space:nowrap;font-variant-numeric:tabular-nums}.monthly-summary-table td[data-label="模块"]{white-space:normal;line-height:1.5}.monthly-summary-narrative{white-space:normal;text-align:left;line-height:1.5;overflow-wrap:anywhere}.monthly-summary-line{display:grid;grid-template-columns:2.2em minmax(0,1fr);column-gap:.25em;margin:0 0 .12em}.monthly-summary-line:last-child{margin-bottom:0}.monthly-summary-number{white-space:nowrap;font-variant-numeric:tabular-nums}.monthly-summary-note{margin:.2em 0 0;color:#42607e;font-size:.92em;line-height:1.4}.monthly-summary-body{min-width:0}@media(max-width:700px){.monthly-summary-table colgroup{display:none}.monthly-summary-table th,.monthly-summary-table td{padding:6px 0;text-align:left}.monthly-summary-table td[data-label="完成时间"]{white-space:normal}}

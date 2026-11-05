@@ -380,7 +380,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     ok(has(html, 'id="overviewFilter"') && has(html, '筛选项目') && !has(html, 'planning-project-jump'), '仅住宅计划总览应以项目筛选替换顶部详情跳转');
     await App.section('analysis'); html = root.innerHTML;
     ok(navLabels(html, ['项目计划统计', '员工完成统计'], '子导航') && !has(html, '住宅节点偏差') && !has(html, '商业基准节点明细'), '统计分析应只保留项目计划统计与员工完成统计');
-    ok(requests.includes('/api/project-plan-statistics') && has(main(html), '住宅与商业项目的基准节点') && !has(main(html), '商业确认月计划'), '项目计划统计应调用独立接口并合并商住基准来源');
+    ok(requests.includes('/api/project-plan-statistics') && has(main(html), '基准节点总量') && has(main(html), '全部展示组') && !has(main(html), '商业确认月计划'), '项目计划统计应调用独立接口并保留商住基准统计与筛选');
     ok(has(html, 'planning-project-jump') && has(html, '查看项目详情'), '统计分析应保留原详情跳转');
     await App.section('projects'); html = root.innerHTML;
     ok(navLabels(html, ['项目档案', '资料共享'], '子导航') && has(main(html), 'admin-archive'), '项目资料应提供项目档案和已有资料共享入口');
