@@ -137,6 +137,16 @@ test('standalone projection shell resolves every script and stylesheet to review
   for(const match of html.matchAll(/(?:src|href)="([^"]+)"/g)){assert.ok(match[1].startsWith('/assets/'));assert.ok(assets.responses.has(match[1]));}
   assert.doesNotMatch(html,/app\.js|login-boot\.js|contenteditable|password/i);
 });
+test('projection media accepts only the registered project excerpt and never falls back to a foreign excerpt source',()=>{
+  const context={console};context.window=context;vm.createContext(context);
+  for(const file of ['planning-windows.js','rich-text.js','meeting-view.js'])vm.runInContext(readFileSync(new URL(file,web),'utf8'),context);
+  const url='/api/scheme-previews/p1/'+'a'.repeat(64)+'.webp';
+  const model={target:context.MeetingView.target({type:'com',projectIds:['p1'],period:'2026-11-02',line:'',section:'media'}),projects:[{id:'p1',name:'匿名项目'}],reports:[],nodes:[],attachments:[],drawings:[
+    {project_id:'p1',kind:'项目总图',name:'总图关键区域.webp',url,path:''},
+    {project_id:'p1',kind:'项目总图',name:'跨项目不显示',url:url.replace('/p1/','/p2/'),path:'drawings/p1/original.pdf'}
+  ]};
+  const html=context.MeetingView.html(model);assert.ok(html.includes('src="'+url+'"'));assert.doesNotMatch(html,/original\.pdf|跨项目不显示|href="[^"]*scheme-previews/);
+});
 async function fixture(t){
   const runtime=await startPlanningAiLocal({mode:'local-acceptance'});t.after(()=>runtime.close());
   const admin=testPool(runtime.db,null),root='ai-local-acceptance-user',owner='meeting-owner',leader='meeting-leader';

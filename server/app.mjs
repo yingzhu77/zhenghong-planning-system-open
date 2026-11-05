@@ -18,7 +18,8 @@ import { listCompletions, previewCompletion, requestCompletion, reviewCompletion
 import { completionStatistics } from './completion-statistics.mjs';
 import { projectPlanStatistics } from './project-plan-statistics.mjs';
 import { listReportScopes } from './report-scopes.mjs';
-import { managementRead } from './management-read.mjs';
+import { managementRead, withManagementRead } from './management-read.mjs';
+import { loadSchemePreview } from './scheme-protection.mjs';
 import { uploadReportAttachment, listReportAttachments, loadReportAttachment, discardReportAttachment, discardInaccessibleReportDrafts } from './report-attachments.mjs';
 import { pipeline } from 'node:stream/promises';
 import { loadFile, MAX_FILE_BYTES, saveUpload } from './files.mjs';
@@ -53,6 +54,7 @@ export function environmentConfig(env = process.env) {
 
 export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') }) {
   const app = express();
+  const uploadDir = path.resolve(config.uploadDir || path.join(root, 'data', 'uploads'));
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy ?? false);
   const originAllowed = createOriginCheck(config);
@@ -97,7 +99,7 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   }));
   app.post('/api/db', auth.requireUser, express.json({ limit: '2mb' }), asyncRoute(async (req, res) => {
     if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new HttpError(400, '请求格式不正确');
-    const rows = await executeDatabase(pool, req.user, req.body);
+    const rows = await executeDatabase(pool, req.user, req.body, { uploadDir });
     res.json({ data: rows, error: null });
   }));
   app.post('/api/leader-notes/replace', auth.requireUser, express.json({ limit: '1mb' }), asyncRoute(async (req, res) => {
@@ -108,7 +110,7 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
     res.json({data:await listReportScopes(pool,req.user,req.body || {}),error:null});
   }));
   app.post('/api/management-read', auth.requireUser, express.json({ limit: '16kb' }), asyncRoute(async (req, res) => {
-    res.json({ data: await managementRead(pool, req.user, req.body ?? {}), error: null });
+    res.json({ data: await managementRead(pool, req.user, req.body ?? {}, { uploadDir }), error: null });
   }));
   app.post('/api/reporter-tasks/list', auth.requireUser, express.json({ limit: '16kb' }), asyncRoute(async (req, res) => {
     res.json({ data: await listReporterTasks(pool, req.user, req.body ?? {}), error: null });
@@ -285,7 +287,6 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
     if (file.stream) await pipeline(file.stream, res);
     else res.send(file.buffer);
   }));
-  const uploadDir = path.resolve(config.uploadDir || path.join(root, 'data', 'uploads'));
   for(const [route,handler] of [['list',listProjectLibrary],['password',setLibraryPassword],['unlock',unlockProjectLibrary],['withdraw',withdrawProjectDocument]]){
     app.post('/api/project-library/'+route,auth.requireUser,express.json({limit:'16kb'}),asyncRoute(async(req,res)=>{
       res.json({data:await handler(pool,req.user,req.body ?? {},req.sessionTokenHash),error:null});
@@ -310,6 +311,12 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   app.get(/^\/api\/files\/(.+)$/, auth.requireUser, asyncRoute(async (req, res) => {
     const file = await loadFile(pool, req.user, uploadDir, req.params[0]);
     res.set('Content-Disposition', 'inline; filename="' + file.name + '"');
+    res.type(file.type).send(file.buffer);
+  }));
+  app.get('/api/scheme-previews/:projectId/:digest.webp', auth.requireUser, asyncRoute(async (req, res) => {
+    if (Object.keys(req.query).length) throw new HttpError(400, '关键区域预览不接受页面或裁剪参数');
+    const file = await withManagementRead(pool, req.user, client => loadSchemePreview(client, uploadDir, req.params.projectId, req.params.digest));
+    res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline; filename="scheme-preview.webp"' });
     res.type(file.type).send(file.buffer);
   }));
   app.use('/api', (req, res) => res.status(404).json({ data: null, error: { code: 'not_found', message: '接口不存在' } }));

@@ -1,5 +1,6 @@
 import { getProfile, withIdentity } from './database.mjs';
 import { HttpError } from './errors.mjs';
+import { sanitizeSchemeRows } from './scheme-protection.mjs';
 
 const forbidden = () => { throw new HttpError(403, '当前账号没有管理查看权限', 'management_read_forbidden'); };
 const invalid = () => { throw new HttpError(400, '管理查看请求格式不正确', 'invalid_management_read'); };
@@ -100,7 +101,7 @@ const meetingsSql = `SELECT t.created_at,t.id::text AS sort_key,t.project_id,ARR
     'created_at',t.created_at,'updated_at',t.updated_at,'history',t.history,'read_only',true) AS data
   FROM public.reporter_tasks t`;
 
-async function archive(client, projectId) {
+async function archive(client, projectId, options) {
   if (!projectId) return { project_master: [], project_phases: [], project_drawings: [], milestones: [] };
   const master = (await client.query('SELECT project_id,fields,note,updated_at FROM public.project_master WHERE project_id=$1', [projectId])).rows;
   const phases = (await client.query(`SELECT id,project_id,name,area,gfa,units_total,units_launched,units_sold,
@@ -109,10 +110,11 @@ async function archive(client, projectId) {
     FROM public.project_drawings WHERE project_id=$1 ORDER BY sort_order,id`, [projectId])).rows;
   const milestones = (await client.query(`SELECT id::text AS id,project_id,name,line,level,is_key,plan_date,
     forecast_date,done,note,rich_text,discipline,biz_line FROM public.milestones WHERE project_id=$1 ORDER BY sort_order,id`, [projectId])).rows;
-  return { project_master: master, project_phases: phases, project_drawings: drawings, milestones };
+  return { project_master: await sanitizeSchemeRows(client, 'project_master', master, options), project_phases: phases,
+    project_drawings: await sanitizeSchemeRows(client, 'project_drawings', drawings, options), milestones };
 }
 
-export async function managementRead(pool, user, request = {}) {
+export async function managementRead(pool, user, request = {}, options = {}) {
   const filters = readRequest(request);
   return withManagementRead(pool, user, async client => {
     const projects = (await client.query(`SELECT id,name,COALESCE(project_type,'res') AS project_type,
@@ -122,7 +124,7 @@ export async function managementRead(pool, user, request = {}) {
     if (filters.view === 'projects') return result;
     if (filters.view === 'archive') {
       result.project_id = filters.project_id || projects[0]?.id || '';
-      result.archive = await archive(client, result.project_id);
+      result.archive = await archive(client, result.project_id, options);
       return result;
     }
     const source = { coordination: coordinationSql, completions: completionSql, meetings: meetingsSql }[filters.view];

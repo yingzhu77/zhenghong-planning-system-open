@@ -30,8 +30,9 @@
     }
     return total;
   }
-  function fileUrl(drawing) {
+  function fileUrl(drawing,pid) {
     var url = typeof drawing.url === 'string' ? drawing.url : '';
+    if(url.indexOf('/api/scheme-previews/')===0)return new RegExp('^/api/scheme-previews/'+String(pid).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'/[a-f0-9]{64}\\.webp$').test(url)?url:'';
     if (/^https?:\/\//i.test(url) || /^\/api\/files\/drawings\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/.test(url)) return url;
     if (/^drawings\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/.test(drawing.path || '')) return '/api/files/' + drawing.path;
     return '';
@@ -63,11 +64,12 @@
     function drawingCards(list, large) {
       if (!list.length) return empty('尚未登记相关图纸。');
       return '<div class="reporter-archive-files' + (large ? ' reporter-archive-files-large' : '') + '">' + list.map(function (d) {
-        var url = fileUrl(d), name = d.name || '未命名附件';
+        var url = fileUrl(d,context.pid), name = d.name || '未命名附件', schemePreview=url.indexOf('/api/scheme-previews/')===0;
         var extension = String(d.path || url).split(/[?#]/)[0];
         var pdf = /\.pdf$/i.test(extension) || /\.pdf$/i.test(name);
         var image = !pdf && /\.(?:png|jpe?g|gif|webp|avif)$/i.test(extension);
         var preview = !url ? empty('附件暂不可打开，请联系管理员核对链接。')
+          : schemePreview ? '<div class="reporter-archive-preview"><img src="'+esc(url)+'" alt="'+esc(name)+'关键区域" loading="lazy" decoding="async"></div>'
           : image ? '<a class="reporter-archive-preview" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer" aria-label="打开' + esc(name) + '">'
             + '<img src="' + esc(url) + '" alt="' + esc(name) + '" loading="lazy" decoding="async"></a>'
           : '<div class="reporter-archive-document"><span>' + (pdf ? 'PDF 图纸' : '附件链接') + '</span>'

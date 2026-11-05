@@ -3292,13 +3292,17 @@
     msOf(pid).forEach(function(m){if(m.discipline && !groups[m.discipline])groups[m.discipline]=[];});
     return groups;
   }
+  function schemePreviewUrl(url,pid) {
+    var match=typeof url==='string' && /^\/api\/scheme-previews\/([A-Za-z0-9_-][A-Za-z0-9_.-]*)\/[a-f0-9]{64}\.webp$/.exec(url);
+    return match && match[1]===String(pid)?url:'';
+  }
   function overviewDrawingHtml(pid) {
     var list=drawingsOf(pid).filter(function(d){return String(d.kind || '').indexOf('项目总图')===0;});
     return '<aside class="overview-project-drawing"><h3>项目总图</h3>'+(list.length?list.map(function(d){
-      var url=typeof d.url==='string' && (/^https?:\/\//i.test(d.url) || /^\/api\/files\/drawings\/[A-Za-z0-9_./-]+$/.test(d.url))?d.url
-        : /^drawings\/[A-Za-z0-9_./-]+$/.test(d.path || '')?'/api/files/'+d.path:'';
+      var crop=schemePreviewUrl(d.url,pid),url=String(d.url || '').indexOf('/api/scheme-previews/')===0?crop:(typeof d.url==='string' && (/^https?:\/\//i.test(d.url) || /^\/api\/files\/drawings\/[A-Za-z0-9_./-]+$/.test(d.url))?d.url
+        : /^drawings\/[A-Za-z0-9_./-]+$/.test(d.path || '')?'/api/files/'+d.path:'');
       var name=d.name || '项目总图',ext=String(d.path || url).split(/[?#]/)[0],image=/\.(?:png|jpe?g|gif|webp|avif)$/i.test(ext) || /\.(?:png|jpe?g|gif|webp|avif)$/i.test(name);
-      return '<figure>'+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+(image?'<img src="'+esc(url)+'" alt="'+esc(name)+'" width="320" height="220" loading="lazy" decoding="async">':'<span class="overview-drawing-file">打开'+esc(/\.pdf$/i.test(ext)?'PDF总图':'总图资料')+'</span>')+'</a>':overviewEmpty('总图链接待核对'))
+      return '<figure>'+(crop?'<img src="'+esc(crop)+'" alt="方案总图关键区域" width="320" height="220" loading="lazy" decoding="async">':url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+(image?'<img src="'+esc(url)+'" alt="'+esc(name)+'" width="320" height="220" loading="lazy" decoding="async">':'<span class="overview-drawing-file">打开'+esc(/\.pdf$/i.test(ext)?'PDF总图':'总图资料')+'</span>')+'</a>':overviewEmpty('总图链接待核对'))
         +'<figcaption>'+esc(name)+'</figcaption></figure>';
     }).join(''):overviewEmpty('尚未登记项目总图'))+'</aside>';
   }
@@ -3764,12 +3768,12 @@
     var drawingCards = DRAWING_KINDS.map(function (kind, ki) {
       var arr = drawingsOf(pid, kind);
       var items = arr.map(function (d) {
-        var src = d.url || '';
-        var isPdf = /\.pdf(?:[?#]|$)/i.test(d.path || src) || /\.pdf$/i.test(d.name || '');
+        var crop=schemePreviewUrl(d.url,pid),src = String(d.url || '').indexOf('/api/scheme-previews/')===0?crop:d.url || '';
+        var isPdf = !crop && (/\.pdf(?:[?#]|$)/i.test(d.path || src) || /\.pdf$/i.test(d.name || ''));
         var isImage = !isPdf && /\.(?:png|jpe?g|gif|webp)(?:[?#]|$)/i.test(d.path || src);
         return '<div style="border:0.5px solid #D3D1C7;border-radius:10px;padding:8px;background:#FFFFFF">'
           + (src
-            ? (isImage ? '<a href="' + esc(src) + '" target="_blank" rel="noopener"><img src="' + esc(src) + '" alt="' + esc(d.name)
+            ? (crop?'<img src="'+esc(crop)+'" alt="方案总图关键区域" style="width:100%;height:148px;object-fit:contain;border-radius:6px;display:block">':isImage ? '<a href="' + esc(src) + '" target="_blank" rel="noopener"><img src="' + esc(src) + '" alt="' + esc(d.name)
               + '" style="width:100%;height:148px;object-fit:cover;border-radius:6px;display:block"></a>'
               : '<div style="height:148px;display:flex;align-items:center;justify-content:center"><a class="btn ghost sm" href="' + esc(src)
                 + '" target="_blank" rel="noopener">' + (isPdf ? '打开 PDF 文档' : '打开附件链接') + '</a></div>')

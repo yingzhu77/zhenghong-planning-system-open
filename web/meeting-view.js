@@ -149,7 +149,8 @@
       if(extra)legacy.push('<details class="meeting-legacy"><summary>既有补充记录 · '+source+'</summary>'+extra+'</details>');
     });
     var media=model.drawings.filter(function(d){return String(d.kind || '').startsWith('项目总图');}).map(function(d){
-      var url=/^https?:\/\//i.test(d.url || '')?d.url:/^drawings\/[A-Za-z0-9_./-]+$/.test(d.path || '') && !d.path.split('/').includes('..')?'/api/files/'+d.path:'';
+      var crop=/^\/api\/scheme-previews\/([A-Za-z0-9_-][A-Za-z0-9_.-]*)\/[a-f0-9]{64}\.webp$/.exec(d.url || '');
+      var url=crop?(crop[1]===String(d.project_id)?d.url:''):/^https?:\/\//i.test(d.url || '')?d.url:/^drawings\/[A-Za-z0-9_./-]+$/.test(d.path || '') && !d.path.split('/').includes('..')?'/api/files/'+d.path:'';
       if(!url)return '';
       return '<figure><figcaption>'+esc(projectName(model,d.project_id)+' · '+(d.name || '项目总图'))+'</figcaption>'
         +(/\.(?:png|jpe?g|gif|webp|avif)(?:[?#]|$)/i.test(url)?'<img src="'+esc(url)+'" alt="'+esc(d.name || '项目总图')+'">':'<a target="_blank" rel="noopener noreferrer" href="'+esc(url)+'">打开总图资料</a>')+'</figure>';

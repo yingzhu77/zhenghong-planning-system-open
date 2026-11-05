@@ -125,6 +125,15 @@ test('对照图片仅来自当前有权项目的总图及本期报告引用，�
   assert.match(empty, /data-compare-toggle[^>]+disabled/); assert.match(empty, /<p>原入口<\/p>/); assert.doesNotMatch(empty, /其他文件沿原入口打开/);
 });
 
+test('方案关键图在总览对照中保持同项目边界并只标注派生图片',()=>{
+  const h=harness(),url='/api/scheme-previews/phase-1/'+ 'a'.repeat(64)+'.webp';
+  h.S.drawings=[{id:4,project_id:'phase-1',kind:'项目总图',name:'方案关键图.webp',url,path:''},
+    {id:5,project_id:'phase-2',kind:'项目总图',name:'跨项目关键图',url,path:'drawings/phase-2/original.pdf'}];
+  const pictures=h.api.pictures(h.S.projects,[]);assert.equal(pictures.length,1);assert.equal(pictures[0].url,url);
+  const html=h.api.layout({key:'excerpt',projects:h.S.projects,reports:[],content:'<p>原计划</p>',sidebar:''});
+  assert.match(html,/查看关键图/);assert.match(html,/保存关键图/);assert.doesNotMatch(html,/original\.pdf|跨项目关键图/);
+});
+
 test('图文对照在桌面同屏独立滚动、缩放拖动、切换来源，窄屏可切换图文且关闭不丢计划', async () => {
   const browser = await chromium.launch({channel: 'msedge', headless: true});
   const artifacts = process.env.ADMIN_PLAN_ARTIFACT_DIR || path.join(os.tmpdir(), 'admin-plan-overview-artifacts'); mkdirSync(artifacts, {recursive: true});

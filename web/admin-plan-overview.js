@@ -164,9 +164,12 @@
       + layout({ key: key, projects: projects, reports: allReports, content: content, sidebar: sidebar }) + '</details>';
   }
   function drawingUrl(drawing) {
+    var crop=typeof drawing.url==='string' && /^\/api\/scheme-previews\/([A-Za-z0-9_-][A-Za-z0-9_.-]*)\/[a-f0-9]{64}\.webp$/.exec(drawing.url);
+    if(crop)return crop[1]===String(drawing.project_id)?drawing.url:'';
     return typeof drawing.url === 'string' && (/^https?:\/\//i.test(drawing.url) || /^\/api\/files\/drawings\/[A-Za-z0-9_./-]+$/.test(drawing.url)) ? drawing.url
       : /^drawings\/[A-Za-z0-9_./-]+$/.test(drawing.path || '') ? '/api/files/' + drawing.path : '';
   }
+  function isSchemeExcerpt(row){return !!(row && String(row.url || '').indexOf('/api/scheme-previews/')===0);}
   function pictures(projects, reports) {
     projects = allowedProjects(projects);
     var result = [], used = Object.create(null), metadata = Object.create(null);
@@ -210,7 +213,7 @@
       + '<aside class="admin-compare-pane" aria-label="图片对照"><label class="admin-compare-select">选择图片<select aria-label="对照图片" onchange="AdminPlanOverview.select(' + index + ',this.value)">'
       + images.map(function (row, i) { return '<option value="' + i + '"' + (row.key === scope.selected ? ' selected' : '') + '>' + esc(imageLabel(row)) + '</option>'; }).join('') + '</select></label>'
       + '<div class="admin-compare-file">' + (selected ? esc(imageLabel(selected)) : '暂无图片') + '</div><div class="admin-compare-image-tools"><button type="button" class="btn ghost sm" aria-label="缩小图片" onclick="AdminPlanOverview.zoom(' + index + ',-25)">−</button><output data-compare-zoom>' + scope.zoom + '%</output><button type="button" class="btn ghost sm" aria-label="放大图片" onclick="AdminPlanOverview.zoom(' + index + ',25)">＋</button><button type="button" class="btn ghost sm" onclick="AdminPlanOverview.fit(' + index + ')">适合宽度</button>'
-      + '<a class="btn ghost sm" data-compare-open href="' + esc(selected && selected.url || '#') + '" target="_blank" rel="noopener noreferrer">原入口打开</a><a class="btn ghost sm" data-compare-download href="' + esc(selected && selected.url || '#') + '" download="' + esc(selected && selected.name || '') + '" target="_blank" rel="noopener noreferrer">下载</a></div>'
+      + '<a class="btn ghost sm" data-compare-open href="' + esc(selected && selected.url || '#') + '" target="_blank" rel="noopener noreferrer">'+(isSchemeExcerpt(selected)?'查看关键图':'原入口打开')+'</a><a class="btn ghost sm" data-compare-download href="' + esc(selected && selected.url || '#') + '" download="' + esc(selected && selected.name || '') + '" target="_blank" rel="noopener noreferrer">'+(isSchemeExcerpt(selected)?'保存关键图':'下载')+'</a></div>'
       + '<p class="admin-compare-hint">放大后可拖动图片，也可使用滚动条。</p><div class="admin-compare-viewport" tabindex="0" aria-label="可滚动的对照图片" onpointerdown="AdminPlanOverview.dragStart(' + index + ',event)" onpointermove="AdminPlanOverview.dragMove(' + index + ',event)" onpointerup="AdminPlanOverview.dragEnd(' + index + ',event)" onpointercancel="AdminPlanOverview.dragEnd(' + index + ',event)">'
       + (selected ? '<img data-compare-image src="' + esc(selected.url) + '" alt="' + esc(imageLabel(selected)) + '" draggable="false" loading="lazy" style="width:' + scope.zoom + '%" onerror="AdminPlanOverview.imageError(' + index + ')">' : '')
       + '<p data-compare-error role="status" hidden>图片暂时无法加载，可使用原入口打开或下载。</p></div></aside></div></section>';
@@ -237,8 +240,8 @@
     image.src = selected.url; image.alt = imageLabel(selected); image.style.width = '100%'; image.hidden = false;
     el.querySelector('[data-compare-error]').hidden = true;
     el.querySelector('.admin-compare-file').textContent = imageLabel(selected);
-    el.querySelector('[data-compare-open]').href = selected.url;
-    var download = el.querySelector('[data-compare-download]'); download.href = selected.url; download.download = selected.name;
+    var openLink=el.querySelector('[data-compare-open]');openLink.href = selected.url;openLink.textContent=isSchemeExcerpt(selected)?'查看关键图':'原入口打开';
+    var download = el.querySelector('[data-compare-download]'); download.href = selected.url; download.download = selected.name;download.textContent=isSchemeExcerpt(selected)?'保存关键图':'下载';
     el.querySelector('[data-compare-zoom]').textContent = '100%';
     var viewport = el.querySelector('.admin-compare-viewport'); viewport.scrollLeft = 0; viewport.scrollTop = 0;
   }
