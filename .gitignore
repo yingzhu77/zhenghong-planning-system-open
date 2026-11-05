@@ -7,7 +7,10 @@
 !/server/
 !/tests/
 !/web/
+!/web/project-knowledge.js
+!/web/project-knowledge.css
 !/tests/helpers/
+!/tests/project-knowledge.test.mjs
 !/web/vendor/
 !/web/vendor/quill/
 !/.dockerignore
@@ -303,3 +306,7 @@
 !/server/admin-plan-batches.mjs
 !/tests/admin-plan-batches.test.mjs
 !/tests/request-origin.test.mjs
+!/docs/PROJECT_KNOWLEDGE.md
+!/docs/previews/
+!/docs/previews/project-knowledge-desktop.png
+!/docs/previews/project-knowledge-mobile.png
