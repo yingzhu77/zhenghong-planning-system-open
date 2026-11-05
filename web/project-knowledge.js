@@ -3,7 +3,20 @@
   'use strict';
   var ctx, identity, state = {query:'', group:'', audience:'', scope:'all', view:'overview', limit:40};
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
-  function valid(c) { return !!(c && c.version===1 && c.source && typeof c.source.name==='string' && Array.isArray(c.facts) && Array.isArray(c.pages)); }
+  function record(v) { return !!v && typeof v==='object' && !Array.isArray(v); }
+  function pageNumber(v) { var n=typeof v==='number'?v:typeof v==='string' && /^[1-9][0-9]*$/.test(v)?Number(v):NaN;return Number.isSafeInteger(n) && n>0?n:null; }
+  function textFields(v,keys) { return keys.every(function(k){return v[k]==null || typeof v[k]==='string';}); }
+  function valid(c) {
+    return !!(record(c) && c.version===1 && record(c.source) && typeof c.source.name==='string' && textFields(c.source,['url','sha256'])
+      && textFields(c,['kind','scope','edition','summary','preview']) && (c.plan_page==null || pageNumber(c.plan_page)!==null)
+      && Array.isArray(c.facts) && c.facts.every(function(f){return record(f) && typeof f.label==='string'
+        && (f.value==null || typeof f.value==='string' || typeof f.value==='number' && Number.isFinite(f.value))
+        && textFields(f,['unit','group','scope','note','status']) && (f.page==null || pageNumber(f.page)!==null)
+        && (f.audiences==null || Array.isArray(f.audiences) && f.audiences.every(function(a){return typeof a==='string';}));})
+      && Array.isArray(c.pages) && c.pages.every(function(p){return record(p) && pageNumber(p.page)!==null && textFields(p,['text']);})
+      && (c.issues==null || Array.isArray(c.issues) && c.issues.every(function(i){return record(i) && textFields(i,['title','detail'])
+        && (i.pages==null || Array.isArray(i.pages) && i.pages.every(function(p){return pageNumber(p)!==null;}));})));
+  }
   function catalogs(c) {
     var allowed=(c.projects || []).map(function(p){return p.id;});
     return (c.catalogs || [{project_id:c.pid,name:((c.projects || []).filter(function(p){return p.id===c.pid;})[0] || {}).name,catalog:c.fields && c.fields.scheme_catalog}])
@@ -13,8 +26,8 @@
     return typeof url==='string' && new RegExp('^/api/files/drawings/'+String(pid).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'/[A-Za-z0-9_-][A-Za-z0-9_.-]*$').test(url) ? url : '';
   }
   function source(p,page,label) {
-    var url=safeFile(p.catalog.source && p.catalog.source.url,p.project_id),n=Number(page);
-    return url && Number.isInteger(n) && n>0 && n<=p.catalog.pages.length
+    var url=safeFile(p.catalog.source && p.catalog.source.url,p.project_id),n=pageNumber(page);
+    return url && n!==null && p.catalog.pages.some(function(p){return pageNumber(p.page)===n;})
       ? '<a class="pk-source" href="'+esc(url)+'#page='+n+'" target="_blank" rel="noopener noreferrer">'+esc(label || '原文第 '+n+' 页')+' <span aria-hidden="true">↗</span></a>' : '<span class="pk-muted">来源待登记</span>';
   }
   function normalize(v) { return String(v || '').toLowerCase().replace(/总建面/g,'总建筑面积').replace(/计容建面/g,'计容建筑面积').replace(/绿化率/g,'绿地率').replace(/\s+/g,' ').trim(); }
@@ -33,8 +46,10 @@
   }
   function overview(p) {
     var data=p.catalog,high=data.facts.filter(function(f){return f.highlight;}).slice(0,6),preview=safeFile(data.preview,p.project_id);
+    var planUrl=safeFile(data.source.url,p.project_id),planPage=pageNumber(data.plan_page),planImage=preview?'<img src="'+esc(preview)+'" alt="'+esc(p.name)+'方案总图" loading="lazy">':'';
+    if(planImage && planUrl && planPage!==null && data.pages.some(function(p){return pageNumber(p.page)===planPage;}))planImage='<a href="'+esc(planUrl)+'#page='+planPage+'" target="_blank" rel="noopener noreferrer">'+planImage+'</a>';
     return '<div class="pk-kpis">'+high.map(function(f){return '<article><span>'+esc(f.label)+'</span><strong>'+amount(f)+'</strong><div>'+source(p,f.page)+(f.status==='review'?' <span class="pk-dot-warning">待核对</span>':'')+'</div></article>';}).join('')+'</div>'
-      +'<div class="pk-overview-grid"><section class="pk-panel pk-plan"><div class="pk-panel-heading"><h2>方案总图</h2>'+source(p,data.plan_page,'打开总图原页')+'</div>'+(preview?'<a href="'+esc(safeFile(data.source.url,p.project_id))+'#page='+Number(data.plan_page)+'" target="_blank" rel="noopener noreferrer"><img src="'+esc(preview)+'" alt="'+esc(p.name)+'方案总图" loading="lazy"></a>':'<div class="pk-empty">总图预览尚未登记，可从原方案查看。</div>')+'</section>'
+      +'<div class="pk-overview-grid"><section class="pk-panel pk-plan"><div class="pk-panel-heading"><h2>方案总图</h2>'+source(p,data.plan_page,'打开总图原页')+'</div>'+(planImage || '<div class="pk-empty">总图预览尚未登记，可从原方案查看。</div>')+'</section>'
       +'<section class="pk-panel"><div class="pk-panel-heading"><h2>项目与方案</h2><span class="pk-tag">'+esc(data.kind || '建筑方案')+'</span></div><p class="pk-summary">'+esc(data.summary || '')+'</p><dl class="pk-details"><dt>方案范围</dt><dd>'+esc(data.scope || '以原文为准')+'</dd><dt>文本版本</dt><dd>'+esc(data.edition || '原文未明确标注日期')+'</dd><dt>来源文件</dt><dd>'+esc(data.source.name)+'</dd><dt>资料覆盖</dt><dd>'+data.pages.length+' 页 · '+data.facts.length+' 项结构化摘录</dd></dl><div class="pk-notice">方案数据用于查询参考。规划条件、设计值、报建版与使用版分别保留，不自动视为最终批复。</div>'
       +(data.issues && data.issues.length?'<button type="button" class="pk-review-link" onclick="ZHProjectKnowledge.set(\'view\',\'issues\')">查看 '+data.issues.length+' 项口径差异与待核对事项 →</button>':'')+'</section></div>'
       +'<section class="pk-panel"><div class="pk-panel-heading"><h2>按工作需要查资料</h2><span class="pk-muted">分类来自本项目方案内容</span></div><div class="pk-topic-grid">'+groups(p).map(function(g){var count=data.facts.filter(function(f){return f.group===g;}).length;return '<button type="button" onclick="ZHProjectKnowledge.topic(this.dataset.topic)" data-topic="'+esc(g)+'"><b>'+esc(g)+'</b><span>'+count+' 项摘录 <i>→</i></span></button>';}).join('')+'</div></section>';
@@ -49,11 +64,11 @@
     var scope=state.scope==='all'?list:[p],hits=[],pageHits=[];
     scope.forEach(function(project){
       project.catalog.facts.forEach(function(f){if((!state.group || state.group===f.group) && (!state.audience || (f.audiences || []).indexOf(state.audience)>=0) && matches([project.name,f.label,f.value,f.unit,f.group,f.scope,f.note].join(' '),state.query))hits.push({p:project,f:f});});
-      if(state.query)project.catalog.pages.forEach(function(page){var relevant=(!state.group && !state.audience) || project.catalog.facts.some(function(f){return f.page===page.page && (!state.group || f.group===state.group) && (!state.audience || (f.audiences || []).indexOf(state.audience)>=0);});if(relevant && matches(page.text,state.query))pageHits.push({p:project,page:page});});
+      if(state.query)project.catalog.pages.forEach(function(page){var relevant=(!state.group && !state.audience) || project.catalog.facts.some(function(f){return pageNumber(f.page)===pageNumber(page.page) && (!state.group || f.group===state.group) && (!state.audience || (f.audiences || []).indexOf(state.audience)>=0);});if(relevant && matches(page.text,state.query))pageHits.push({p:project,page:page});});
     });
     var intro='<div class="pk-results-heading"><h2>'+esc(state.view==='text'?'原文检索':'查询结果')+'</h2><span>'+(state.view==='text'?'':hits.length+' 项资料 · ')+pageHits.length+' 个原文页面</span></div>';
     var facts=state.view==='text'?'':hits.slice(0,state.limit).map(function(hit){var f=hit.f,project=hit.p;return '<article class="pk-result"><div class="pk-result-meta"><span>'+esc(project.name)+'</span><span>'+esc(f.group)+'</span>'+tag(f)+'</div><h3>'+esc(f.label)+'<strong>'+amount(f)+'</strong></h3><p>'+esc(f.scope || project.catalog.scope)+(f.note?' · '+esc(f.note):'')+'</p>'+source(project,f.page)+'</article>';}).join('');
-    var pages=pageHits.slice(0,state.limit).map(function(hit){var text=hit.page.text || '',terms=normalize(state.query).split(' ').filter(Boolean),at=normalize(text).indexOf(terms[0] || ''),start=Math.max(0,at-70);return '<article class="pk-result pk-text-result"><div class="pk-result-meta"><span>'+esc(hit.p.name)+'</span><span>PDF 第 '+hit.page.page+' 页</span></div><p>'+esc((start?'…':'')+text.slice(start,start+380))+(text.length>start+380?'…':'')+'</p>'+source(hit.p,hit.page.page,'打开原文核对')+'</article>';}).join('');
+    var pages=pageHits.slice(0,state.limit).map(function(hit){var text=hit.page.text || '',terms=normalize(state.query).split(' ').filter(Boolean),at=normalize(text).indexOf(terms[0] || ''),start=Math.max(0,at-70);return '<article class="pk-result pk-text-result"><div class="pk-result-meta"><span>'+esc(hit.p.name)+'</span><span>PDF 第 '+esc(pageNumber(hit.page.page))+' 页</span></div><p>'+esc((start?'…':'')+text.slice(start,start+380))+(text.length>start+380?'…':'')+'</p>'+source(hit.p,hit.page.page,'打开原文核对')+'</article>';}).join('');
     if(state.view==='text' && !state.query)return '<div class="pk-empty">输入关键词检索方案全文。表格中的摘录可在“指标与专题”查看；图片页请打开原 PDF 核对。</div>';
     return intro+(facts || pages?facts+(pages?'<h3 class="pk-subheading">原文中的相关内容</h3>'+pages:''):'<div class="pk-empty">没有找到匹配内容。可调整项目范围、清除用途筛选，或使用原文中的名称查询；未检出不表示项目没有该项内容。</div>')+(((state.view!=='text' && hits.length>state.limit) || pageHits.length>state.limit)?'<button type="button" class="pk-more" onclick="ZHProjectKnowledge.more()">显示更多结果</button>':'');
   }

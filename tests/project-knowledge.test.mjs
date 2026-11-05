@@ -42,3 +42,43 @@ test('full-text filters use cited pages and do not count hidden fact results',()
  const html=api.render(ctx);assert.match(html,/1 个原文页面/);assert.match(html,/海绵城市设计/);assert.doesNotMatch(html,/海绵城市另一专题|1 项资料/);
  api.set('audience','其他用途');assert.match(api.render(ctx),/没有找到匹配内容/);
 });
+
+test('persisted catalog entry shapes are checked before any view renders',()=>{
+ const api=fixture();
+ for(const patch of [{facts:[null]},{facts:[{label:'面积',audiences:'设计管理'}]},
+   {pages:[null]},{pages:[{page:1,text:{unexpected:true}}]},
+   {issues:[null]},{issues:[{title:'待核对',pages:'1'}]}]){
+  const c=catalog(patch);assert.equal(api.valid(c),false);assert.doesNotThrow(()=>api.render(context({fields:{scheme_catalog:c}})));
+ }
+});
+
+test('page labels reject markup and non-positive or non-integer values',()=>{
+ const api=fixture();
+ for(const page of ['<b data-review>page</b>',0,-1,1.5,'1e2','01',true,Number.MAX_SAFE_INTEGER+1]){
+  const c=catalog({pages:[{page,text:'匿名搜索内容'}]});assert.equal(api.valid(c),false);
+  const html=api.render(context({fields:{scheme_catalog:c}}));assert.doesNotMatch(html,/<b data-review>|#page=/);
+ }
+});
+
+test('physical PDF page numbers remain correct for sparse indexes and canonical numeric strings',()=>{
+ const api=fixture(),c=catalog({plan_page:'8',pages:[{page:'8',text:'海绵城市设计'}],
+  facts:[{label:'海绵设施',value:'说明',page:8,group:'景观',audiences:['设计管理'],highlight:true}]});
+ const ctx=context({fields:{scheme_catalog:c}});assert.equal(api.valid(c),true);
+ assert.match(api.render(ctx),/source\.pdf#page=8/);
+ api.set('view','text');api.set('query','海绵');api.set('audience','设计管理');
+ const html=api.render(ctx);assert.match(html,/PDF 第 8 页/);assert.match(html,/1 个原文页面/);
+});
+
+test('preview without a registered source page is visible without a misleading link',()=>{
+ const html=fixture().render(context({fields:{scheme_catalog:catalog({plan_page:null,preview:'/api/files/drawings/p1/preview.png'})}}));
+ assert.match(html,/src="\/api\/files\/drawings\/p1\/preview\.png"/);assert.doesNotMatch(html,/#page=NaN|href="#page=|<a[^>]*><img/);
+});
+
+test('invalid catalog visibly falls back to the original archive without changing stored data',()=>{
+ const document={getElementById:()=>null,querySelectorAll:()=>[]},window={document},env={window,document};
+ vm.runInNewContext(script,env);vm.runInNewContext(fs.readFileSync(new URL('../web/reporter-archive.js',import.meta.url),'utf8'),env);
+ const c=catalog({facts:[null]}),before=JSON.stringify(c),ctx=context({tab:'knowledge',fields:{scheme_catalog:c},helpers:{esc:String,sd:String,richItem:()=>'',dayDiff:()=>0,lightOf:()=>'',devTxt:()=>''}});
+ const html=window.ZHReporterArchive.render(ctx);
+ assert.match(html,/方案资料暂无法读取，已显示原档案/);assert.match(html,/项目总图|基本资料/);
+ assert.equal(JSON.stringify(c),before);
+});
