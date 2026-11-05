@@ -68,7 +68,7 @@
     ensureReporter: function (view) {
       var key=view === 'master' ? 'archive' : view === 'mline' ? 'workbench' : 'tasks';
       if (!reporterPromises[key]) {
-        var work=key === 'archive' ? [style(assets['reporter-archive.css']),script(assets['reporter-archive.js'])]
+        var work=key === 'archive' ? [style(assets['reporter-archive.css']),script(assets['reporter-archive.js']),style(assets['project-knowledge.css']),script(assets['project-knowledge.js'])]
           : key === 'workbench' ? [style(assets['reporter-workbench.css'])]
           : [style(assets['reporter-tasks.css']),script(assets['reporter-tasks.js'])];
         if(view === 'center')work.push(global.PlanningBoot.ensureReporter('mline'));

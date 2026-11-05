@@ -1428,7 +1428,7 @@
     clearTimeout(draftAutosaveTimer);
     S.briefDrafts = {}; S.reviewRichDrafts = {}; S.formRich = {}; S.lineEdits = {};
     S.overviewUI = { project: '', line: '', discipline: '', open: {} };
-    S.followupRows = []; S.monthlyUnmatchedItems=[];S.meetingDraft = null; S.mlineDraft = {}; S.reporterArchiveTab = 'plan'; S.submittingReport = null;
+    S.followupRows = []; S.monthlyUnmatchedItems=[];S.meetingDraft = null; S.mlineDraft = {}; S.reporterArchiveTab = 'knowledge'; S.submittingReport = null;
     S.attachmentIds = []; S.completionQuery = null; S.completionMeta = {}; S.completionQueueIds = [];
   }
   function pageDataKeys() {
@@ -1571,8 +1571,8 @@
   async function showPage(prepare, force, transition) {
     var navigation = ++pageNavigation, epoch = dataEpoch;
     try {
-      await Promise.all([loadPageData(force),S.profile && (S.profile.role === 'pm' || S.view === 'meetings') && window.PlanningBoot && window.PlanningBoot.ensureReporter
-        ? window.PlanningBoot.ensureReporter(S.view === 'detail' && S.detailTab === 'data' ? 'master' : S.view)
+      await Promise.all([loadPageData(force),S.profile && (S.profile.role === 'pm' || S.view === 'meetings' || S.view === 'master' || S.view === 'detail' && S.detailTab === 'data') && window.PlanningBoot && window.PlanningBoot.ensureReporter
+        ? window.PlanningBoot.ensureReporter(S.view === 'master' || S.view === 'detail' && S.detailTab === 'data' ? 'master' : S.view)
         : window.PlanningBoot && window.PlanningBoot.ensureReporter && S.view==='detail' && (!S.detailTab || ['report','history'].indexOf(S.detailTab)>=0)
           ? window.PlanningBoot.ensureReporter('history') : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureWorkflow && (S.profile && S.profile.role === 'pm' || isManagerOverview() || S.view === 'completion' || S.view === 'coord' || S.view === 'detail' && (!S.detailTab || ['report','history'].indexOf(S.detailTab)>=0))
@@ -3647,6 +3647,7 @@
       return saved;
     }
     return {identity:String(uid)+'|'+epoch,projects:projects,pid:pid,tab:S.reporterArchiveTab,editable:canEditMaster(),
+      catalogs:projects.map(function(p){return {project_id:p.id,name:p.name,catalog:masterFields(p.id).scheme_catalog};}),
       fields:masterFields(pid),phases:phasesOf(pid),drawings:drawingsOf(pid),milestones:msOf(pid),
       helpers:{esc:esc,richItem:richItem,sd:sd,dayDiff:dayDiff,lightOf:lightOf,devTxt:devTxt},
       saveFields:async function(patch,target){
@@ -3706,6 +3707,8 @@
       if (!reporterProjects.some(function (p) {return p.id === reporterPid;})) reporterPid = reporterProjects[0] && reporterProjects[0].id;
       S.masterPid = reporterPid;
       return window.ZHReporterArchive.render({projects:reporterProjects,pid:reporterPid,tab:S.reporterArchiveTab,
+        identity:String(S.uid || '')+'|'+dataEpoch,
+        catalogs:reporterProjects.map(function(p){return {project_id:p.id,name:p.name,catalog:masterFields(p.id).scheme_catalog};}),
         fields:masterFields(reporterPid),phases:phasesOf(reporterPid),drawings:drawingsOf(reporterPid),milestones:msOf(reporterPid),
         helpers:{esc:esc,richItem:richItem,sd:sd,dayDiff:dayDiff,lightOf:lightOf,devTxt:devTxt}});
     }
@@ -3716,6 +3719,7 @@
     S.masterPid = pid;
     var canEdit = canEditMaster();
     if(isPlanningManager() && window.ZHAdminArchive)return window.ZHAdminArchive.render(adminArchiveContext(pid,list));
+    if(window.ZHReporterArchive && window.ZHProjectKnowledge && window.ZHProjectKnowledge.valid(masterFields(pid).scheme_catalog))return window.ZHReporterArchive.render(adminArchiveContext(pid,list));
     var mf = masterFields(pid), ph = phasesOf(pid), ps = phaseSum(pid);
 
     var pjSel = '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
@@ -5032,7 +5036,7 @@
     },
 
     /* ===== 项目主数据 ===== */
-    masterPick: function (pid) { captureAdminArchive();S.masterPid = pid; renderShell(true); },
+    masterPick: function (pid) { captureAdminArchive();S.masterPid = pid;if(masterFields(pid).scheme_catalog)S.reporterArchiveTab='knowledge';renderShell(true); },
     reporterArchiveTab: function (tab) { captureAdminArchive();S.reporterArchiveTab = tab; renderShell(true); },
 
     masterSave: async function (pid) {

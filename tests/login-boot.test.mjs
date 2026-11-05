@@ -5,8 +5,8 @@ import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../web/login-boot.js', import.meta.url), 'utf8');
 function fixture(failures = {}) {
-  const names = ['planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'app.js', 'overview-meetings.js', 'admin-plan-overview.js', 'admin-plan-overview.css', 'project-plan-statistics.js', 'project-plan-statistics.css', 'coordination-workbench.js', 'monthly-plans.js', 'completion-statistics.js', 'completion-statistics.css', 'completion-review.js', 'completion-review.css', 'report-attachments.js', 'report-attachments.css',
-    'reporter-tasks.js', 'reporter-tasks.css', 'reporter-workbench.css', 'reporter-archive.js', 'reporter-archive.css', 'admin-archive.js', 'admin-archive.css',
+  const names = ['planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'app.js', 'overview-meetings.js', 'admin-plan-overview.js', 'admin-plan-overview.css', 'project-plan-statistics.js', 'project-plan-statistics.css', 'coordination-workbench.js', 'monthly-summaries.js', 'monthly-plans.js', 'completion-statistics.js', 'completion-statistics.css', 'completion-review.js', 'completion-review.css', 'report-attachments.js', 'report-attachments.css',
+    'reporter-tasks.js', 'reporter-tasks.css', 'reporter-workbench.css', 'reporter-archive.js', 'reporter-archive.css', 'project-knowledge.js', 'project-knowledge.css', 'admin-archive.js', 'admin-archive.css',
     'vendor/quill/quill.core.css', 'selection-format.css', 'vendor/quill/quill.js', 'rich-text.js', 'rich-editor.js', 'password-change.js', 'password-change.css', 'management-reader.js', 'management-reader.css'];
   const assets = Object.fromEntries(names.map(name => [name, '/assets/' + name])), downloads = [], removed = [], events = {};
   const form = {value: 'early-input', addEventListener(name, handler) {events[name] = handler;}, dispatchEvent() {form.submits++;}, submits: 0};
@@ -69,9 +69,9 @@ test('administrator archive assets load only on demand and reuse the shared arch
   const f = fixture();
   assert.equal(f.downloads.some(url => url.includes('archive')), false);
   await Promise.all([f.boot.ensureAdmin(), f.boot.ensureAdmin()]);
-  for (const name of ['reporter-archive.js', 'reporter-archive.css', 'admin-archive.js', 'admin-archive.css']) assert.equal(f.downloads.filter(url => url.endsWith('/' + name)).length, 1);
+  for (const name of ['reporter-archive.js', 'reporter-archive.css', 'project-knowledge.js', 'project-knowledge.css', 'admin-archive.js', 'admin-archive.css']) assert.equal(f.downloads.filter(url => url.endsWith('/' + name)).length, 1);
   await f.boot.ensureReporter('master');
-  assert.equal(f.downloads.length, 8);
+  assert.equal(f.downloads.length, 10);
 });
 
 test('overview meeting and statistics gates load only their requested assets and coalesce repeated calls', async () => {
@@ -79,13 +79,14 @@ test('overview meeting and statistics gates load only their requested assets and
   assert.equal(f.downloads.some(url => /overview-meetings|completion-statistics/.test(url)), false);
   await Promise.all([f.boot.ensureOverview(), f.boot.ensureOverview()]);
   assert.equal(f.downloads.filter(url => url.endsWith('/overview-meetings.js')).length, 1);
+  assert.equal(f.downloads.filter(url => url.endsWith('/monthly-summaries.js')).length, 1);
   assert.equal(f.downloads.some(url => /completion-statistics/.test(url)), false);
   await Promise.all([f.boot.ensureStatistics(), f.boot.ensureStatistics()]);
   for (const name of ['completion-statistics.js', 'completion-statistics.css']) assert.equal(f.downloads.filter(url => url.endsWith('/' + name)).length, 1);
-  assert.equal(f.downloads.length, 9);
+  assert.equal(f.downloads.length, 10);
   await Promise.all([f.boot.ensureProjectPlanStatistics(),f.boot.ensureProjectPlanStatistics()]);
   for(const name of ['project-plan-statistics.js','project-plan-statistics.css'])assert.equal(f.downloads.filter(url=>url.endsWith('/'+name)).length,1);
-  assert.equal(f.downloads.length,11);
+  assert.equal(f.downloads.length,12);
 });
 
 test('management reading loads on demand and can retry without loading editing components', async () => {

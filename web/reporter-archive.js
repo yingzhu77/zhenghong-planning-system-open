@@ -38,6 +38,8 @@
   }
 
   function render(context) {
+    var knowledge=context.fields && context.fields.scheme_catalog;
+    if(global.ZHProjectKnowledge && global.ZHProjectKnowledge.valid(knowledge) && (!context.tab || context.tab==='knowledge'))return global.ZHProjectKnowledge.render(context);
     var h = context.helpers, esc = h.esc, fields = context.fields || {};
     var phases = context.phases || [], drawings = context.drawings || [];
     var milestones = context.milestones || [], projects = context.projects || [];
@@ -156,7 +158,7 @@
       if (relatedDrawings('其他').length) body += details('其他图纸与附件', drawingCards(relatedDrawings('其他'), false));
     }
 
-    return '<div class="reporter-archive"><div class="card reporter-archive-toolbar"><div class="reporter-archive-project"><label for="reporterArchiveProject">项目</label>'
+    return (global.ZHProjectKnowledge && global.ZHProjectKnowledge.valid(knowledge)?'<div class="pk-legacy-link"><button type="button" class="btn ghost sm" onclick="ZHProjectKnowledge.home()">← 返回方案资料中心</button></div>':'')+'<div class="reporter-archive"><div class="card reporter-archive-toolbar"><div class="reporter-archive-project"><label for="reporterArchiveProject">项目</label>'
       + '<select id="reporterArchiveProject" class="no-print" onchange="App.masterPick(this.value)">' + projects.map(function (project) {
         return '<option value="' + esc(project.id) + '"' + (project.id === context.pid ? ' selected' : '') + '>' + esc(project.name) + '</option>';
       }).join('') + '</select><b class="reporter-archive-print-project">' + esc((projects.filter(function (p) { return p.id === context.pid; })[0] || {}).name || '') + '</b></div>'

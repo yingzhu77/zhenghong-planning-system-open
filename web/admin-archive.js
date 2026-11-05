@@ -166,6 +166,7 @@
   function render(ctx) {
     var incomingIdentity=String(ctx.identity == null?'default':ctx.identity);
     if(identity!==incomingIdentity){reset();identity=incomingIdentity;}context=ctx;
+    if(global.ZHProjectKnowledge && global.ZHProjectKnowledge.valid(ctx.fields && ctx.fields.scheme_catalog) && (!ctx.tab || ctx.tab==='knowledge'))return global.ZHProjectKnowledge.render(ctx);
     var readonly=global.ZHReporterArchive.render(ctx);if(!ctx.editable)return readonly;
     var tab=tabOf(ctx),draft=state(ctx),fields=mergedFields(ctx,draft),disabled=draft.busy?' disabled':'';
     function input(name,label,multiline) {
