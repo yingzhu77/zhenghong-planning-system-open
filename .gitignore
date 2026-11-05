@@ -307,3 +307,6 @@
 !/tests/admin-plan-batches.test.mjs
 !/tests/request-origin.test.mjs
 !/docs/PROJECT_KNOWLEDGE.md
+!/docs/previews/
+!/docs/previews/project-knowledge-desktop.png
+!/docs/previews/project-knowledge-mobile.png
