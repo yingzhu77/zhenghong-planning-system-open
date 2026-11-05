@@ -1,13 +1,13 @@
 /* One controller owns one projection window. Draft text is never sent between windows. */
 (function(global){
   'use strict';
-  var cfg,child=null,id='',identity='',uid='',following=true,section='all',observed='',lastSent=null,lastShown=null,lastAutomatic=false,sequence=0,connected=false,pending=false,error='',saved=[],timer=null;
+  var cfg,child=null,id='',identity='',uid='',following=true,section='all',summaryMonth='',observed='',lastSent=null,lastShown=null,lastAutomatic=false,sequence=0,connected=false,pending=false,error='',saved=[],timer=null,closeCheck=null;
   function context(){return cfg && cfg.getContext();}
   function valid(){var now=context();return !!(child && now && now.allowed && identity===now.identity && uid===now.uid);}
   function active(){return valid() && !child.closed;}
   function send(type,extra){if(child && !child.closed)child.postMessage(Object.assign({app:'planning-meeting-v1',id:id,type:type},extra || {}),location.origin);}
   function esc(value){return global.MeetingView.esc(value);}
-  function selection(){var now=context();if(!now || !now.target)return null;return global.MeetingView.target(Object.assign({},now.target,{section:section}));}
+  function selection(){var now=context();if(!now || !now.target)return null;return global.MeetingView.target(Object.assign({},now.target,{section:section},section==='monthly' && summaryMonth?{summaryMonth:summaryMonth}:{}));}
   function professionOptions(value){
     var now=context(),lines=[];
     (now && now.projectProfessions || []).filter(function(project){return value.projectIds.includes(project.project_id);}).forEach(function(project){
@@ -16,27 +16,30 @@
   }
   function show(value,automatic){
     if(!valid())return stop();
-    if(child.closed){error='投影窗口已关闭，请重新开启。';connected=false;mount();return;}
+    if(child.closed)return stop();
     lastSent=global.MeetingView.target(value);lastAutomatic=!!automatic;pending=true;error='';sequence++;
     send('show',{uid:uid,target:lastSent,sequence:sequence,professions:professionOptions(lastSent)});mount();
   }
   function start(windowRef){
     if(active()){if(windowRef && windowRef!==child)windowRef.close();child.focus();return;}
-    stop();var now=context();
+    stop(true);var now=context();
     if(!now || !now.allowed || !now.target){if(windowRef)windowRef.close();return cfg.notify('请先打开本人有权查看的计划总览。','err');}
-    child=windowRef;id=crypto.randomUUID();identity=now.identity;uid=now.uid;following=true;section='all';observed='';lastSent=null;lastShown=null;saved=[];error='';pending=true;connected=false;
+    if(!windowRef)return cfg.notify('请重新开启会议投影。','err');
+    child=windowRef;id=crypto.randomUUID();identity=now.identity;uid=now.uid;following=true;section=Object.hasOwn(global.MeetingView.sections,now.defaultSection)?now.defaultSection:'all';summaryMonth='';observed='';lastSent=null;lastShown=null;saved=[];error='';pending=true;connected=false;
     global.addEventListener('message',receive);
     child.location=cfg.displayUrl+'#'+id;
-    timer=setInterval(function(){
+    var heartbeatTicks=0;timer=setInterval(function(){
       if(!valid())return stop();
-      if(child.closed){connected=false;pending=false;mount();return;}
-      send('heartbeat',{uid:uid});
-    },3000);
+      if(child.closed)return stop();
+      if(++heartbeatTicks%6===0)send('heartbeat',{uid:uid});
+    },500);
     mount();refresh();
   }
-  function stop(){
-    send('end');if(timer)clearInterval(timer);timer=null;global.removeEventListener('message',receive);
-    child=null;id='';identity='';uid='';connected=false;pending=false;error='';lastSent=null;lastShown=null;saved=[];observed='';mount();
+  function stop(closeWindow){
+    var ending=child;send('end');if(timer)clearInterval(timer);timer=null;if(closeCheck)clearTimeout(closeCheck);closeCheck=null;global.removeEventListener('message',receive);
+    child=null;id='';identity='';uid='';following=true;section='all';summaryMonth='';connected=false;pending=false;error='';lastSent=null;lastShown=null;lastAutomatic=false;saved=[];observed='';
+    if(closeWindow===true && ending && !ending.closed)ending.close();
+    mount();
   }
   function receive(event){
     var packet=event.data;
@@ -54,7 +57,14 @@
       if(!base || base.kind==='arrangement' || typeof packet.line!=='string' || packet.line && !professionOptions(base).includes(packet.line))return;
       var projects=base.projectIds.filter(function(pid){return !packet.line || (now.projectProfessions || []).some(function(project){return project.project_id===pid && (project.lines || []).includes(packet.line);});});
       if(!projects.length)return;following=false;show(Object.assign({},base,{projectIds:projects,line:packet.line}));send('following',{following:false});
-    }else if(packet.type==='closed'){connected=false;pending=false;mount();}
+    }else if(packet.type==='closed'){
+      // beforeunload also runs during refresh. Only the Window.closed flag
+      // proves the projection ended; a reload must keep the same session.
+      if(child.closed)return stop();
+      connected=false;pending=false;if(closeCheck)clearTimeout(closeCheck);
+      var closingChild=child,closingId=id;closeCheck=setTimeout(function(){closeCheck=null;if(child===closingChild && id===closingId && closingChild.closed)stop();},0);
+      mount();
+    }
   }
   function refresh(){
     if(child && !valid())return stop();
@@ -87,28 +97,33 @@
   }
   function mount(){
     var host=document.getElementById('meeting-controller-mount');if(!host)return;
+    if(child && child.closed)return stop();
     if(!child){host.replaceChildren();return;}
-    var closed=child.closed,shown=lastShown,now=context(),label=shown?shown.title+' · '+(shown.target.kind==='arrangement'?'已保存工作安排':MeetingView.sections[shown.target.section]):'尚未展示';
-    var html='<section class="meeting-control" aria-label="会议投影控制"><div class="meeting-control-heading"><b>会议投影控制台</b><span role="status">'+esc(closed?'投影窗口已关闭':error?'读取失败':pending?'正在读取…':connected?following?'跟随中':'已暂停跟随':'等待投影窗口连接')+'</span></div>'
-      +'<div class="meeting-control-preview"><b>大屏：</b>'+esc(label)+(shown?' · '+esc(shown.target.period):'')+'</div>'
-      +'<p class="meeting-control-hint">录入和保存安排不会更新大屏；保存后可单独选择展示。'+(!following?' 当前项目切换不影响大屏。':'')+'</p>'
+    var now=context(),selected=selection();
+    var html='<section class="meeting-control" aria-label="会议投影控制"><div class="meeting-control-heading"><b>会议投影控制台</b><span role="status">'+esc(error?'读取失败':pending?'正在读取…':connected?following?'跟随中':'已暂停跟随':'等待投影窗口连接')+'</span></div>'
       +(error?'<p class="meeting-control-error" role="alert">'+esc(error)+'</p>':'')
-      +'<div class="meeting-control-actions"><button type="button" data-meeting-toggle'+(closed?' disabled':'')+'>'+esc(following?'暂停跟随':'恢复跟随')+'</button>'
+      +'<div class="meeting-control-actions"><button type="button" data-meeting-toggle>'+esc(following?'暂停跟随':'恢复跟随')+'</button>'
       +'<label>投影内容<select aria-label="投影内容" data-meeting-section>'+Object.keys(MeetingView.sections).map(function(key){return '<option value="'+key+'"'+(section===key?' selected':'')+'>'+esc(MeetingView.sections[key])+'</option>';}).join('')+'</select></label>'
-      +'<button type="button" data-meeting-show'+(closed || !now || !now.target?' disabled':'')+'>展示当前选择</button>'
-      +'<button type="button" data-meeting-reload'+(closed || !lastSent?' disabled':'')+'>刷新大屏</button><button type="button" data-meeting-previous'+(closed?' disabled':'')+'>上一屏</button><button type="button" data-meeting-next'+(closed?' disabled':'')+'>下一屏</button>'
-      +'<button type="button" data-meeting-focus'+(closed?' disabled':'')+'>定位投影窗口</button><button type="button" data-meeting-stop>结束投影</button></div>'
+      +(section==='monthly'?'<label>总结月份<input type="month" aria-label="总结月份" data-meeting-month value="'+esc(selected && selected.summaryMonth || summaryMonth)+'"></label>':'')
+      +'<button type="button" data-meeting-show'+(!now || !now.target?' disabled':'')+'>展示当前选择</button>'
+      +'<button type="button" data-meeting-reload'+(!lastSent?' disabled':'')+'>刷新大屏</button><button type="button" data-meeting-previous>上一屏</button><button type="button" data-meeting-next>下一屏</button>'
+      +'<button type="button" data-meeting-focus>定位投影窗口</button><button type="button" data-meeting-stop>结束投影</button></div>'
       +(saved.length?'<div class="meeting-recent"><b>刚保存，未自动展示</b>'+saved.map(function(row,index){return '<div><span>'+esc(row.title)+'</span><button type="button" data-meeting-saved="'+index+'">展示这条安排</button></div>';}).join('')+'</div>':'')+'</section>';
     // Only the toolbar is replaced; business form DOM and rich editor selection remain intact.
     host.innerHTML=html;
     host.querySelector('[data-meeting-toggle]').onclick=toggle;
     host.querySelector('[data-meeting-section]').onchange=function(event){section=event.target.value;refresh();};
+    var month=host.querySelector('[data-meeting-month]');
+    if(month)month.onchange=function(event){
+      var previous=summaryMonth;summaryMonth=event.target.value;
+      try{selection();refresh();}catch(error){summaryMonth=previous;mount();cfg.notify('请选择有效的总结月份。','err');}
+    };
     host.querySelector('[data-meeting-show]').onclick=function(){var value=selection();if(value)show(value);};
     host.querySelector('[data-meeting-reload]').onclick=function(){if(lastSent)show(lastSent);};
     host.querySelector('[data-meeting-previous]').onclick=function(){send('scroll',{direction:'previous'});};
     host.querySelector('[data-meeting-next]').onclick=function(){send('scroll',{direction:'next'});};
     host.querySelector('[data-meeting-focus]').onclick=function(){if(active())child.focus();};
-    host.querySelector('[data-meeting-stop]').onclick=stop;
+    host.querySelector('[data-meeting-stop]').onclick=function(){stop(true);};
     host.querySelectorAll('[data-meeting-saved]').forEach(function(button){button.onclick=function(){var row=saved[Number(button.dataset.meetingSaved)];if(row)showSaved(row.id,row.project_id);};});
   }
   global.addEventListener('beforeunload',function(){send('end');});

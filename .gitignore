@@ -52,6 +52,13 @@
 !/server/database.mjs
 !/server/errors.mjs
 !/server/files.mjs
+!/server/scheme-protection.mjs
+!/server/scheme-vault.mjs
+!/scripts/protect-scheme-materials.mjs
+!/tests/scheme-protection.test.mjs
+!/tests/scheme-vault.test.mjs
+!/tests/scheme-materials.test.mjs
+!/docs/SCHEME_PROTECTION.md
 !/server/mail.mjs
 !/server/password.mjs
 !/server/rich-text.mjs

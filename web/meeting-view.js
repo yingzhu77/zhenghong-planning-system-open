@@ -1,16 +1,21 @@
 /* Projection reads use the existing authenticated APIs; window messages contain selectors only. */
 (function(global){
   'use strict';
-  var sections={all:'完整周报',nodes:'核心节点',plans:'当月计划',summaries:'月度完成情况',coord:'需要协调',followups:'待办反馈',media:'总图与附件'};
+  var sections={monthly:'月度会议（总结＋计划）',all:'完整周报',nodes:'核心节点',plans:'当月计划',summaries:'月度完成情况',coord:'需要协调',followups:'待办反馈',media:'总图与附件'};
   function esc(value){return String(value==null?'':value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function shiftMonth(month,amount){var parts=month.split('-').map(Number),index=parts[0]*12+parts[1]-1+amount;return String(Math.floor(index/12)).padStart(4,'0')+'-'+String(index%12+1).padStart(2,'0');}
+  function months(selection){var start=global.PlanningWindows.periodStart(selection.period).slice(0,7),summary=selection.section==='monthly'?(selection.summaryMonth || shiftMonth(start,-1)):start;return {summary:summary,plan:shiftMonth(summary,1)};}
+  function monthLabel(month){return month.slice(0,4)+'年'+Number(month.slice(5))+'月';}
   function target(value){
     if(!value || typeof value!=='object' || !Array.isArray(value.projectIds) || !value.projectIds.length || value.projectIds.length>30
       || value.projectIds.some(function(id){return typeof id!=='string' || !id || id.length>200;}) || new Set(value.projectIds).size!==value.projectIds.length
       || !['res','com'].includes(value.type) || typeof value.period!=='string' || !global.PlanningWindows.periodStart(value.period)
       || typeof value.line!=='string' || value.line.length>200 || !Object.hasOwn(sections,value.section)
       || value.kind!==undefined && value.kind!=='report' && value.kind!=='arrangement'
-      || value.kind==='arrangement' && (value.projectIds.length!==1 || !/^[a-f0-9-]{36}$/i.test(value.taskId || '')))throw new Error('投影选择无效，请重新选择。');
+      || value.kind==='arrangement' && (value.projectIds.length!==1 || !/^[a-f0-9-]{36}$/i.test(value.taskId || ''))
+      || value.section==='monthly' && value.summaryMonth!==undefined && !/^\d{4}-(0[1-9]|1[0-2])$/.test(value.summaryMonth))throw new Error('投影选择无效，请重新选择。');
     return {kind:value.kind || 'report',type:value.type,projectIds:value.projectIds.slice(),period:value.period,line:value.line,section:value.section,
+      ...(value.section==='monthly'?{summaryMonth:value.summaryMonth || shiftMonth(global.PlanningWindows.periodStart(value.period).slice(0,7),-1)}:{}),
       ...(value.kind==='arrangement'?{taskId:value.taskId}:{})};
   }
   async function request(url,body,signal){
@@ -46,7 +51,7 @@
       global.ZHRichText.attach(task);await authorize(uid,selection,signal);
       return {target:selection,projects:projects,task:task,readAt:new Date().toLocaleTimeString('zh-CN',{hour12:false,timeZone:'Asia/Shanghai'})};
     }
-    var summaryMonth=global.PlanningWindows.periodStart(selection.period).slice(0,7);
+    var summaryMonth=months(selection).summary;
     var summaryRead=request('/api/monthly-summaries?month='+encodeURIComponent(summaryMonth),undefined,signal).then(function(rows){
       if(!Array.isArray(rows) || rows.some(function(row){return !row || row.month!==summaryMonth || !Array.isArray(row.items);}))throw new Error('月度汇总返回范围不完整，请重新读取。');
       return {rows:rows};
@@ -84,14 +89,14 @@
   }
   function rich(row,key,fallback){return global.ZHRichText.field(row,key,fallback || '');}
   function projectName(model,pid){var project=model.projects.find(function(p){return p.id===pid;});return project?project.name:pid;}
-  function table(labels,rows,source){return rows.length?'<div class="meeting-table-scroll"><table'+(source?' class="meeting-plan-table"><caption>'+source+'</caption>':'>')+'<thead><tr>'+labels.map(function(label){return '<th scope="col">'+esc(label)+'</th>';}).join('')+'</tr></thead><tbody>'+rows.map(function(row){return '<tr>'+row.map(function(cell,i){return '<td data-label="'+esc(labels[i])+'">'+cell+'</td>';}).join('')+'</tr>';}).join('')+'</tbody></table></div>':'<p class="meeting-empty">所选范围暂无记录。</p>';}
+  function table(labels,rows,source,items){return rows.length?'<div class="meeting-table-scroll"><table'+(source?' class="meeting-plan-table"><caption>'+source+'</caption>':'>')+(items && global.MonthlySummaries?global.MonthlySummaries.contentColumns(items):'')+'<thead><tr>'+labels.map(function(label){return '<th scope="col">'+esc(label)+'</th>';}).join('')+'</tr></thead><tbody>'+rows.map(function(row){return '<tr>'+row.map(function(cell,i){return '<td data-label="'+esc(labels[i])+'">'+cell+'</td>';}).join('')+'</tr>';}).join('')+'</tbody></table></div>':'<p class="meeting-empty">所选范围暂无记录。</p>';}
   function section(key,title,content,selection){return selection.section!=='all' && selection.section!==key?'':'<section class="meeting-section" data-projection-section="'+key+'"><h2>'+esc(title)+'</h2>'+content+'</section>';}
   function fileLink(id,name){return '<a href="/api/report-attachments/'+id+'" target="_blank" rel="noopener noreferrer">'+esc(name)+'</a>';}
   function html(model){
     var selection=model.target,groupNames=[...new Set(model.projects.map(function(project){return String(project.display_group || '').trim();}))];
     var title=selection.kind!=='arrangement' && groupNames.length===1 && groupNames[0]?groupNames[0]:model.projects.map(function(project){return project.name;}).join('、');
-    var planReports=model.reports || [],selectedStart=global.PlanningWindows.periodStart(selection.period);
-    if(!model.task && model.plans && model.plans.length){
+    var planReports=model.reports || [],selectedStart=global.PlanningWindows.periodStart(selection.period),selectedMonths=months(selection),monthly=selection.section==='monthly';
+    if(!monthly && !model.task && model.plans && model.plans.length){
       if(!global.MonthlyPlans)throw new Error('月计划展示组件读取失败，请重新打开投影。');
       var available=selectedPlans(model.plans,selection.projectIds),common={projectIds:selection.projectIds,line:selection.line,month:selectedStart.slice(0,7),
         includeUnsubmitted:selectedStart===global.PlanningWindows.periodStart(global.PlanningWindows.todayShanghai())};
@@ -107,8 +112,8 @@
       });
     }
     var pendingPlans=planReports.filter(function(report){return report._monthly_preview;}).length;
-    var summaryRows=global.MonthlySummaries?global.MonthlySummaries.select(model.monthlySummaries || [],{projectIds:selection.projectIds,month:selectedStart.slice(0,7),line:selection.line}):[];
-    var head='<header class="meeting-topic"><span class="meeting-eyebrow">'+esc(selection.kind==='arrangement'?'已保存工作安排':summaryRows.length?(model.reports.length?'周报与月度汇总':'月度完成情况'):pendingPlans?(model.reports.length?'周报与月计划':'已确认月计划'):'已提交周报')+'</span><h1>'+esc(title)+'</h1><p>'+(model.task?'保存时间：'+esc(model.task.updated_at?new Date(model.task.updated_at).toLocaleString('zh-CN',{hour12:false,timeZone:'Asia/Shanghai'}):'未记录'):esc(selection.period)+(selection.line?' · '+esc(selection.line==='__unassigned__'?'未归专业':selection.line):''))+' · 读取于 '+esc(model.readAt)+'</p></header>';
+    var summaryRows=global.MonthlySummaries?global.MonthlySummaries.select(model.monthlySummaries || [],{projectIds:selection.projectIds,month:selectedMonths.summary,line:selection.line}):[];
+    var head='<header class="meeting-topic"><span class="meeting-eyebrow">'+esc(selection.kind==='arrangement'?'已保存工作安排':monthly?'月度会议':summaryRows.length?(model.reports.length?'周报与月度汇总':'月度完成情况'):pendingPlans?(model.reports.length?'周报与月计划':'已确认月计划'):'已提交周报')+'</span><h1>'+esc(title)+'</h1><p>'+(model.task?'保存时间：'+esc(model.task.updated_at?new Date(model.task.updated_at).toLocaleString('zh-CN',{hour12:false,timeZone:'Asia/Shanghai'}):'未记录'):esc(monthly?monthLabel(selectedMonths.summary)+'总结 · '+monthLabel(selectedMonths.plan)+'计划':selection.period)+(selection.line?' · '+esc(selection.line==='__unassigned__'?'未归专业':selection.line):''))+'</p></header>';
     if(model.task){var task=model.task;return head+'<section class="meeting-section meeting-arrangement"><h2>'+esc(task.title || '领导工作安排')+'</h2><div class="meeting-arrangement-body">'+rich(task,'what')+'</div><dl><dt>提出领导</dt><dd>'+esc(task.proposer_name || '未记录')+'</dd><dt>责任人</dt><dd>'+esc(task.owner_name || '未记录')+'</dd><dt>完成时间</dt><dd>'+esc(task.due || '未设置')+'</dd></dl><p class="meeting-saved">已保存到系统，按原待办流程办理</p></section>';}
     var window=global.PlanningWindows.windowFor(global.PlanningWindows.periodStart(selection.period),'month'),nodes=[];
     model.projects.forEach(function(project){global.PlanningWindows.scopedMilestones(model.nodes,{projectId:project.id,commercial:selection.type==='com',bizLine:selection.line,discipline:selection.line,allScopes:!selection.line,keyOnly:false,includeUnassigned:!selection.line || selection.line==='__unassigned__',window:window}).forEach(function(node){
@@ -129,10 +134,11 @@
       var planGroups=[];
       (Array.isArray(biz.items)?biz.items:[]).forEach(function(row){
         var source=sourceFor(row)+(report._monthly_preview?'<small>已确认月计划 · 本周尚未提交</small>':''),group=planGroups[planGroups.length-1];
-        if(!group || group.source!==source){group={source:source,rows:[]};planGroups.push(group);}
-        group.rows.push([rich(row,'mod'),rich(row,'name'),esc(row.due || '未设置'),rich(row,'prog','未填写')+(row.blocker?'<p>遇到卡点：'+rich(row,'blocker')+'</p>':'')]);
+        if(!group || group.source!==source){group={source:source,rows:[],items:[]};planGroups.push(group);}
+        group.items.push({mod:row.mod,name:row.name,due:row.due,progress:row.prog});
+        group.rows.push([rich(row,'mod'),rich(row,'name'),esc(row.due || '未设置'),rich(row,'prog','未填写')+(row.blocker?'<p>遇到卡点：'+rich(row,'blocker')+'</p>':'')+(global.MonthlySummaries?global.MonthlySummaries.attentionHtml(row,{referenceDate:selectedStart}):'')]);
       });
-      planGroups.forEach(function(group){plans.push(table(['模块','事项','完成时间','当周进展'],group.rows,group.source));});
+      planGroups.forEach(function(group){plans.push(table(['模块','事项','完成时间','当周进展'],group.rows,group.source,group.items));});
       (Array.isArray(report.coord_items)?report.coord_items:[]).forEach(function(row){coords.push([sourceFor(row),esc(row.who || '未指定'),rich(row,'what'),esc(row.by || '未设置')]);});
       if((!Array.isArray(report.coord_items) || !report.coord_items.length) && report.coord && report.coord!=='无')coords.push([source,'未指定',rich(report,'coord'),'未设置']);
       (Array.isArray(biz.handover)?biz.handover:[]).forEach(function(row){coords.push([sourceFor(row),'移交给 '+esc(row.to || '未指定'),rich(row,'what'),esc(row.due || '未设置')]);});
@@ -143,22 +149,38 @@
       if(extra)legacy.push('<details class="meeting-legacy"><summary>既有补充记录 · '+source+'</summary>'+extra+'</details>');
     });
     var media=model.drawings.filter(function(d){return String(d.kind || '').startsWith('项目总图');}).map(function(d){
-      var url=/^https?:\/\//i.test(d.url || '')?d.url:/^drawings\/[A-Za-z0-9_./-]+$/.test(d.path || '') && !d.path.split('/').includes('..')?'/api/files/'+d.path:'';
+      var crop=/^\/api\/scheme-previews\/([A-Za-z0-9_-][A-Za-z0-9_.-]*)\/[a-f0-9]{64}\.webp$/.exec(d.url || '');
+      var url=crop?(crop[1]===String(d.project_id)?d.url:''):/^https?:\/\//i.test(d.url || '')?d.url:/^drawings\/[A-Za-z0-9_./-]+$/.test(d.path || '') && !d.path.split('/').includes('..')?'/api/files/'+d.path:'';
       if(!url)return '';
       return '<figure><figcaption>'+esc(projectName(model,d.project_id)+' · '+(d.name || '项目总图'))+'</figcaption>'
         +(/\.(?:png|jpe?g|gif|webp|avif)(?:[?#]|$)/i.test(url)?'<img src="'+esc(url)+'" alt="'+esc(d.name || '项目总图')+'">':'<a target="_blank" rel="noopener noreferrer" href="'+esc(url)+'">打开总图资料</a>')+'</figure>';
     }).join('')+model.attachments.map(function(file){if(!/^[a-f0-9-]{36}$/i.test(file.id))return '';return '<figure><figcaption>'+fileLink(file.id,file.name || '报告附件')+'</figcaption>'+(file.inline && /^image\//.test(file.mime || '')?'<img src="/api/report-attachments/'+file.id+'" alt="'+esc(file.name)+'" loading="lazy">':'')+'</figure>';}).join('');
     var summaryContent=model.monthlySummaryError?'<p class="meeting-data-issue" role="alert">月度汇总读取失败：'+esc(model.monthlySummaryError)+'</p>'
-      : global.MonthlySummaries?global.MonthlySummaries.html(model.monthlySummaries || [],{projectIds:selection.projectIds,projects:model.projects,month:selectedStart.slice(0,7),line:selection.line,projection:true})
+      : global.MonthlySummaries?global.MonthlySummaries.html(model.monthlySummaries || [],{projectIds:selection.projectIds,projects:model.projects,month:selectedMonths.summary,line:selection.line,projection:true,referenceDate:selectedMonths.plan+'-01'})
       : (model.monthlySummaries || []).length?'<p class="meeting-data-issue" role="alert">月度汇总组件读取失败，请重新打开投影。</p>':'';
+    if(monthly){
+      var planIds=new Set(),confirmed=selectedPlans(model.plans || [],selection.projectIds).filter(function(plan){if(plan.id && planIds.has(plan.id))return false;if(plan.id)planIds.add(plan.id);return String(plan.plan_month || '').slice(0,7)===selectedMonths.plan && (!selection.line || plan.line===selection.line);}),monthlyPlans=[];
+      confirmed.forEach(function(plan){
+        var names=plan.report_scope_id?plan.scope_project_ids.map(function(pid){return projectName(model,pid);}).join('、'):projectName(model,plan.project_id);
+        var items=Array.isArray(plan.items)?plan.items:[],groups=[];
+        items.forEach(function(item,index){
+          var source=esc(item.project_id?projectName(model,item.project_id):names)+'<small>'+esc(plan.owner_name || plan.confirmed_name || '未记录提报人')+' · '+esc(plan.line || '综合')+' · 已确认</small>',group=groups[groups.length-1];
+          if(!group || group.source!==source){group={source:source,rows:[],items:[]};groups.push(group);}
+          group.items.push({mod:item.mod,name:item.name,due:item.due,progress:item.prog});
+          group.rows.push([rich(plan,'items.'+index+'.mod',item.mod),rich(plan,'items.'+index+'.name',item.name),esc(item.due || '未设置'),(item.prog?rich(plan,'items.'+index+'.prog'):'<span title="尚未填报进展" aria-label="尚未填报进展">—</span>')+(global.MonthlySummaries?global.MonthlySummaries.attentionHtml(item,{referenceDate:selectedMonths.plan+'-01'}):'')]);
+        });
+        groups.forEach(function(group){monthlyPlans.push(table(['模块','事项','完成时间','进展'],group.rows,group.source,group.items));});
+      });
+      return head+'<div class="meeting-month-grid"><section class="meeting-section" data-projection-section="monthly-summary"><h2>'+esc(monthLabel(selectedMonths.summary))+'工作总结</h2>'+summaryContent+'</section><section class="meeting-section" data-projection-section="monthly-plans"><h2>'+esc(monthLabel(selectedMonths.plan))+'工作计划</h2>'+(monthlyPlans.join('') || '<p class="meeting-empty">所选月份和专业暂无已确认月计划。</p>')+'</section></div>';
+    }
     var hasSummaries=model.monthlySummaryError || summaryRows.length;
     var body=(nodes.length || selection.section!=='all'?section('nodes','一、核心节点',table(['实际项目／专业','节点','原计划完成日','预计完成日'],nodes),selection):'')
       +(plans.length || selection.section!=='all'?section('plans','二、当月计划',plans.join('') || '<p class="meeting-empty">所选范围暂无记录。</p>',selection):'')
-      +(hasSummaries || selection.section==='summaries'?section('summaries','本月计划完成情况（月度汇总）',summaryContent+'<p class="meeting-basis">独立月度记录，不计作周报提交，也不代表完成审核通过。</p>',selection):'')
+      +(hasSummaries || selection.section==='summaries'?section('summaries','本月计划完成情况（月度汇总）',summaryContent,selection):'')
       +(coords.length || selection.section!=='all'?section('coord','三、需要协调',table(['来源','协调对象','事项','最晚时间'],coords),selection):'')
       +(followups.length || legacy.length || selection.section!=='all'?section('followups','四、待办反馈',(followups.length || !legacy.length?table(['来源','类别','事项','完成时间','反馈'],followups):'')+legacy.join(''),selection):'')
       +(media || selection.section!=='all'?section('media','项目总图与附件',media || '<p class="meeting-empty">所选范围暂无总图或报告附件。</p>',selection):'');
-    return head+'<p class="meeting-basis">'+model.reports.length+' 份所选周期已提交报告'+(pendingPlans?'，另有 '+pendingPlans+' 份已确认月计划待填本周进展':'')+'；基准节点为当前保留数据按 '+esc(window.start+' 至 '+window.end)+' 筛选。</p>'+(issues.length?'<p class="meeting-data-issue" role="alert">'+esc(issues[0])+'</p>':'')+(body || '<p class="meeting-empty">所选范围暂无可展示内容。</p>');
+    return head+(issues.length?'<p class="meeting-data-issue" role="alert">'+esc(issues[0])+'</p>':'')+(body || '<p class="meeting-empty">所选范围暂无可展示内容。</p>');
   }
   global.MeetingView={sections:sections,target:target,authorize:authorize,read:read,html:html,esc:esc};
 })(window);

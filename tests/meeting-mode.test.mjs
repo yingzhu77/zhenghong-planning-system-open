@@ -11,9 +11,77 @@ import {executeDatabase} from '../server/database.mjs';
 import {webAssets} from '../server/web-assets.mjs';
 
 const web=new URL('../web/',import.meta.url),artifacts=process.env.MEETING_ARTIFACT_DIR || path.join(os.tmpdir(),'planning-meeting');
+
+function controllerFixture(){
+  let mounted=true,serial=0,timerId=0,html='';const intervals=new Map(),timeouts=new Map(),listeners=new Map(),controls=new Map(),notices=[];
+  const host={replaceChildren(){html='';},querySelector(selector){
+    if(selector==='[data-meeting-month]' && !html.includes('data-meeting-month'))return null;
+    if(!controls.has(selector))controls.set(selector,{});return controls.get(selector);
+  },querySelectorAll(){return [];}};
+  Object.defineProperty(host,'innerHTML',{get:()=>html,set:value=>{html=value;}});
+  const context={allowed:true,uid:'anonymous-ops',identity:'anonymous-ops|1',defaultSection:'all',target:{kind:'report',type:'res',projectIds:['p1'],period:'2026-11-02',line:'',section:'all'},projects:[{id:'p1',project_type:'res'}],projectProfessions:[{project_id:'p1',lines:['工程']}]};
+  const env={location:{origin:'https://meeting.example.test'},document:{getElementById:()=>mounted?host:null},
+    crypto:{randomUUID:()=>`00000000-0000-4000-8000-${String(++serial).padStart(12,'0')}`},
+    setInterval:fn=>{const id=++timerId;intervals.set(id,fn);return id;},clearInterval:id=>intervals.delete(id),
+    setTimeout:fn=>{const id=++timerId;timeouts.set(id,fn);return id;},clearTimeout:id=>timeouts.delete(id),
+    addEventListener:(name,fn)=>{if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name).add(fn);},removeEventListener:(name,fn)=>listeners.get(name)?.delete(fn),
+    MeetingView:{sections:{all:'完整周报',monthly:'月度会议（总结＋计划）',plans:'当月计划'},esc:value=>String(value??'').replace(/&/g,'&amp;').replace(/</g,'&lt;'),target:value=>{
+      const next=JSON.parse(JSON.stringify(value));
+      if(next.section==='monthly'){
+        next.summaryMonth=next.summaryMonth || '2026-10';
+        if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(next.summaryMonth))throw Error('invalid month');
+      }else delete next.summaryMonth;
+      return next;
+    }}
+  };env.window=env;vm.runInNewContext(readFileSync(new URL('meeting-controller.js',web),'utf8'),env);
+  env.MeetingController.configure({getContext:()=>context,displayUrl:'/meeting-display.html',notify:(...args)=>notices.push(args)});
+  function child(){return {closed:false,messages:[],focus(){},close(){this.closed=true;},postMessage(packet,origin){this.messages.push({packet:JSON.parse(JSON.stringify(packet)),origin});}};}
+  function emit(child,type,extra={}){for(const listener of listeners.get('message') || [])listener({origin:env.location.origin,source:child,data:{app:'planning-meeting-v1',id:String(child.location).split('#')[1],type,...extra}});}
+  return {api:env.MeetingController,context,child,emit,intervals,timeouts,listeners,notices,host,controls,get html(){return html;},mount(value){mounted=value;},poll(){for(const fn of [...intervals.values()])fn();},nextTask(){const jobs=[...timeouts.values()];timeouts.clear();jobs.forEach(fn=>fn());}};
+}
+
+test('closing the projection clears its toolbar and session, removes timers/listeners and permits a fresh window',()=>{
+  const f=controllerFixture(),first=f.child();f.api.start(first);f.emit(first,'ready');
+  assert.match(f.html,/会议投影控制台/);assert.equal(f.intervals.size,1);assert.equal(f.listeners.get('message').size,1);
+  const previous=String(first.location);first.closed=true;f.emit(first,'closed');
+  assert.equal(f.html,'');assert.equal(f.api.active(),false);assert.equal(f.intervals.size,0);assert.equal(f.listeners.get('message').size,0);
+  assert.equal(f.api.savedAction({meeting_kind:'requirement'}),'');
+  const second=f.child();f.api.start(second);assert.notEqual(String(second.location),previous);
+  f.emit(first,'failed',{message:'stale failure'});assert.doesNotMatch(f.html,/stale failure/);
+  f.controls.get('[data-meeting-stop]').onclick();assert.equal(second.closed,true);assert.equal(f.html,'');assert.equal(f.intervals.size,0);
+});
+
+test('beforeunload from a child reload does not end the projection session',()=>{
+  const f=controllerFixture(),child=f.child();f.api.start(child);f.emit(child,'ready');
+  const session=String(child.location),firstShows=child.messages.filter(row=>row.packet.type==='show').length;
+  f.emit(child,'closed');f.nextTask();assert.equal(f.api.active(),true);assert.equal(f.intervals.size,1);assert.equal(String(child.location),session);
+  f.emit(child,'ready');assert.equal(child.messages.filter(row=>row.packet.type==='show').length,firstShows+1);
+  assert.match(f.html,/会议投影控制台/);f.api.stop(true);
+});
+
+test('closing while the admin is on another page still clears state before returning to the overview',()=>{
+  const f=controllerFixture(),child=f.child();f.api.start(child);
+  const target=f.context.target;f.mount(false);f.context.target=null;f.api.refresh();assert.equal(f.api.active(),true);
+  child.closed=true;f.poll();assert.equal(f.api.active(),false);assert.equal(f.intervals.size,0);assert.equal(f.listeners.get('message').size,0);
+  f.mount(true);f.context.target=target;f.api.refresh();assert.equal(f.html,'');
+});
+
+test('monthly controls keep the explicitly selected summary month through profession changes and refreshes',()=>{
+  const f=controllerFixture();f.context.defaultSection='monthly';const child=f.child();f.api.start(child);f.emit(child,'ready');
+  assert.match(f.html,/总结月份/);assert.doesNotMatch(f.html,/meeting-control-preview|meeting-control-hint/);
+  const shows=()=>child.messages.filter(row=>row.packet.type==='show').map(row=>row.packet);
+  assert.equal(shows().at(-1).target.summaryMonth,'2026-10');
+  f.controls.get('[data-meeting-month]').onchange({target:{value:'2026-09'}});assert.equal(shows().at(-1).target.summaryMonth,'2026-09');
+  f.emit(child,'displayed',{sequence:shows().at(-1).sequence,title:'匿名项目'});f.emit(child,'profession',{line:'工程'});
+  assert.equal(shows().at(-1).target.summaryMonth,'2026-09');assert.equal(shows().at(-1).target.line,'工程');
+  f.context.target.period='2026-12-07';f.api.refresh();assert.equal(shows().at(-1).target.summaryMonth,'2026-09');
+  f.emit(child,'closed');f.nextTask();f.emit(child,'ready');assert.equal(shows().at(-1).target.summaryMonth,'2026-09');
+  f.controls.get('[data-meeting-month]').onchange({target:{value:'bad-month'}});assert.equal(f.notices.length,1);assert.equal(shows().at(-1).target.summaryMonth,'2026-09');
+  f.api.stop(true);
+});
 test('projection selectors reject invalid payloads and display escapes source text without exposing editable fields',()=>{
   const context={console};context.window=context;vm.createContext(context);
-  for(const file of ['planning-windows.js','rich-text.js','meeting-view.js'])vm.runInContext(readFileSync(new URL(file,web),'utf8'),context);
+  for(const file of ['planning-windows.js','rich-text.js','monthly-summaries.js','meeting-view.js'])vm.runInContext(readFileSync(new URL(file,web),'utf8'),context);
   const api=context.MeetingView,valid={type:'res',projectIds:['res-a'],period:'2026-10-26',line:'',section:'plans'};
   for(const selection of [{...valid,projectIds:[]},{...valid,projectIds:['res-a','res-a']},{...valid,period:'invalid'},{...valid,section:'constructor'},
     {...valid,kind:'arrangement',taskId:'wrong'},{...valid,projectIds:['res-a','res-b'],kind:'arrangement',taskId:'dce39b3f-7145-4b6f-983b-055c0492d6b2'}])assert.throws(()=>api.target(selection));
@@ -28,7 +96,7 @@ test('projection selectors reject invalid payloads and display escapes source te
 
 test('monthly projection keeps narrative columns left aligned, compact long rows and once-per-group source captions across display sizes',async t=>{
   const context={console};context.window=context;vm.createContext(context);
-  for(const file of ['planning-windows.js','rich-text.js','meeting-view.js'])vm.runInContext(readFileSync(new URL(file,web),'utf8'),context);
+  for(const file of ['planning-windows.js','rich-text.js','monthly-summaries.js','meeting-view.js'])vm.runInContext(readFileSync(new URL(file,web),'utf8'),context);
   const items=Array.from({length:12},(_,i)=>({mod:i%2?'移交事项':'砌筑工程',name:i%2?'屋面移交：示例一号楼与二号楼分批交接，确认施工界面和设备进场条件':'地下室设备房移交：生活水泵房、消防水泵房依计划完成并核对验收资料',due:'2026-10-31',prog:i%3?'按计划推进，已完成施工界面核对，待联合验收':'本周已完成现场核查，剩余事项按原计划推进',...(i===2?{blocker:'等待验收资料'}:{})}));
   const report={project_id:'com-a',line:'土建工程',author_name:'示例填报人甲',biz:{items},rich_text:{v:1,fields:{'biz.items.0.prog':{ops:[{insert:items[0].prog,attributes:{bold:true,color:'#d81e06'}}]}}}};
   context.ZHRichText.attach(report);
@@ -45,9 +113,9 @@ test('monthly projection keeps narrative columns left aligned, compact long rows
     await page.setViewportSize(viewport);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),true);
     if(viewport.width>700){
-      assert.equal(await table.locator('th,td').evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign===(cell.tagName==='TD' && ['事项','当周进展'].includes(cell.dataset.label)?'left':'center') && getComputedStyle(cell).verticalAlign==='middle')),true);
+      assert.equal(await table.locator('th,td').evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign==='left' && getComputedStyle(cell).verticalAlign==='top')),true);
       const bounds=await table.locator('th').evaluateAll(cells=>cells.map(cell=>cell.getBoundingClientRect().width));
-      assert.ok(bounds[1]>bounds[0]*3 && bounds[3]>bounds[2]);
+      assert.ok(bounds[1]>bounds[0] && bounds[3]>bounds[2]);
       const head=await table.locator('thead').boundingBox();assert.ok(head.y<250,'compact heading leaves space for the report');
       const rows=await table.locator('tbody tr').evaluateAll(rows=>rows.slice(0,6).map(row=>row.getBoundingClientRect().bottom));assert.ok(rows[5]<viewport.height,'six long rows are visible without scrolling');
     }else{
@@ -69,6 +137,16 @@ test('standalone projection shell resolves every script and stylesheet to review
   for(const match of html.matchAll(/(?:src|href)="([^"]+)"/g)){assert.ok(match[1].startsWith('/assets/'));assert.ok(assets.responses.has(match[1]));}
   assert.doesNotMatch(html,/app\.js|login-boot\.js|contenteditable|password/i);
 });
+test('projection media accepts only the registered project excerpt and never falls back to a foreign excerpt source',()=>{
+  const context={console};context.window=context;vm.createContext(context);
+  for(const file of ['planning-windows.js','rich-text.js','meeting-view.js'])vm.runInContext(readFileSync(new URL(file,web),'utf8'),context);
+  const url='/api/scheme-previews/p1/'+'a'.repeat(64)+'.webp';
+  const model={target:context.MeetingView.target({type:'com',projectIds:['p1'],period:'2026-11-02',line:'',section:'media'}),projects:[{id:'p1',name:'匿名项目'}],reports:[],nodes:[],attachments:[],drawings:[
+    {project_id:'p1',kind:'项目总图',name:'总图关键区域.webp',url,path:''},
+    {project_id:'p1',kind:'项目总图',name:'跨项目不显示',url:url.replace('/p1/','/p2/'),path:'drawings/p1/original.pdf'}
+  ]};
+  const html=context.MeetingView.html(model);assert.ok(html.includes('src="'+url+'"'));assert.doesNotMatch(html,/original\.pdf|跨项目不显示|href="[^"]*scheme-previews/);
+});
 async function fixture(t){
   const runtime=await startPlanningAiLocal({mode:'local-acceptance'});t.after(()=>runtime.close());
   const admin=testPool(runtime.db,null),root='ai-local-acceptance-user',owner='meeting-owner',leader='meeting-leader';
@@ -82,7 +160,7 @@ async function fixture(t){
   await admin.query("UPDATE public.profiles SET role='ops' WHERE user_id=$1",[root]);
   const browser=await chromium.launch({channel:'msedge',headless:true});t.after(()=>browser.close());
   const browserContext=await browser.newContext({viewport:{width:1560,height:1050}}),page=await browserContext.newPage(),errors=[],writes=[];
-  function observe(p){p.on('pageerror',e=>errors.push(e.message));p.on('request',request=>{
+  function observe(p){p.on('pageerror',e=>errors.push(e.stack || e.message));p.on('request',request=>{
     if(!request.url().startsWith(runtime.url+'/api/'))return;
     const body=request.postDataJSON();
     if(request.url().endsWith('/api/db') && body?.operation && body.operation!=='select')writes.push({url:request.url(),body});
@@ -99,6 +177,7 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
   const reportsBefore=(await admin.query('SELECT jsonb_agg(to_jsonb(r) ORDER BY id) AS snapshot FROM public.reports r')).rows[0].snapshot;
   const tasksBefore=(await admin.query('SELECT count(*)::int n FROM public.reporter_tasks')).rows[0].n;
   const opening=page.waitForEvent('popup');await page.getByRole('button',{name:'开启会议投影',exact:true}).click();const display=await opening;
+  await page.locator('[data-meeting-section]').selectOption('all');
   await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
   await expect(page.locator('.meeting-control')).toContainText('跟随中');
   await expect(display.locator('input,textarea,select:not(#meeting-profession),[contenteditable]')).toHaveCount(0);
@@ -163,6 +242,7 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
 test('commercial and historical selection follow, failed reads retry and delayed responses cannot replace a newer screen',async t=>{
   const f=await fixture(t),{page}=f;
   const popup=page.waitForEvent('popup');await page.getByRole('button',{name:'开启会议投影',exact:true}).click();const display=await popup;
+  await page.locator('[data-meeting-section]').selectOption('all');
   await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
   const unchanged=await display.locator('#meeting-screen').innerHTML();
   await display.evaluate(()=>window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:window,data:{app:'planning-meeting-v1',id:location.hash.slice(1),type:'end'}})));
@@ -222,11 +302,16 @@ test('blocked popups and closed windows preserve the original arrangement draft 
   await expect(draft.locator('.ql-editor')).toContainText('弹窗受限时必须保留的草稿');
   await page.evaluate(()=>window.open=window.originalMeetingOpen);
   const popup=page.waitForEvent('popup');await page.getByRole('button',{name:'开启会议投影',exact:true}).click();const display=await popup;
-  await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');await display.close();
-  await expect(page.locator('.meeting-control')).toContainText('投影窗口已关闭');
+  await page.locator('[data-meeting-section]').selectOption('all');
+  await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await page.evaluate(()=>App.view('projectPlanStats'));await expect(page.locator('.meeting-control')).toHaveCount(0);
+  await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await display.close();await page.evaluate(()=>App.view('pres'));await expect(page.locator('#overviewFilter')).toBeVisible();
+  await expect(page.locator('.meeting-control')).toHaveCount(0);assert.equal(await page.evaluate(()=>MeetingController.active()),false);
   const again=page.waitForEvent('popup');await page.getByRole('button',{name:'开启会议投影',exact:true}).click();const second=await again;
+  await page.locator('[data-meeting-section]').selectOption('all');
   await expect(second.locator('#meeting-screen')).toContainText('甲项目已提交事项');
   await expect(draft.locator('.ql-editor')).toContainText('弹窗受限时必须保留的草稿');
-  await page.locator('[data-meeting-stop]').click();await expect(second.locator('#meeting-screen')).toContainText('会议投影已结束');
+  await page.locator('[data-meeting-stop]').click();await expect.poll(()=>second.isClosed()).toBe(true);await expect(page.locator('.meeting-control')).toHaveCount(0);
   assert.deepEqual(f.writes,[]);assert.deepEqual(f.errors,[]);
 });

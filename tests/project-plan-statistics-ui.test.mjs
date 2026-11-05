@@ -48,7 +48,7 @@ async function resolveNext(h, value = result()) {
 
 test('one server-filtered result defines cards, comparison, rows and export; rendering never issues requests', async () => {
   const h = fixture();
-  assert.match(h.ui.pageHtml(), /已授权住宅与商业项目的基准节点/); assert.doesNotMatch(h.ui.pageHtml(), /统计来源|project-statistics-switch/); assert.equal(h.calls.length, 0);
+  assert.match(h.ui.pageHtml(), /项目计划统计/); assert.doesNotMatch(h.ui.pageHtml(), /已授权住宅与商业项目的基准节点|统计来源|project-statistics-switch/); assert.equal(h.calls.length, 0);
   const first = h.ui.load(), concurrent = h.ui.load();
   assert.equal(h.calls.length, 1); assert.equal(h.calls[0].path, '/api/project-plan-statistics');
   assert.equal(h.calls[0].payload.kind, 'all'); assert.equal(h.calls[0].payload.date_mode, 'all');
@@ -78,7 +78,7 @@ test('filter changes discard stale replies and block exporting a previous query'
 
 test('unified project groups include residential and commercial projects while legacy kind controls cannot narrow requests', async () => {
   const h = fixture(), mixed = mixedResult(); await resolveNext(h, mixed);
-  assert.match(h.ui.pageHtml(), /已授权住宅与商业项目的基准节点/); assert.match(h.ui.pageHtml(), /默认纳入全部原计划日期/);
+  assert.doesNotMatch(h.ui.pageHtml(), /已授权住宅与商业项目的基准节点|默认纳入全部原计划日期/); assert.match(h.ui.pageHtml(), /全部计划日期/);
   assert.match(h.ui.pageHtml(), /<th>预计偏差<\/th>/); assert.match(h.ui.pageHtml(), /节点范围|全部层级/);
   assert.match(h.ui.pageHtml(), /专业 \/ 模块/); assert.match(h.ui.pageHtml(), /商业展示组/);
   assert.doesNotMatch(h.ui.pageHtml(), /type="month"|<th>反馈<\/th>|确认月份|统计来源|project-statistics-switch/);

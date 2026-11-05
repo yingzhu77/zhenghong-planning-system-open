@@ -6,6 +6,7 @@ import { BUSINESS_MODULES, businessModulesForProject, resolveWritableBusinessLin
 import { resolveCompletionSource, reportCoordinationSourceItem } from './completion-sources.mjs';
 import { resolveReportScope } from './report-scopes.mjs';
 import { resolveWritableResidentialLine } from './report-lines.mjs';
+import { preserveSchemeMaster, sanitizeSchemeRows } from './scheme-protection.mjs';
 
 const fields = (text) => text.split(/\s+/).filter(Boolean);
 export const TABLES = Object.freeze({
@@ -100,7 +101,15 @@ export function buildQuery(input) {
       const keys = conflict.split(',');
       const updates = cols.filter((c) => !keys.includes(c) && !['id', 'created_at', 'submitted_at', 'history', 'locked', 'author_id'].includes(c));
       if (!updates.length) throw new HttpError(400, '没有可更新的内容');
-      text += ' ON CONFLICT (' + keys.map((c) => quote(c)).join(',') + ') DO UPDATE SET ' + updates.map((c) => quote(c) + '=EXCLUDED.' + quote(c)).join(',');
+      text += ' ON CONFLICT (' + keys.map((c) => quote(c)).join(',') + ') DO UPDATE SET ' + updates.map((c) => {
+        if (table === 'project_master' && c === 'fields') {
+          // A controlled import may create the master after the API's initial
+          // lookup. Preserve its full index atomically at the conflict itself.
+          return '"fields"=CASE WHEN project_master.fields->\'scheme_catalog\' IS NOT NULL AND project_master.fields->\'scheme_catalog\'<>\'null\'::jsonb'
+            + ' THEN EXCLUDED.fields || jsonb_build_object(\'scheme_catalog\',project_master.fields->\'scheme_catalog\') ELSE EXCLUDED.fields END';
+        }
+        return quote(c) + '=EXCLUDED.' + quote(c);
+      }).join(',');
     }
     text += ' RETURNING ' + columnList(table, input.columns);
   }
@@ -559,16 +568,21 @@ export async function prepareMutation(client, user, request) {
   return { ...request, values: Array.isArray(request.values) ? rows : rows[0] };
 }
 
-export async function executeDatabase(pool, user, request) {
+export async function executeDatabase(pool, user, request, options = {}) {
   assertTable(request.table);
   // Validate the external query structure before mutation-specific inspection.
   buildQuery(request);
   return withIdentity(pool, user.id, async (client) => {
     const operation = request.operation || 'select';
-    const input = operation === 'select' ? request : await prepareMutation(client, user, { ...request, operation });
-    const result = await client.query(buildQuery(input));
+    const prepared = operation === 'select' ? request : await prepareMutation(client, user, { ...request, operation });
+    const input = await preserveSchemeMaster(client, prepared, buildQuery);
+    const schemeTable = ['project_master', 'project_drawings'].includes(input.table);
+    const result = await client.query(buildQuery(schemeTable ? { ...input, columns: '*' } : input));
     if (['update', 'delete'].includes(operation) && !result.rows.length) throw new HttpError(403, '记录不存在或无权修改');
-    return result.rows;
+    const rows = await sanitizeSchemeRows(client, input.table, result.rows, options);
+    if (!schemeTable || request.columns == null || request.columns === '*') return rows;
+    const columns = Array.isArray(request.columns) ? request.columns : request.columns.split(',').map(column => column.trim());
+    return rows.map(row => Object.fromEntries(columns.map(column => [column, row[column]])));
   });
 }
 

@@ -27,7 +27,8 @@ function configuration(S) {
       + (rows.length ? rows.map(r => r.items.map((item, i) => '<tr><td class="overview-cell-seq">' + (i + 1) + '</td><td>' + esc(item) + '</td></tr>').join('')).join('') : '<tr><td class="overview-cell-empty" colspan="2">暂无</td></tr>') + '</tbody></table></div>';
   }
   return {S, esc, disciplines: ['工程', '设计'], currentPeriod: () => '2026-10-19',
-    residentialGroups: (pid, rows) => ({'工程': rows}), nodeHtml: rows => table(rows, 'nodes'), planHtml: rows => table(rows, 'plans'),
+    residentialGroups: (pid, rows) => ({'工程': rows}), nodeHtml: rows => table(rows, 'nodes'),
+    planHtml: rows => '<div class="overview-table-scroll"><table class="overview-data-table" data-section="plans"><colgroup><col class="overview-col-source"><col class="overview-col-seq"><col class="overview-col-content"></colgroup><thead><tr><th>实际子项目／分期</th><th>序号</th><th>事项</th></tr></thead><tbody>'+rows.flatMap(r=>r.items.map(item=>({r,item}))).map(({r,item},i)=>'<tr data-source-project-id="'+esc(r.project_id)+'"><td><span>'+esc(S.projects.find(p=>p.id===r.project_id)?.name)+'</span></td><td class="overview-cell-seq">'+(i+1)+'</td><td>'+esc(item)+'</td></tr>').join('')+'</tbody></table></div>',
     coordHtml: rows => table(rows, 'coord'), otherHtml: rows => table(rows, 'other'),
     notesHtml: () => '', legacyHtml: () => '', unassignedHtml: () => '',
     reportHistoryButton: row => '<button data-history-id="' + esc(row.id) + '">版本记录</button>',
@@ -121,7 +122,16 @@ test('对照图片仅来自当前有权项目的总图及本期报告引用，�
   assert.equal(h.api.pictures(h.S.projects, h.S.reports).length, 1, '不把下载附件强行内嵌');
   h.S.drawings = [];
   const empty = h.api.layout({key: 'empty', projects: h.S.projects, reports: [], content: '<p>计划</p>', sidebar: '<p>原入口</p>'});
-  assert.match(empty, /data-compare-toggle[^>]+disabled/); assert.match(empty, /其他文件沿原入口打开/);
+  assert.match(empty, /data-compare-toggle[^>]+disabled/); assert.match(empty, /<p>原入口<\/p>/); assert.doesNotMatch(empty, /其他文件沿原入口打开/);
+});
+
+test('方案关键图在总览对照中保持同项目边界并只标注派生图片',()=>{
+  const h=harness(),url='/api/scheme-previews/phase-1/'+ 'a'.repeat(64)+'.webp';
+  h.S.drawings=[{id:4,project_id:'phase-1',kind:'项目总图',name:'方案关键图.webp',url,path:''},
+    {id:5,project_id:'phase-2',kind:'项目总图',name:'跨项目关键图',url,path:'drawings/phase-2/original.pdf'}];
+  const pictures=h.api.pictures(h.S.projects,[]);assert.equal(pictures.length,1);assert.equal(pictures[0].url,url);
+  const html=h.api.layout({key:'excerpt',projects:h.S.projects,reports:[],content:'<p>原计划</p>',sidebar:''});
+  assert.match(html,/查看关键图/);assert.match(html,/保存关键图/);assert.doesNotMatch(html,/original\.pdf|跨项目关键图/);
 });
 
 test('图文对照在桌面同屏独立滚动、缩放拖动、切换来源，窄屏可切换图文且关闭不丢计划', async () => {
@@ -222,7 +232,7 @@ test('实际App联合渲染：两分期汇总、富文本会议详情保持，�
     for (const name of ['styles.css', 'planning-ui.css', 'report3-layout.css', 'admin-plan-overview.css', 'completion-review.css', 'report-attachments.css', 'reporter-tasks.css', 'vendor/quill/quill.core.css']) {
       await page.addStyleTag({content: readFileSync(new URL(name, web), 'utf8')});
     }
-    for (const name of ['vendor/quill/quill.js', 'rich-text.js', 'rich-editor.js', 'planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'monthly-plans.js', 'reporter-tasks.js', 'completion-review.js', 'report-attachments.js', 'overview-meetings.js', 'admin-plan-overview.js']) {
+    for (const name of ['vendor/quill/quill.js', 'rich-text.js', 'rich-editor.js', 'planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'monthly-plans.js', 'monthly-summaries.js', 'reporter-tasks.js', 'completion-review.js', 'report-attachments.js', 'overview-meetings.js', 'admin-plan-overview.js']) {
       await page.addScriptTag({content: readFileSync(new URL(name, web), 'utf8')});
     }
     await page.addScriptTag({content: app});

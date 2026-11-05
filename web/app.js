@@ -1073,7 +1073,7 @@
         period:window.PlanningWindows.periodStart(overviewPeriod()),line:commercial?S.overviewUI.line || '':S.overviewUI.discipline || '',section:'all'};
     }
     var readable=allowed?detailProjects():[];
-    return {allowed:allowed,uid:S.uid,identity:JSON.stringify([S.uid,dataEpoch]),target:target,projects:readable,
+    return {allowed:allowed,uid:S.uid,identity:JSON.stringify([S.uid,dataEpoch]),target:target,defaultSection:'monthly',projects:readable,
       projectProfessions:readable.map(function(project){return {project_id:String(project.id),lines:project.project_type==='com'?businessLinesForProject(project.id):DISCIPLINES.concat('__unassigned__')};})};
   }
   function reportReferenceContext() {
@@ -3156,10 +3156,11 @@
     var valid=Array.isArray(rows)?rows.filter(function(row){return row && typeof row==='object' && !Array.isArray(row);}):[];
     return valid.length?'<ul class="overview-list">'+valid.map(function(row){return '<li>'+renderRow(row)+'</li>';}).join('')+'</ul>':overviewEmpty(empty);
   }
-  function overviewTable(section, columns, rows, empty) {
-    return '<div class="overview-table-scroll"><table class="overview-data-table" data-section="'+section+'"><colgroup>'
+  function overviewTable(section, columns, rows, empty, widths) {
+    var sizing=widths?columns.map(function(column,index){return '--plan-col-'+column[1]+':'+widths[index];}).join(';'):'';
+    return '<div class="overview-table-scroll'+(widths?' overview-plan-adaptive':'')+'"><table class="overview-data-table" data-section="'+section+'"'+(sizing?' style="'+esc(sizing)+'"':'')+'><colgroup>'
       +columns.map(function(c){return '<col class="overview-col-'+c[1]+'">';}).join('')+'</colgroup><thead><tr>'
-      +columns.map(function(c){return '<th scope="col">'+esc(c[0])+'</th>';}).join('')+'</tr></thead><tbody>'
+      +columns.map(function(c){return '<th scope="col" class="overview-head-'+c[1]+'">'+esc(c[0])+'</th>';}).join('')+'</tr></thead><tbody>'
       +(rows.length?rows.map(function(row){return '<tr>'+columns.map(function(c,i){return '<td class="overview-cell-'+c[1]+'" data-label="'+esc(c[0])+'">'+row[i]+'</td>';}).join('')+'</tr>';}).join('')
         :'<tr><td class="overview-cell-empty" colspan="'+columns.length+'">'+overviewEmpty(empty)+'</td></tr>')+'</tbody></table></div>';
   }
@@ -3182,14 +3183,18 @@
       reports=window.MonthlyPlans.projectReports({plans:S.monthlyPlans,reports:reports,projectIds:selectedScope?selectedScope.projectIds:[_pid],
         scope_id:selectedScope && selectedScope.scope_id,line:selectedScope?selectedScope.line:commercial?_line:S.overviewUI.discipline,month:start && start.slice(0,7),includeUnsubmitted:!overviewHistorical()});
     }
+    if(selectedScope && !selectedScope.scope_id)reports.sort(function(a,b){return selectedScope.projectIds.indexOf(a.project_id)-selectedScope.projectIds.indexOf(b.project_id);});
     var withSource=commercial===false;
-    var rows=[];
+    var rows=[],layoutItems=[];
     reports.forEach(function(r){itemsOf(r).filter(function(item){return item && typeof item==='object' && !Array.isArray(item);}).forEach(function(item){
+      layoutItems.push({source:item.project_id?projName(item.project_id):projName(r.project_id),mod:item.mod || r.line || LINE_ALL,name:item.name || '',due:sd(item.due),progress:(item.prog || '')+(item.blocker?' '+item.blocker:'')});
       rows.push((withSource?[overviewActualSource(r,item)]:[]).concat([String(rows.length+1),richItem(item,'mod',r.line || LINE_ALL),richItem(item,'name','未命名计划事项')+overviewRowSource(r,reports.length>1),
-        esc(sd(item.due)),(item.prog?richItem(item,'prog'):overviewEmpty(r._monthly_preview?'月计划已确认，本周尚未提交':'未填写'))+(item.blocker?'<div class="plan-blocker"><b>遇到卡点：</b>'+richItem(item,'blocker')+'</div>':'')]));
+        esc(sd(item.due)),(item.prog?richItem(item,'prog'):r._monthly_preview?'<span class="overview-empty" title="月计划已确认，本周尚未提交">本周未提交</span>':overviewEmpty('未填写'))+(item.blocker?'<div class="plan-blocker"><b>遇到卡点：</b>'+richItem(item,'blocker')+'</div>':'')]));
     });});
+    var widths=window.MonthlySummaries && window.MonthlySummaries.columnWidths?window.MonthlySummaries.columnWidths(layoutItems,{sequence:true,source:withSource}):null;
+    if(widths && withSource)widths=[widths[1],widths[0]].concat(widths.slice(2));
     return overviewTable('plans',(withSource?[['实际项目／分期','source']]:[]).concat([['序号','seq'],['模块或类别','module'],['事项内容','content'],['完成时间','date'],['完成情况及本周计划','progress']]),
-      rows,'暂无当月计划');
+      rows,'暂无当月计划',widths);
   }
   function overviewCoordHtml(reports,_pid,_line,commercial) {
     var withSource=commercial===false;
@@ -3247,10 +3252,6 @@
     var author=(S.members || []).filter(function(m){return r.author_id?m.user_id===r.author_id:m.name===r.author_name;})[0];
     return author && author.discipline || (r.line && r.line!==LINE_ALL?r.line:'综合 / 未指定专业');
   }
-  function overviewArrangeButtons(pid,line) {
-    if(!canWriteCeo() && !canWritePzo())return '';
-    return '<p class="muted no-print">'+(isCom(pid)?'新会议要求请在计划总览的“会议要求事项”表新增并指定责任人':'新工作安排请在本页“领导工作安排”区选择专业、责任人及完成时间')+'；此处仅维护既有记录。</p>';
-  }
   function overviewBriefLine(row) {
     var match=/^【([^】]+)】/.exec(String(row.what || '').trim());
     return match?match[1]:'';
@@ -3276,7 +3277,7 @@
     }).join('');
     if(!content)return '';
     return '<section class="'+(unclassified?'overview-project-notes':'overview-profession-notes')+'"'+(unclassified?'':' data-profession="'+esc(line)+'"')+'>'
-      +(unclassified?'<h3>项目级及未归专业的既有工作要求</h3><p class="muted">保留未标记专业或使用其他专业名称的既有记录。</p>':'')+overviewArrangeButtons(pid,line)
+      +(unclassified?'<h3>项目级及未归专业的既有工作要求</h3>':'')
       +content+'</section>';
   }
   function overviewResidentialGroups(pid,rows) {
@@ -3291,13 +3292,17 @@
     msOf(pid).forEach(function(m){if(m.discipline && !groups[m.discipline])groups[m.discipline]=[];});
     return groups;
   }
+  function schemePreviewUrl(url,pid) {
+    var match=typeof url==='string' && /^\/api\/scheme-previews\/([A-Za-z0-9_-][A-Za-z0-9_.-]*)\/[a-f0-9]{64}\.webp$/.exec(url);
+    return match && match[1]===String(pid)?url:'';
+  }
   function overviewDrawingHtml(pid) {
     var list=drawingsOf(pid).filter(function(d){return String(d.kind || '').indexOf('项目总图')===0;});
     return '<aside class="overview-project-drawing"><h3>项目总图</h3>'+(list.length?list.map(function(d){
-      var url=typeof d.url==='string' && (/^https?:\/\//i.test(d.url) || /^\/api\/files\/drawings\/[A-Za-z0-9_./-]+$/.test(d.url))?d.url
-        : /^drawings\/[A-Za-z0-9_./-]+$/.test(d.path || '')?'/api/files/'+d.path:'';
+      var crop=schemePreviewUrl(d.url,pid),url=String(d.url || '').indexOf('/api/scheme-previews/')===0?crop:(typeof d.url==='string' && (/^https?:\/\//i.test(d.url) || /^\/api\/files\/drawings\/[A-Za-z0-9_./-]+$/.test(d.url))?d.url
+        : /^drawings\/[A-Za-z0-9_./-]+$/.test(d.path || '')?'/api/files/'+d.path:'');
       var name=d.name || '项目总图',ext=String(d.path || url).split(/[?#]/)[0],image=/\.(?:png|jpe?g|gif|webp|avif)$/i.test(ext) || /\.(?:png|jpe?g|gif|webp|avif)$/i.test(name);
-      return '<figure>'+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+(image?'<img src="'+esc(url)+'" alt="'+esc(name)+'" width="320" height="220" loading="lazy" decoding="async">':'<span class="overview-drawing-file">打开'+esc(/\.pdf$/i.test(ext)?'PDF总图':'总图资料')+'</span>')+'</a>':overviewEmpty('总图链接待核对'))
+      return '<figure>'+(crop?'<img src="'+esc(crop)+'" alt="方案总图关键区域" width="320" height="220" loading="lazy" decoding="async">':url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+(image?'<img src="'+esc(url)+'" alt="'+esc(name)+'" width="320" height="220" loading="lazy" decoding="async">':'<span class="overview-drawing-file">打开'+esc(/\.pdf$/i.test(ext)?'PDF总图':'总图资料')+'</span>')+'</a>':overviewEmpty('总图链接待核对'))
         +'<figcaption>'+esc(name)+'</figcaption></figure>';
     }).join(''):overviewEmpty('尚未登记项目总图'))+'</aside>';
   }
@@ -3384,12 +3389,10 @@
     if(!commercial && S.overviewUI.project && !overviewProjectGroups().some(function(g){return g.name===S.overviewUI.project;}))S.overviewUI.project='';
     if(!commercial && S.overviewUI.project){var selectedGroup=overviewProjectGroups().filter(function(g){return g.name===S.overviewUI.project;})[0];list=selectedGroup?selectedGroup.projects:[];}
     var visibleReports=reports.filter(function(r){return list.some(function(p){return p.id===r.project_id;}) && (!commercial || !S.overviewUI.line || r.line===S.overviewUI.line);});
-    var range=reportWindow(overviewPeriod(),null,'month');
     var displayGroups=!commercial && window.ReportScopes?window.ReportScopes.groupProjects(list,S.reportScopes,overviewPeriod(),null,S.reports):window.PlanningWindows?window.PlanningWindows.groupProjects(list):list.map(function(p){return {name:p.name,projects:[p]};});
-    return '<div class="plan-overview" data-project-type="'+(commercial?'com':'res')+'"><div class="overview-context"><span>'+esc(overviewPeriod())+(range?' · 基准窗口 '+range.start+' 至 '+range.end:'')+'</span><span>'+list.length+' 个子项目 · '+visibleReports.length+' 份所选周期填报</span></div>'
-      +(S.profile.role==='ops'?'<div class="actions" style="margin-bottom:12px"><button type="button" class="btn primary" onclick="App.openAdminPlans('+(commercial?'true':'false')+')">批量导入计划</button><span class="muted">AI 识别整份项目月计划，分专业预览后一次导入</span></div>':'')
+    return '<div class="plan-overview" data-project-type="'+(commercial?'com':'res')+'"><div class="overview-context"><span>'+list.length+' 个子项目 · '+visibleReports.length+' 份所选周期填报</span></div>'
+      +(S.profile.role==='ops'?'<div class="actions" style="margin-bottom:12px"><button type="button" class="btn primary" onclick="App.openAdminPlans('+(commercial?'true':'false')+')">批量导入计划</button></div>':'')
       +(overviewHistorical()?'<p class="notice overview-history-note">往期填报只读，内容按当期保存记录展示；基准节点为当前保留数据按所选周期筛选。</p>':'')
-      +(!commercial?'<p class="muted overview-group-count">'+displayGroups.length+' 个展示组 · '+list.length+' 个实际子项目；统一范围报告只计一次，节点、事项及原历史可追溯实际项目。</p>':'')
       +overviewMonthlySummariesHtml(list,commercial)
       +((!commercial && window.AdminPlanOverview?displayGroups.map(function(g,i){return window.AdminPlanOverview.residential(g,reports,i===0);}):list.map(function(p,i){return overviewProjectHtml(p,reports.filter(function(r){return r.project_id===p.id;}),commercial,i===0);})).join('') || '<div class="card empty">暂无'+(commercial?'商业':'住宅')+'项目。</div>')+'</div>';
   }
@@ -3404,11 +3407,13 @@
   function overviewMonthlySummariesHtml(projects,commercial){
     var state=dataState.monthlySummaries,month=overviewSummaryMonth();
     if(!state && !window.MonthlySummaries)return '';
+    var options={projects:projects,projectIds:projects.map(function(project){return project.id;}),month:month,line:commercial?S.overviewUI.line:S.overviewUI.discipline};
+    if(state && state.ready && !state.error && state.scope===month && window.MonthlySummaries && !window.MonthlySummaries.select(S.monthlySummaries,options).length)return '';
     var content=state && state.error?'<p class="notice err" role="alert">月度汇总读取失败：'+esc(state.error)+'</p>'
       : !state || !state.ready || state.scope!==month?'<p class="muted" role="status">正在读取所选月份的月度汇总…</p>'
       : !window.MonthlySummaries?'<p class="notice err" role="alert">月度汇总组件未加载，请刷新重试。</p>'
-      : window.MonthlySummaries.html(S.monthlySummaries,{projects:projects,projectIds:projects.map(function(project){return project.id;}),month:month,line:commercial?S.overviewUI.line:S.overviewUI.discipline});
-    return '<section class="card monthly-summary-section" data-summary-month="'+esc(month)+'"><div class="cardbody"><h3>本月计划完成情况（月度汇总） · '+esc(month)+'</h3><p class="muted">独立保存的月度完成情况，不计作周报提交，也不代表完成审核通过。</p>'+content+'</div></section>';
+      : window.MonthlySummaries.html(S.monthlySummaries,options);
+    return '<section class="card monthly-summary-section" data-summary-month="'+esc(month)+'"><div class="cardbody"><h3>月度完成情况 · '+esc(month)+'</h3>'+content+'</div></section>';
   }
 
   /* ============ 我的条线（专业条线视图） ============ */
@@ -3763,12 +3768,12 @@
     var drawingCards = DRAWING_KINDS.map(function (kind, ki) {
       var arr = drawingsOf(pid, kind);
       var items = arr.map(function (d) {
-        var src = d.url || '';
-        var isPdf = /\.pdf(?:[?#]|$)/i.test(d.path || src) || /\.pdf$/i.test(d.name || '');
+        var crop=schemePreviewUrl(d.url,pid),src = String(d.url || '').indexOf('/api/scheme-previews/')===0?crop:d.url || '';
+        var isPdf = !crop && (/\.pdf(?:[?#]|$)/i.test(d.path || src) || /\.pdf$/i.test(d.name || ''));
         var isImage = !isPdf && /\.(?:png|jpe?g|gif|webp)(?:[?#]|$)/i.test(d.path || src);
         return '<div style="border:0.5px solid #D3D1C7;border-radius:10px;padding:8px;background:#FFFFFF">'
           + (src
-            ? (isImage ? '<a href="' + esc(src) + '" target="_blank" rel="noopener"><img src="' + esc(src) + '" alt="' + esc(d.name)
+            ? (crop?'<img src="'+esc(crop)+'" alt="方案总图关键区域" style="width:100%;height:148px;object-fit:contain;border-radius:6px;display:block">':isImage ? '<a href="' + esc(src) + '" target="_blank" rel="noopener"><img src="' + esc(src) + '" alt="' + esc(d.name)
               + '" style="width:100%;height:148px;object-fit:cover;border-radius:6px;display:block"></a>'
               : '<div style="height:148px;display:flex;align-items:center;justify-content:center"><a class="btn ghost sm" href="' + esc(src)
                 + '" target="_blank" rel="noopener">' + (isPdf ? '打开 PDF 文档' : '打开附件链接') + '</a></div>')
@@ -4164,7 +4169,6 @@
   function detailLeaderEditable(pid) {
     var hasReviews=S.reviews.some(function(row){return row.project_id===pid && row.period===currentPeriod();});
     var html=hasReviews?'<details class="plan-leader-history"><summary>已保存评价（只读）</summary>'+detailLeaderReadOnly(pid,currentPeriod(),true)+'</details>':'';
-    html+=overviewArrangeButtons(pid,null);
     ['ceo','pzo'].forEach(function(kind){
       var can=kind==='ceo'?canWriteCeo():canWritePzo(), noteKind=kind==='ceo'?'ceo_brief':'pzo_note';
       var rows=can?briefDraftRows(pid,noteKind):briefsOf(pid,noteKind);
@@ -4242,7 +4246,7 @@
     markPMRenderedScope();
     render('<div class="app planning-shell'+(rev?' manager-shell':'')+'"><header class="planning-header"><a class="planning-brand" href="#" onclick="return false"><img src="' + assetUrl('logo.png') + '" alt="正弘置业"><b>工程建设数字化服务平台</b></a>'
       +'<nav class="planning-mainnav" aria-label="主导航">'+primary+'</nav>'+(!rev?'<div class="planning-header-tools">'+right+'</div>':'')+'<div class="planning-identity"><span class="nm">'+esc(S.profile.name || '')+'</span><span class="rl">'+esc(ROLE_LABEL[S.profile.role] || '')+'</span><button type="button" onclick="App.logout()">退出登录</button></div></header>'
-      +secondary+'<div class="work">'+(rev?'<header class="topbar"><div class="tb-main"></div><div class="tb-right">'+right+'</div></header>':'')+'<main>'+(rev?'<div id="meeting-controller-mount"></div>':'')+body+'</main></div></div>'
+      +secondary+'<div class="work">'+(rev?'<header class="topbar"><div class="tb-main"></div><div class="tb-right">'+right+'</div></header>':'')+'<main>'+(rev && isManagerOverview()?'<div id="meeting-controller-mount"></div>':'')+body+'</main></div></div>'
       +(!managementRead && window.CompletionReview?window.CompletionReview.overlayHtml():''),keepScroll);
   }
 

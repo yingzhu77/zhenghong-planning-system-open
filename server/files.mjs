@@ -1,8 +1,9 @@
 import path from 'node:path';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, open, writeFile } from 'node:fs/promises';
 import { HttpError } from './errors.mjs';
 import { getProfile, withIdentity } from './database.mjs';
 import { withManagementRead } from './management-read.mjs';
+import { assertSchemeFileReadable, assertUnsealedFile } from './scheme-protection.mjs';
 
 export const MAX_FILE_BYTES = 8 * 1024 * 1024;
 export function storagePath(value) {
@@ -61,6 +62,7 @@ export async function saveUpload(pool, user, uploadDir, body, contentType) {
     const profile = await getProfile(client, user.id);
     if (profile?.status !== 'approved' || !['ops', 'president'].includes(profile.role)) throw new HttpError(403, '仅运营管理员或总裁可上传图纸');
     if (!(await client.query('SELECT id FROM public.projects WHERE id=$1', [key.projectId])).rows.length) throw new HttpError(403, '无权访问此项目');
+    await assertSchemeFileReadable(client, uploadDir, key.relative);
   });
   const absolute = path.join(uploadDir, ...key.relative.split('/'));
   await mkdir(path.dirname(absolute), { recursive: true });
@@ -73,9 +75,16 @@ export async function loadFile(pool, user, uploadDir, name) {
   const key = storagePath(name);
   await withManagementRead(pool, user, async (client) => {
     if (!(await client.query('SELECT id FROM public.project_drawings WHERE project_id=$1 AND path=$2', [key.projectId, key.relative])).rows.length) throw new HttpError(404, '文件不存在或无权访问');
+    await assertSchemeFileReadable(client, uploadDir, key.relative);
   });
   let buffer;
-  try { buffer = await readFile(path.join(uploadDir, ...key.relative.split('/'))); }
+  try {
+    const file = await open(path.join(uploadDir, ...key.relative.split('/')), 'r');
+    try {
+      const header = Buffer.alloc(8); await file.read(header, 0, header.length, 0); assertUnsealedFile(header);
+      buffer = await file.readFile();
+    } finally { await file.close(); }
+  }
   catch (error) { if (error.code === 'ENOENT') throw new HttpError(404, '文件不存在'); throw error; }
   return { buffer, type: imageType(buffer).type, name: path.basename(key.relative) };
 }

@@ -84,7 +84,7 @@ test('an incomplete overview project set does not expose a stale scoped professi
 
 test('projection shows all scoped professional plans once while incomplete or historical selections do not gain previews',()=>{
   const {h}=harness(),input=model(),before=plain(input),html=h.MeetingView.html(input);
-  assert.match(html,/0 份所选周期已提交报告，另有 2 份已确认月计划/);
+  assert.equal(input.reports.length,0);assert.equal((html.match(/已确认月计划 · 本周尚未提交/g)||[]).length,2);
   assert.equal((html.match(/工程确认事项/g)||[]).length,1);assert.equal((html.match(/设计确认事项/g)||[]).length,1);
   assert.match(html,/<caption>匿名二期/);assert.match(html,/<caption>统一范围 · 未明确子项目/);
   assert.deepEqual(plain(input),before);
@@ -99,8 +99,8 @@ test('selected discipline keeps original submitted author and mapped plan profes
   h.ZHRichText.attach(row);
   const filtered=h.MonthlyPlans.residentialReports([row],'设计',[],plans());
   assert.equal(filtered.length,1);assert.equal(filtered[0].biz.items.length,1);assert.equal(filtered[0].biz.items[0].monthly_plan_id,designId);
-  const html=h.MeetingView.html(model({line:'设计',rows:filtered}));
-  assert.match(html,/1 份所选周期已提交报告/);assert.doesNotMatch(html,/另有 \d+ 份已确认月计划|工程确认事项/);
+  const input=model({line:'设计',rows:filtered}),html=h.MeetingView.html(input);
+  assert.equal(input.reports.length,1);assert.match(html,/meeting-eyebrow">已提交周报/);assert.doesNotMatch(html,/已确认月计划 · 本周尚未提交|工程确认事项/);
   assert.match(html,/原综合填报人 · 设计/);assert.match(html,/<strong>设计当周原进展<\/strong>/);
   assert.equal(row.biz.monthly_plan_ids.length,2);assert.deepEqual(plain(row.biz),before.biz);
 });

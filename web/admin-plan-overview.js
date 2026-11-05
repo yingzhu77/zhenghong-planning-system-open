@@ -74,7 +74,6 @@
     var meta = report ? '<div class="overview-report-meta" data-report-id="' + esc(report.id) + '">' + esc(report.author_name || '未记录填报人')
       + ' · 住宅统一综合填报' + cfg.reportHistoryButton(report) + '</div>' : '<p class="overview-empty">本期尚未提交统一填报。</p>';
     return '<section class="overview-scope-report" data-report-scope-id="' + esc(scope.id) + '"><h3>' + esc(scope.name) + ' · 统一填报</h3>'
-      + '<p class="muted">' + members.map(function (id) { var p = (S.projects || []).filter(function (p) { return String(p.id) === id; })[0]; return esc(p && p.name || id); }).join('、') + '共用一份综合报告</p>'
       + meta + '<div class="overview-report-grid overview-report-sections">'
       + '<section class="overview-core-nodes"><h4>一、滚动月核心节点计划</h4>' + cfg.nodeHtml(rows, scope.anchor_project_id, null, false, members) + '</section>'
       + '<section class="overview-monthly-plans"><h4>二、当月计划填报</h4>' + cfg.planHtml(rows, scope.anchor_project_id, null, false,
@@ -91,7 +90,7 @@
       +esc(report.line || '综合')+' · '+esc(report.author_name || '未记录填报人')+cfg.reportHistoryButton(report)+'</div>';}).join('')
       || '<p class="overview-empty">所选周期暂无已提交专业填报。</p>';
     return '<section class="overview-scope-report" data-report-scope-id="'+esc(scope.id)+'"><h3>'+esc(scope.name)+' · 各专业填报</h3>'
-      +'<p class="muted">同一项目，各专业分别编制计划、提交本专业进展。</p>'+meta
+      +meta
       +'<div class="overview-report-grid overview-report-sections">'
       +'<section class="overview-core-nodes"><h4>一、滚动月核心节点计划</h4>'+cfg.nodeHtml(rows,scope.anchor_project_id,null,false,members)+'</section>'
       +'<section class="overview-monthly-plans"><h4>二、当月计划填报</h4>'+cfg.planHtml(rows,scope.anchor_project_id,null,false,
@@ -102,6 +101,10 @@
   }
   function residentialSection(group, projects, reports) {
     function table(method, empty) {
+      if(method==='planHtml'){
+        var ids=projects.map(function(project){return project.id;});
+        return cfg.planHtml(projects.flatMap(function(project){return projectReports(project,reports);}),projects[0].id,null,false,{projectIds:ids,line:S.overviewUI.discipline || ''});
+      }
       return mergeTables(projects.map(function(project){return {project:project,
         html:cfg[method](projectReports(project,reports),project.id,null,false,[project.id])};}),empty,method==='nodeHtml');
     }
@@ -161,9 +164,12 @@
       + layout({ key: key, projects: projects, reports: allReports, content: content, sidebar: sidebar }) + '</details>';
   }
   function drawingUrl(drawing) {
+    var crop=typeof drawing.url==='string' && /^\/api\/scheme-previews\/([A-Za-z0-9_-][A-Za-z0-9_.-]*)\/[a-f0-9]{64}\.webp$/.exec(drawing.url);
+    if(crop)return crop[1]===String(drawing.project_id)?drawing.url:'';
     return typeof drawing.url === 'string' && (/^https?:\/\//i.test(drawing.url) || /^\/api\/files\/drawings\/[A-Za-z0-9_./-]+$/.test(drawing.url)) ? drawing.url
       : /^drawings\/[A-Za-z0-9_./-]+$/.test(drawing.path || '') ? '/api/files/' + drawing.path : '';
   }
+  function isSchemeExcerpt(row){return !!(row && String(row.url || '').indexOf('/api/scheme-previews/')===0);}
   function pictures(projects, reports) {
     projects = allowedProjects(projects);
     var result = [], used = Object.create(null), metadata = Object.create(null);
@@ -201,14 +207,13 @@
     var index = scopeFor(options), scope = scopes[index], images = scope.images, selected = images.filter(function (row) { return row.key === scope.selected; })[0];
     return '<section class="admin-plan-reading' + (scope.open ? ' is-comparing' : '') + '" data-admin-compare="' + index + '" data-mobile-pane="' + scope.mobile + '" style="--admin-plan-width:' + scope.width + '%">'
       + '<div class="admin-compare-controls no-print"><button type="button" class="btn ghost sm" data-compare-toggle aria-expanded="' + scope.open + '" onclick="AdminPlanOverview.toggle(' + index + ')"' + (images.length ? '' : ' disabled') + '>' + (scope.open ? '关闭图文对照' : '图文对照') + '</button>'
-      + (images.length ? '<span class="muted">总图与本期图片同屏阅读</span>' : '<span class="muted">尚无可对照的总图或本期图片，其他文件沿原入口打开。</span>')
       + '<label class="admin-compare-width">计划宽度 <output>' + scope.width + '%</output><input type="range" min="35" max="75" value="' + scope.width + '" aria-label="计划栏宽度百分比" oninput="AdminPlanOverview.resize(' + index + ',this.value)"></label>'
       + '<div class="admin-compare-mobile-switch"><button type="button" class="btn ghost sm" data-mobile-switch="text" aria-pressed="' + (scope.mobile === 'text') + '" onclick="AdminPlanOverview.mobile(' + index + ',\'text\')">看计划</button><button type="button" class="btn ghost sm" data-mobile-switch="image" aria-pressed="' + (scope.mobile === 'image') + '" onclick="AdminPlanOverview.mobile(' + index + ',\'image\')">看图片</button></div></div>'
       + '<div class="overview-project-layout admin-reading-layout"><div class="overview-project-content admin-reading-content">' + options.content + '</div><div class="overview-side-stack admin-reading-original">' + options.sidebar + '</div>'
       + '<aside class="admin-compare-pane" aria-label="图片对照"><label class="admin-compare-select">选择图片<select aria-label="对照图片" onchange="AdminPlanOverview.select(' + index + ',this.value)">'
       + images.map(function (row, i) { return '<option value="' + i + '"' + (row.key === scope.selected ? ' selected' : '') + '>' + esc(imageLabel(row)) + '</option>'; }).join('') + '</select></label>'
       + '<div class="admin-compare-file">' + (selected ? esc(imageLabel(selected)) : '暂无图片') + '</div><div class="admin-compare-image-tools"><button type="button" class="btn ghost sm" aria-label="缩小图片" onclick="AdminPlanOverview.zoom(' + index + ',-25)">−</button><output data-compare-zoom>' + scope.zoom + '%</output><button type="button" class="btn ghost sm" aria-label="放大图片" onclick="AdminPlanOverview.zoom(' + index + ',25)">＋</button><button type="button" class="btn ghost sm" onclick="AdminPlanOverview.fit(' + index + ')">适合宽度</button>'
-      + '<a class="btn ghost sm" data-compare-open href="' + esc(selected && selected.url || '#') + '" target="_blank" rel="noopener noreferrer">原入口打开</a><a class="btn ghost sm" data-compare-download href="' + esc(selected && selected.url || '#') + '" download="' + esc(selected && selected.name || '') + '" target="_blank" rel="noopener noreferrer">下载</a></div>'
+      + '<a class="btn ghost sm" data-compare-open href="' + esc(selected && selected.url || '#') + '" target="_blank" rel="noopener noreferrer">'+(isSchemeExcerpt(selected)?'查看关键图':'原入口打开')+'</a><a class="btn ghost sm" data-compare-download href="' + esc(selected && selected.url || '#') + '" download="' + esc(selected && selected.name || '') + '" target="_blank" rel="noopener noreferrer">'+(isSchemeExcerpt(selected)?'保存关键图':'下载')+'</a></div>'
       + '<p class="admin-compare-hint">放大后可拖动图片，也可使用滚动条。</p><div class="admin-compare-viewport" tabindex="0" aria-label="可滚动的对照图片" onpointerdown="AdminPlanOverview.dragStart(' + index + ',event)" onpointermove="AdminPlanOverview.dragMove(' + index + ',event)" onpointerup="AdminPlanOverview.dragEnd(' + index + ',event)" onpointercancel="AdminPlanOverview.dragEnd(' + index + ',event)">'
       + (selected ? '<img data-compare-image src="' + esc(selected.url) + '" alt="' + esc(imageLabel(selected)) + '" draggable="false" loading="lazy" style="width:' + scope.zoom + '%" onerror="AdminPlanOverview.imageError(' + index + ')">' : '')
       + '<p data-compare-error role="status" hidden>图片暂时无法加载，可使用原入口打开或下载。</p></div></aside></div></section>';
@@ -235,8 +240,8 @@
     image.src = selected.url; image.alt = imageLabel(selected); image.style.width = '100%'; image.hidden = false;
     el.querySelector('[data-compare-error]').hidden = true;
     el.querySelector('.admin-compare-file').textContent = imageLabel(selected);
-    el.querySelector('[data-compare-open]').href = selected.url;
-    var download = el.querySelector('[data-compare-download]'); download.href = selected.url; download.download = selected.name;
+    var openLink=el.querySelector('[data-compare-open]');openLink.href = selected.url;openLink.textContent=isSchemeExcerpt(selected)?'查看关键图':'原入口打开';
+    var download = el.querySelector('[data-compare-download]'); download.href = selected.url; download.download = selected.name;download.textContent=isSchemeExcerpt(selected)?'保存关键图':'下载';
     el.querySelector('[data-compare-zoom]').textContent = '100%';
     var viewport = el.querySelector('.admin-compare-viewport'); viewport.scrollLeft = 0; viewport.scrollTop = 0;
   }
