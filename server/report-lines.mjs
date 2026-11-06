@@ -21,3 +21,9 @@ export function resolveWritableResidentialLine(profile, requested) {
   if (!canUseResidentialLine(profile, line)) throw new HttpError(403, '只能填报本人获授权的住宅专业', 'residential_discipline_forbidden');
   return line;
 }
+
+export async function hasProjectReportingGrant(client, userId, projectId, line) {
+  if (typeof line !== 'string' || !line || line === '综合') return false;
+  return (await client.query('SELECT app_private.can_use_project_reporting_profession($1,$2,$3) AS allowed',
+    [userId, projectId, line])).rows[0]?.allowed === true;
+}

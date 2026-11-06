@@ -2,12 +2,9 @@ import {createHash} from 'node:crypto';
 import {HttpError} from './errors.mjs';
 import {hasManagementRead,withManagementRead} from './management-read.mjs';
 import {monthlyPlanMonth,normalizeMonthlyPlanItems} from './monthly-plans.mjs';
-import {BUSINESS_MODULES} from './commercial-modules.mjs';
-import {RESIDENTIAL_DISCIPLINES} from './report-lines.mjs';
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
-const lines=new Set([...BUSINESS_MODULES,...RESIDENTIAL_DISCIPLINES]);
 const invalid=()=>{throw new HttpError(400,'月度汇总内容或保存标识不正确','invalid_monthly_summary');};
 function label(value){if(typeof value!=='string'||!value.trim()||value.length>200||value.includes('\0'))invalid();return value;}
 
@@ -15,7 +12,7 @@ function label(value){if(typeof value!=='string'||!value.trim()||value.length>20
 // and never creates a weekly reporting period.
 export function normalizeMonthlyPlanSummary(value,operation,index){
  if(!object(value)||Object.keys(value).some(key=>!['project_id','report_scope_id','line','owner_id','month','items','expected_summary_id'].includes(key)))invalid();
- label(value.project_id);label(value.owner_id);if(!lines.has(value.line))invalid();
+ label(value.project_id);label(value.owner_id);label(value.line);
  monthlyPlanMonth(value.month);if(value.report_scope_id!=null)label(value.report_scope_id);
  if(!Object.hasOwn(value,'expected_summary_id')||value.expected_summary_id!==null&&(typeof value.expected_summary_id!=='string'||!uuid.test(value.expected_summary_id)))invalid();
  if(!Array.isArray(value.items)||value.items.length>500)invalid();

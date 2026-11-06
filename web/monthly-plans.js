@@ -13,7 +13,10 @@
   function memberKey(ids) { return JSON.stringify((ids || []).map(String).slice().sort()); }
   function reportScope() { return S.pmReportScope || null; }
   function professionalScope() { return !!(reportScope() && reportScope().reporting_mode === 'professional'); }
-  function planLine() { return reportScope() ? (S.profile || {}).discipline : S.pmLine; }
+  function planLine() { return reportScope() && !professionalScope() ? (S.profile || {}).discipline : S.pmLine; }
+  function canUseResidentialLine() {
+    return cfg.canUseResidentialLine ? cfg.canUseResidentialLine(planLine(),S.pmProject) : (S.profile || {}).discipline === planLine();
+  }
   function planOwner(plan) { return plan && (plan.owner_id || plan.confirmed_by); }
   function ownPlan(plan) { return planOwner(plan) === S.uid; }
   function matchingScope(plan) {
@@ -25,14 +28,14 @@
     var project = (S.projects || []).filter(function (p) { return p.id === S.pmProject; })[0];
     var selected = reportScope();
     if (selected) return !!(project && project.project_type !== 'com' && (professionalScope() ? S.pmLine === planLine() : S.pmLine === '综合')
-      && residentialLines.includes(planLine()) && global.ReportScopes && global.ReportScopes.allowed(selected, S.projects)
+      && canUseResidentialLine() && global.ReportScopes && global.ReportScopes.allowed(selected, S.projects)
       && global.ReportScopes.active(selected, S.pmPeriod, S.pmReport && (S.pmReport.submitted_at || S.pmReport.created_at)));
-    return !!(project && S.pmLine && (project.project_type === 'com' || !S.pmReportScope && S.pmLine !== '综合' && S.pmLine === (S.profile || {}).discipline));
+    return !!(project && S.pmLine && (project.project_type === 'com' || !S.pmReportScope && S.pmLine !== '综合' && canUseResidentialLine()));
   }
   function canConfirm() {
     var profile = S.profile || {};
     var project=(S.projects || []).filter(function(p){return p.id===S.pmProject;})[0];
-    return enabled() && profile.role === 'pm' && (project.project_type==='com' ? cfg.canUseBusinessLine?cfg.canUseBusinessLine(S.pmLine,S.pmProject):profile.biz_line === '*' || profile.biz_line === S.pmLine : profile.discipline === planLine());
+    return enabled() && profile.role === 'pm' && (project.project_type!=='com' || (cfg.canUseBusinessLine?cfg.canUseBusinessLine(S.pmLine,S.pmProject):profile.biz_line === '*' || profile.biz_line === S.pmLine));
   }
   function monthOf(date) { return /^\d{4}-(0[1-9]|1[0-2])/.test(String(date || '')) ? String(date).slice(0, 7) : ''; }
   function shiftMonth(value, count) {

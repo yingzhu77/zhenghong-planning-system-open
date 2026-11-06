@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { HttpError } from './errors.mjs';
 import { validateRichText } from './rich-text.mjs';
 import { businessModulesForProject, canUseBusinessModule, withBusinessModuleGrants } from './commercial-modules.mjs';
-import { canUseResidentialLine } from './report-lines.mjs';
+import { canUseResidentialLine, hasProjectReportingGrant } from './report-lines.mjs';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const reviewerRoles = new Set(['ops', 'president', 'pzo']);
@@ -110,7 +110,7 @@ async function resolveOwner(client, user, parsed, forOwnerId, cache) {
     return member ? { ...member, status: 'approved' } : undefined;
   });
   if (owner?.status !== 'approved' || owner.role !== 'pm') forbidden();
-  const project = await cached(cache, 'project:' + user.id + ':' + parsed.projectId, async () => (await client.query('SELECT id,project_type FROM public.projects WHERE id=$1', [parsed.projectId])).rows[0]);
+  const project = await cached(cache, 'project:' + user.id + ':' + parsed.projectId, async () => (await client.query("SELECT id,project_type,to_jsonb(j)->'reporting_professions' AS reporting_professions FROM public.projects j WHERE id=$1", [parsed.projectId])).rows[0]);
   if (!project) forbidden();
   const member = await cached(cache, 'member:' + user.id + ':' + ownerId + ':' + parsed.projectId, async () => (await client.query('SELECT user_id FROM public.project_members WHERE project_id=$1 AND user_id=$2', [parsed.projectId, ownerId])).rows.length > 0);
   if (!member) forbidden();
@@ -164,11 +164,18 @@ async function resolveBaseSource(client, user, sourceKey, { forOwnerId, cache } 
   const parsed = parseSourceKey(sourceKey);
   const { caller, owner, project } = await resolveOwner(client, user, parsed, forOwnerId, cache);
   const cacheKey = 'source:' + user.id + ':' + parsed.kind + ':' + parsed.projectId + ':' + parsed.id;
+  async function ownsLine(line) {
+    if (project.reporting_professions?.includes(line)) {
+      return cached(cache, 'custom-profession:'+JSON.stringify([owner.user_id,project.id,line]),
+        () => hasProjectReportingGrant(client,owner.user_id,project.id,line));
+    }
+    return project.project_type === 'com' ? canUseBusinessModule(owner,line,project.id) : canUseResidentialLine(owner,line);
+  }
   if (parsed.monthly) {
     const plan = await cached(cache, 'source:' + user.id + ':monthly:' + parsed.projectId + ':' + parsed.id,
       async () => (await client.query('SELECT id::text AS id,project_id,line,plan_month::text AS plan_month,items,rich_text,confirmed_by,confirmed_name,report_scope_id,scope_project_ids FROM public.monthly_plans WHERE project_id=$1 AND id=$2', [parsed.projectId, parsed.id])).rows[0]);
     if (!plan) missing();
-    if (plan.confirmed_by !== owner.user_id || (project.project_type === 'com' ? !canUseBusinessModule(owner, plan.line,project.id) : plan.line === '综合' || !canUseResidentialLine(owner, plan.line))) forbidden();
+    if (plan.confirmed_by !== owner.user_id || plan.line === '综合' || !await ownsLine(plan.line)) forbidden();
     await requireReportOwnerScope(client, user, plan, owner.user_id, cache);
     const item = sourceItem(plan.items, parsed);
     if (!text(item.name).trim()) missing();
@@ -224,7 +231,7 @@ async function resolveBaseSource(client, user, sourceKey, { forOwnerId, cache } 
   if (!report) missing();
   await requireReportOwnerScope(client, user, report, owner.user_id, cache);
   const ownsReport = report.author_id === owner.user_id;
-  const writableScope = project.project_type === 'com' ? canUseBusinessModule(owner, report.line,project.id) : canUseResidentialLine(owner, report.line);
+  const writableScope = await ownsLine(report.line);
   if (parsed.kind === 'plan' && (!ownsReport || !writableScope)) forbidden();
   const items = parsed.kind === 'coord' && parsed.group === 'coord' ? report.coord_items : report.biz?.[parsed.group];
   const item = sourceItem(items, parsed);

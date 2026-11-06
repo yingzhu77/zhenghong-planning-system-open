@@ -311,6 +311,8 @@
 !/tests/meeting-display-ui.test.mjs
 !/server/commercial-module-grants.mjs
 !/db/035-admin-monthly-batch-withdrawal.sql
+!/db/036-project-reporting-professions.sql
+!/server/project-reporting-professions.mjs
 !/server/admin-plan-batches.mjs
 !/tests/admin-plan-batches.test.mjs
 !/tests/request-origin.test.mjs

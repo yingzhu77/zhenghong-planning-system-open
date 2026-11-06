@@ -79,7 +79,7 @@ test('operations navigation follows the five confirmed groups and keeps employee
  assert.deepEqual(items.filter(item=>item.group==='analysis').map(item=>item.k),['projectPlanStats','completionStats']);
  assert.deepEqual(items.filter(item=>item.group==='collaboration').map(item=>item.k),['coord','completion','meetings']);
  assert.deepEqual(items.filter(item=>item.group==='projects').map(item=>item.k),['master','library']);
- assert.deepEqual(items.filter(item=>item.group==='settings').map(item=>item.k),['lineAdm','members']);
+ assert.deepEqual(items.filter(item=>item.group==='settings').map(item=>item.k),['lineAdm','members','reportingProfessions']);
  assert.ok(!items.some(item=>['board','boardCom','presPzo','dual','nodes','nodesCom'].includes(item.k)));
 });
 

@@ -570,6 +570,12 @@ h2{font-size:20px}h3{font-size:16px}h4{font-size:14px}
 @media(max-width:680px){.planning-ai-entry{justify-content:space-between}.planning-ai-entry .btn{min-height:44px}}
 @media print{.planning-ai-entry{display:none!important}}
 
+.reporting-profession-form{display:grid;gap:8px;max-width:38rem;margin:16px 0 24px}
+.reporting-profession-form label{font-weight:600}
+.reporting-profession-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.reporting-profession-actions input,.reporting-profession-actions select{flex:1;min-width:min(12rem,100%)}
+.reporting-profession-actions button{flex:none}
+
 .planning-shell .overview-plan-adaptive .overview-data-table td.overview-cell-module[rowspan],
 .monthly-summary-table td[data-label="模块"][rowspan]{background:#d0e0f1}
 @media screen and (max-width:700px){

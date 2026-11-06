@@ -5,12 +5,12 @@ import { validateReportAttachmentReferences } from './report-attachments.mjs';
 import { BUSINESS_MODULES, businessModulesForProject, resolveWritableBusinessLine, withBusinessModuleGrants } from './commercial-modules.mjs';
 import { resolveCompletionSource, reportCoordinationSourceItem } from './completion-sources.mjs';
 import { resolveReportScope } from './report-scopes.mjs';
-import { resolveWritableResidentialLine } from './report-lines.mjs';
+import { hasProjectReportingGrant, resolveWritableResidentialLine } from './report-lines.mjs';
 import { preserveSchemeMaster, sanitizeSchemeRows } from './scheme-protection.mjs';
 
 const fields = (text) => text.split(/\s+/).filter(Boolean);
 export const TABLES = Object.freeze({
-  projects: fields('id name sort_order active created_at camera_url biz_meta project_type display_group'),
+  projects: fields('id name sort_order active created_at camera_url biz_meta project_type display_group reporting_professions'),
   profiles: fields('user_id name role project_id status created_at biz_line discipline management_viewer'),
   project_members: fields('user_id project_id role_in_project created_at'),
   org: fields('id name dept title org_level sort_order'),
@@ -367,6 +367,9 @@ export async function prepareMutation(client, user, request) {
   for (const source of inputRows) {
     if (!source || typeof source !== 'object' || Array.isArray(source)) throw new HttpError(400, '保存内容不正确');
     for (const field of Object.keys(source)) assertColumn(table, field);
+    if (table === 'projects' && Object.hasOwn(source, 'reporting_professions')) {
+      throw new HttpError(403, '请通过汇报专业设置维护项目专业', 'reporting_professions_forbidden');
+    }
     let row = { ...source };
     let richExisting, reportExisting;
     // Never trust identity, auditing, creation timestamps, or history from the browser.
@@ -416,10 +419,12 @@ export async function prepareMutation(client, user, request) {
       }
       const pid = existing?.project_id || row.project_id;
       if (!pid) throw new HttpError(400, '缺少项目');
-      const project = (await client.query('SELECT id,project_type FROM public.projects WHERE id=$1', [pid])).rows[0];
+      const project = (await client.query('SELECT id,project_type,to_jsonb(j)->\'reporting_professions\' AS reporting_professions FROM public.projects j WHERE id=$1', [pid])).rows[0];
       if (!project) throw new HttpError(403, '未分配此项目');
       const businessProfile=project.project_type==='com'?(await withBusinessModuleGrants(client,[profile],pid))[0]:profile;
-      const line = project.project_type === 'com' ? resolveWritableBusinessLine(businessProfile, existing?.line ?? row.line, pid) : resolveWritableResidentialLine(profile, existing?.line ?? row.line);
+      const requestedLine = existing?.line ?? row.line;
+      const custom = project.reporting_professions?.includes(requestedLine) && await hasProjectReportingGrant(client,user.id,pid,requestedLine);
+      const line = custom ? requestedLine : project.project_type === 'com' ? resolveWritableBusinessLine(businessProfile,requestedLine,pid) : resolveWritableResidentialLine(profile,requestedLine);
       if ((row.line && row.line !== line) || (existing && existing.line !== line)) throw new HttpError(403, '只能填报本人模块');
       const period = existing?.period || row.period;
       if (typeof period !== 'string' || !period.trim() || period.length > 100) throw new HttpError(400, '填报周期不正确');

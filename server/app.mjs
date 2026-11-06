@@ -17,6 +17,7 @@ import { startAdminPlanAI, chatAdminPlanAI, getAdminPlanAISession, reviseAdminPl
 import { listCompletions, previewCompletion, requestCompletion, reviewCompletion, withdrawCompletion } from './completions.mjs';
 import { completionStatistics } from './completion-statistics.mjs';
 import { projectPlanStatistics } from './project-plan-statistics.mjs';
+import { addProjectReportingProfession, grantProjectReportingProfession, listProjectReportingGrants } from './project-reporting-professions.mjs';
 import { listReportScopes } from './report-scopes.mjs';
 import { managementRead, withManagementRead } from './management-read.mjs';
 import { loadSchemePreview } from './scheme-protection.mjs';
@@ -249,6 +250,15 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   }));
   app.post('/api/project-plan-statistics', auth.requireUser, express.json({limit:'16kb'}), asyncRoute(async(req,res)=>{
     res.json({data:await projectPlanStatistics(pool,req.user,req.body ?? {}),error:null});
+  }));
+  app.post('/api/project-reporting-professions', auth.requireUser, express.json({ limit: '8kb' }), asyncRoute(async (req, res) => {
+    res.json({ data: await addProjectReportingProfession(pool, req.user, req.body ?? {}), error: null });
+  }));
+  app.get('/api/project-reporting-grants', auth.requireUser, asyncRoute(async (req, res) => {
+    res.set('Cache-Control','no-store'); res.json({ data: await listProjectReportingGrants(pool, req.user), error: null });
+  }));
+  app.post('/api/project-reporting-grants', auth.requireUser, express.json({ limit: '8kb' }), asyncRoute(async (req, res) => {
+    res.json({ data: await grantProjectReportingProfession(pool, req.user, req.body ?? {}), error: null });
   }));
   for (const [route, handler] of [['preview', previewCompletion], ['request', requestCompletion], ['review', reviewCompletion], ['withdraw', withdrawCompletion]]) {
     app.post('/api/completions/' + route, auth.requireUser, express.json({ limit: '64kb' }), asyncRoute(async (req, res) => {

@@ -233,7 +233,7 @@ function run(role, options = {}) {
           filters, options: {projects, groups: projects.map(project => project.display_group || project.name), disciplines: [], levels: []}, rows: [], projects: [],
           totals: {total: 0, completed: 0, incomplete: 0, group_count: 0, project_count: 0}}, error: null})};
       }
-      if(url.startsWith('/api/monthly-summaries?month=') || url==='/api/commercial-module-grants')return {ok:true,json:async()=>({data:[]})};
+      if(url.startsWith('/api/monthly-summaries?month=') || ['/api/commercial-module-grants','/api/project-reporting-grants'].includes(url))return {ok:true,json:async()=>({data:[]})};
       const tables = { '/api/report-scopes/list': 'report_scopes', '/api/monthly-plans/list': 'monthly_plans',
         '/api/reporter-tasks/list': 'reporter_tasks', '/api/coordination-tasks/list': 'coordination_tasks', '/api/completions/list': 'completion_requests',
         '/api/report-attachments/list': 'report_attachments' };
@@ -386,7 +386,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     ok(navLabels(html, ['项目档案', '资料共享'], '子导航') && has(main(html), 'admin-archive'), '项目资料应提供项目档案和已有资料共享入口');
     noCameraUi(html, '运营项目资料');
     await App.section('settings'); html = root.innerHTML;
-    ok(navLabels(html, ['节点归属设置', '成员与权限'], '子导航') && has(main(html), 'App.lineSaveAll'), '系统设置应归集节点归属及原成员权限入口');
+    ok(navLabels(html, ['节点归属设置', '成员与权限', '汇报专业设置'], '子导航') && has(main(html), 'App.lineSaveAll'), '系统设置应包含原有设置及汇报专业入口');
     await App.view('members'); html = root.innerHTML;
     ok(has(main(html), 'App.memberSet'), '成员与权限入口未通向原成员管理');
 

@@ -9,7 +9,7 @@ test('source initialization creates the complete empty schema without business d
     'plan_changes', 'milestones', 'reports', 'leader_reviews', 'leader_notes',
     'project_master', 'project_phases', 'project_drawings', 'reporter_tasks',
     'completion_requests', 'report_attachments', 'report_attachment_links', 'coordination_tasks', 'monthly_plans',
-    'project_library_documents', 'project_library_events', 'commercial_module_grants', 'monthly_plan_summaries'].sort();
+    'project_library_documents', 'project_library_events', 'commercial_module_grants', 'monthly_plan_summaries', 'project_reporting_grants'].sort();
   const tables = await db.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name");
   assert.deepEqual(tables.rows.map(row => row.table_name), expected);
   for (const table of expected) {

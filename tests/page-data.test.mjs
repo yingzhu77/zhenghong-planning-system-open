@@ -86,6 +86,7 @@ function fixture(role = 'ops') {
     localStorage: {getItem: () => null, setItem() {}, removeItem() {}}, Date, console, setTimeout: () => 1, clearTimeout() {},
     fetch: async (url, init) => {
       if(url==='/api/commercial-module-grants'){assert.equal(init.method,'GET');assert.equal(init.body,undefined);const operation={table:'@businessModuleGrants',operation:'select',query:{}};calls.push(operation);const result=await handler(operation);return {ok:!result?.error,json:async()=>result};}
+      if(url==='/api/project-reporting-grants'){assert.equal(init.method,'GET');assert.equal(init.body,undefined);const operation={table:'@projectReportingGrants',operation:'select',query:{}};calls.push(operation);const result=await handler(operation);return {ok:!result?.error,json:async()=>result};}
       if(url.startsWith('/api/monthly-summaries?month=')){
         assert.equal(init.method,'GET');assert.equal(init.body,undefined);
         const operation={table:'@monthlySummaries',operation:'select',query:{month:new URL(url,'http://anonymous.test').searchParams.get('month')}};calls.push(operation);const result=await handler(operation);return {ok:!result?.error,json:async()=>result};
@@ -136,7 +137,9 @@ test('every authorized page and detail tab renders the same content as a complet
 test('monthly completion summaries use month-scoped GET snapshots and a failed refresh never renders prior month content',async()=>{
   const f=fixture();f.S.view='presCom';f.S.overviewUI.period='2026-10-26';
   f.setHandler(operation=>operation.table==='@monthlySummaries'?{data:[{id:'summary-'+operation.query.month,project_id:'p3',month:operation.query.month,line:'机电工程',owner_id:'anonymous-owner',owner_name:'匿名提报人',items:[{source_id:'source',name:operation.query.month+'月度独立原文',progress:'已完成现场核查'}]}]}:{data:f.tables[operation.table] || []});
-  assert.equal(await f.loadPageData(),true);f.renderShell();assert.match(f.root.innerHTML,/2026-10月度独立原文/);assert.match(f.root.innerHTML,/不计作周报提交/);
+  assert.equal(await f.loadPageData(),true);f.renderShell();assert.match(f.root.innerHTML,/2026-10月度独立原文/);
+  assert.match(f.root.innerHTML,/class="card monthly-summary-section" data-summary-month="2026-10"/);
+  assert.match(f.root.innerHTML,/0 份所选周期填报/);
   const first=f.calls.filter(call=>call.table==='@monthlySummaries').length;await f.loadData(['monthlySummaries']);assert.equal(f.calls.filter(call=>call.table==='@monthlySummaries').length,first);
   f.S.overviewUI.period='2026-11-02';assert.equal(await f.loadData(['monthlySummaries']),true);f.renderShell();assert.match(f.root.innerHTML,/2026-11月度独立原文/);assert.doesNotMatch(f.root.innerHTML,/2026-10月度独立原文/);
   f.setHandler(operation=>operation.table==='@monthlySummaries'?{error:{message:'匿名网络中断'}}:{data:f.tables[operation.table] || []});assert.equal(await f.loadData(['monthlySummaries'],true),false);f.renderShell();assert.match(f.root.innerHTML,/月度汇总读取失败/);assert.doesNotMatch(f.root.innerHTML,/2026-11月度独立原文/);
@@ -148,6 +151,23 @@ test('commercial extra grants load as read-only session data and an authorizatio
   assert.equal(f.S.profile.biz_line,'建筑结构设计');assert.match(f.root.innerHTML,/我的商业专业/);assert.match(f.root.innerHTML,/<option value="建筑结构设计"/);assert.match(f.root.innerHTML,/<option value="设计部"/);await f.App.pmLineSet('设计部');assert.equal(f.S.pmLine,'设计部');
   f.setHandler(operation=>operation.table==='@businessModuleGrants'?{error:{message:'匿名授权接口中断'}}:{data:f.tables[operation.table] || []});assert.equal(await f.loadData(['businessModuleGrants'],true),false);f.renderShell();assert.equal(f.S.pmLine,'设计部');assert.match(f.root.innerHTML,/附加专业授权读取失败，原草稿保留/);assert.match(f.root.innerHTML,/App.submitReport\(\)" disabled/);assert.deepEqual(Array.from(f.window.MonthlyPlans.aiContext()),[]);
   f.resetPageData();assert.deepEqual(Array.from(f.S.businessModuleGrants),[]);
+});
+
+test('a failed custom grant read retains the selected project profession and blocks submission',async()=>{
+  const f=fixture('pm'),pid='p3',line='匿名专业';
+  f.tables.projects.find(project=>project.id===pid).reporting_professions=[line];
+  f.tables['@projectReportingGrants']=[{user_id:'current',project_id:pid,line}];
+  f.S.view='form';f.S.pmProject=pid;
+  assert.equal(await f.loadPageData(),true);
+  await f.preparePM();f.renderShell();
+  await f.App.pmLineSet(line);
+  assert.equal(f.S.pmLine,line);
+  f.setHandler(operation=>operation.table==='@projectReportingGrants'?{error:{message:'匿名项目授权读取中断'}}:{data:f.tables[operation.table] || []});
+  assert.equal(await f.loadData(['projectReportingGrants'],true),false);
+  await f.preparePM();f.renderShell();
+  assert.equal(f.S.pmLine,line);
+  assert.match(f.root.innerHTML,/项目专业授权读取失败，原草稿保留/);
+  assert.match(f.root.innerHTML,/App.submitReport\(\)" disabled/);
 });
 
 test('a monthly summary arriving after logout cannot populate another account snapshot',async()=>{
@@ -238,7 +258,7 @@ test('logout clears table snapshots and late replies cannot restore the previous
 test('manual refresh fetches the visible page and invalidates other visited pages for later use', async () => {
   const f = fixture(); await f.loadData(Object.keys(f.dataSources)); f.calls.length = 0;
   f.S.view = 'members'; await f.loadPageData(true);
-  assert.deepEqual(f.calls.map(x => x.table).sort(), ['@businessModuleGrants', '@reportScopes', 'profiles', 'project_members', 'projects']);
+  assert.deepEqual(f.calls.map(x => x.table).sort(), ['@businessModuleGrants', '@projectReportingGrants', '@reportScopes', 'profiles', 'project_members', 'projects']);
   f.calls.length = 0; f.S.view = 'master'; await f.loadPageData();
   assert.deepEqual(f.calls.map(x => x.table).sort(), ['milestones', 'project_drawings', 'project_master', 'project_phases']);
 });

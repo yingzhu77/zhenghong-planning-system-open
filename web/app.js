@@ -36,12 +36,36 @@
      建筑结构设计／机电设计／精装设计／成本／招采），每个模块各填一条报告；
      普通住宅按管理员指定专业填报；原综合及统一范围保留原入口。 */
   var LINE_ALL = '综合';
+  function projectReportingLines(pid) {
+    var project=projOf(pid);
+    return project && project.reporting_professions || [];
+  }
+  function myProjectReportingLines(pid) {
+    if(dataState.projectReportingGrants && dataState.projectReportingGrants.error)return [];
+    return (S.projectReportingGrants || []).filter(function(grant){
+      return grant.user_id===S.uid && grant.project_id===pid && projectReportingLines(pid).includes(grant.line);
+    }).map(function(grant){return grant.line;});
+  }
+  function projectReportingGrantReadFailed(pid,line) {
+    return !!(dataState.projectReportingGrants && dataState.projectReportingGrants.error && projectReportingLines(pid).includes(line));
+  }
+  function canReportResidentialLine(line,pid) {
+    return DISCIPLINES.includes(line) && (S.profile || {}).discipline===line || myProjectReportingLines(pid).includes(line);
+  }
   function residentialReportLine(pid,period) {
+    var scope=reportScopeFor(pid,period);
+    if(projectReportingGrantReadFailed(pid,S.pmLine))return S.pmLine;
+    if((!scope || scope.reporting_mode==='professional') && myProjectReportingLines(pid).includes(S.pmLine))return S.pmLine;
+    return residentialDefaultLine(pid,period);
+  }
+  function residentialDefaultLine(pid,period) {
     var scope=reportScopeFor(pid,period), discipline=(S.profile || {}).discipline;
-    if(scope)return scope.reporting_mode==='professional'?(DISCIPLINES.indexOf(discipline)>=0?discipline:''):LINE_ALL;
+    if(scope && scope.reporting_mode!=='professional')return LINE_ALL;
+    var extras=myProjectReportingLines(pid);
+    if(scope)return DISCIPLINES.includes(discipline)?discipline:extras[0] || '';
     var legacy=(S.reports || []).some(function(r){return r.project_id===pid && (r.line || LINE_ALL)===LINE_ALL && r.author_id===S.uid
       && (window.PlanningWindows?window.PlanningWindows.samePeriod(r.period,period,r.submitted_at || r.created_at):r.period===period);});
-    return legacy || DISCIPLINES.indexOf(discipline)<0?LINE_ALL:discipline;
+    return legacy?LINE_ALL:DISCIPLINES.includes(discipline)?discipline:extras[0] || LINE_ALL;
   }
   var BIZ_LINES = ['土建工程（东地块）', '土建工程（西地块）', '机电工程', '精装工程', '幕墙设计+工程', '景观设计+工程',
     '开发', '建筑结构设计', '机电设计', '精装设计', '成本', '招采', '设计部'];
@@ -51,18 +75,27 @@
   function businessLinesForProjects(projects) {
     return BIZ_LINES.filter(function(line){return (projects || []).some(function(project){return businessLinesForProject(project.id).indexOf(line)>=0;});});
   }
+  function overviewBusinessLines(pid) {
+    return businessLinesForProject(pid).concat(projectReportingLines(pid));
+  }
+  function overviewBusinessChoices(projects) {
+    return businessLinesForProjects(projects).concat(Array.from(new Set(projects.flatMap(function(project){return projectReportingLines(project.id);}))));
+  }
   function myBizLines(pid) {
     pid=pid===undefined?S.pmProject:pid;
     var line = S.profile && S.profile.biz_line, lines=businessLinesForProject(pid),selected=lines.indexOf(line)>=0?[line]:[];
-    if(line==='*')return lines;
+    var custom=myProjectReportingLines(pid);
+    if(line==='*')return lines.concat(custom);
     var state=dataState && dataState.businessModuleGrants;
     if(pid==='hf' && S.profile && S.profile.role==='pm' && S.profile.status==='approved' && (!state || state.ready && !state.error)
       && myProjects().some(function(project){return project.id===pid && project.project_type==='com';})){
       (S.businessModuleGrants || []).forEach(function(grant){if(grant.user_id===S.uid && grant.project_id===pid && grant.line==='设计部' && !selected.includes(grant.line))selected.push(grant.line);});
     }
-    return selected;
+    return selected.concat(custom);
   }
   function selectedBizLine(pid) {
+    pid=pid===undefined?S.pmProject:pid;
+    if(projectReportingGrantReadFailed(pid,S.pmLine))return S.pmLine;
     var lines = myBizLines(pid);
     if(dataState && dataState.businessModuleGrants && dataState.businessModuleGrants.error && S.pmLine==='设计部' && (pid===undefined?S.pmProject:pid)==='hf')return S.pmLine;
     return lines.indexOf(S.pmLine) >= 0 ? S.pmLine : lines[0] || '';
@@ -494,7 +527,7 @@
 
   var S = {
     session: null, uid: null, profile: null,
-    projects: [], reportScopes: [], milestones: [], reports: [], members: [], orgList: [], pms: [], businessModuleGrants: [], versions: [],
+    projects: [], reportScopes: [], milestones: [], reports: [], members: [], orgList: [], pms: [], businessModuleGrants: [], projectReportingGrants: [], versions: [],
     reviews: [], leaderNotes: [], coordinationTasks: [], monthlyPlans: [], monthlySummaries: [], monthlyUnmatchedItems: [], briefDrafts: {},
     /* 项目主数据：master=设计数据与经营指标 / phases=分期与销售套数 / drawings=项目图纸 */
     master: [], phases: [], drawings: [],
@@ -1067,14 +1100,18 @@
     var allowed=!!(S.uid && S.profile && S.profile.status==='approved' && ['ops','president','pzo'].indexOf(S.profile.role)>=0),target=null;
     if(allowed && isManagerOverview()){
       var commercial=S.ptype==='com',projects=overviewProjects(commercial);
-      if(commercial && S.overviewUI.line)projects=projects.filter(function(project){return businessLinesForProject(project.id).indexOf(S.overviewUI.line)>=0;});
+      if(commercial && S.overviewUI.line)projects=projects.filter(function(project){return overviewBusinessLines(project.id).includes(S.overviewUI.line);});
       if(!commercial && S.overviewUI.project){var group=overviewProjectGroups().find(function(row){return row.name===S.overviewUI.project;});projects=group?group.projects:[];}
       if(projects.length)target={kind:'report',type:commercial?'com':'res',projectIds:projects.map(function(project){return String(project.id);}),
         period:window.PlanningWindows.periodStart(overviewPeriod()),line:commercial?S.overviewUI.line || '':S.overviewUI.discipline || '',section:'all'};
     }
     var readable=allowed?detailProjects():[];
     return {allowed:allowed,uid:S.uid,identity:JSON.stringify([S.uid,dataEpoch]),target:target,projects:readable,
-      projectProfessions:readable.map(function(project){return {project_id:String(project.id),lines:project.project_type==='com'?businessLinesForProject(project.id):DISCIPLINES.concat('__unassigned__')};})};
+      projectProfessions:readable.map(function(project){
+        var scope=S.reportScopes.find(function(row){return row.reporting_mode==='professional' && row.project_ids.includes(project.id);});
+        return {project_id:String(project.id),lines:project.project_type==='com'?overviewBusinessLines(project.id)
+          :DISCIPLINES.concat(projectReportingLines(scope?scope.anchor_project_id:project.id),'__unassigned__')};
+      })};
   }
   function reportReferenceContext() {
     return {key:JSON.stringify([S.uid,dataEpoch,S.pmProject,S.pmPeriod,S.pmLine,S.pmScopeId || '',S.view]),
@@ -1099,8 +1136,8 @@
   function planningAIContext() {
     var editable=!!(S.uid && S.profile && S.profile.role==='pm' && S.profile.status==='approved'
       && S.view==='form' && S.pmProject && canCapturePMDraft() && !S.submittingReport
-      && !S.pmLegacyReportConflict && (!professionalPMScope() || DISCIPLINES.indexOf(S.pmLine)>=0)
-      && (!isCom(S.pmProject) || canReportBizLine(S.pmLine)));
+      && !S.pmLegacyReportConflict && (!professionalPMScope() || canReportResidentialLine(S.pmLine,S.pmProject))
+      && !projectReportingGrantReadFailed(S.pmProject,S.pmLine) && (!isCom(S.pmProject) || canReportBizLine(S.pmLine)));
     var identity=JSON.stringify([S.uid || '',dataEpoch]);
     var monthly=[],monthlyError='',weeklyRaw;
     if(editable && window.MonthlyPlans && window.MonthlyPlans.aiContext){
@@ -1202,7 +1239,7 @@
     if(window.ProjectLibrary)window.ProjectLibrary.configure({S:S,esc:esc,request:reporterRequest,render:function(){renderShell(true);},toast:toast,
       readOnly:function(){return S.view==='managementLibrary' || S.profile && S.profile.role==='viewer';},
       projectId:function(){return S.view==='managementLibrary' && canReadManagement() && window.ManagementReader ? window.ManagementReader.projectId('managementLibrary') : S.view==='library' ? S.libraryProject : null;}});
-    if(window.MonthlyPlans)window.MonthlyPlans.configure({S:S,esc:esc,request:reporterRequest,render:function(){renderShell(true);},toast:toast,
+    if(window.MonthlyPlans)window.MonthlyPlans.configure({S:S,esc:esc,request:reporterRequest,render:function(){renderShell(true);},toast:toast,canUseResidentialLine:canReportResidentialLine,
       canUseBusinessLine:canReportBizLine,
       flush:snapDraft,saveFormDraft:saveDraft,richCopy:richCopy,richItem:richItem,richCollect:richCollect,loadData:loadData,
       weekWindow:reportWindow,completionFor:function(key,owner){return window.CompletionReview?window.CompletionReview.completionFor(key,owner):null;}});
@@ -1390,6 +1427,7 @@
      nothing here persists private business data across page loads or accounts. */
   var dataSources = {
     projects: ['projects', '项目', 'sort_order'],
+    projectReportingGrants: ['@projectReportingGrants', '项目自定义专业授权'],
     reportScopes: ['@reportScopes', '统一填报范围'],
     milestones: ['milestones', '节点基线', 'sort_order'],
     reports: ['reports', '填报记录', 'submitted_at', false],
@@ -1428,6 +1466,7 @@
     clearTimeout(draftAutosaveTimer);
     S.briefDrafts = {}; S.reviewRichDrafts = {}; S.formRich = {}; S.lineEdits = {};
     S.overviewUI = { project: '', line: '', discipline: '', open: {} };
+    S.reportingProfessionProject='';S.projectReportingGrants=[];
     S.followupRows = []; S.monthlyUnmatchedItems=[];S.meetingDraft = null; S.mlineDraft = {}; S.reporterArchiveTab = 'knowledge'; S.submittingReport = null;
     S.attachmentIds = []; S.completionQuery = null; S.completionMeta = {}; S.completionQueueIds = [];
   }
@@ -1440,7 +1479,7 @@
     if(S.profile.role==='viewer' || isManagementReadView(S.view))return [];
     var common = ['projects','reportScopes'];
     if (!isPlanningManager()) common = common.concat(['pms', 'reports']);
-    if(S.profile.role==='pm')common.push('businessModuleGrants');
+    if(S.profile.role==='pm')common.push('businessModuleGrants','projectReportingGrants');
     else if(isPzo())common.push('pms');
     var pages = {
       form: ['pms', 'reports', 'milestones', 'orgList', 'projectPeople', 'leaderNotes', 'reporterTasks', 'coordinationTasks', 'monthlyPlans', 'completions', 'reportAttachments'],
@@ -1459,7 +1498,7 @@
       presPzo: ['members', 'pms', 'milestones', 'reports', 'monthlyPlans', 'monthlySummaries', 'leaderNotes', 'reporterTasks', 'drawings', 'reportAttachments'],
       adminPlans: ['monthlyPlans'],
       master: ['milestones', 'master', 'phases', 'drawings'],
-      lineAdm: ['milestones'], members: ['members', 'pms', 'businessModuleGrants']
+      lineAdm: ['milestones'], members: ['members', 'pms', 'businessModuleGrants','projectReportingGrants']
     };
     var needed = current ? pages[current.v] || [] : ['reports'];
     if (S.profile.role==='ops' && ['pres','presCom','presPzo'].indexOf(current && current.v)>=0) needed=needed.concat(['reporterTasks']);
@@ -1511,6 +1550,7 @@
             result=S.profile && ['pm','ops'].includes(S.profile.role)?await reporterRequest('/api/commercial-module-grants'):{data:[]};
             if(result && !result.error && (!Array.isArray(result.data) || result.data.some(function(row){return !row || typeof row.user_id!=='string' || row.project_id!=='hf' || row.line!=='设计部';})))throw new Error('附加商业专业授权返回不完整，请刷新重试');
           }
+          else if(key==='projectReportingGrants')result=await reporterRequest('/api/project-reporting-grants');
           else if(key==='monthlySummaries'){
             if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(scope))throw new Error('查看月份无法确定，请重新选择周期');
             result=await reporterRequest('/api/monthly-summaries?month='+encodeURIComponent(scope));
@@ -1885,8 +1925,8 @@
 
   function planFormActions(cur, commercial) {
     var allowed = (!commercial || canReportBizLine(S.pmLine)) && !(dataState.reportScopes && dataState.reportScopes.error)
-      && !S.pmLegacyReportConflict && (!professionalPMScope() || DISCIPLINES.indexOf(S.pmLine)>=0)
-      && (!cur || !cur.author_id || cur.author_id===S.uid);
+      && !S.pmLegacyReportConflict && (!professionalPMScope() || canReportResidentialLine(S.pmLine,S.pmProject))
+      && !projectReportingGrantReadFailed(S.pmProject,S.pmLine) && (!cur || !cur.author_id || cur.author_id===S.uid);
     return '<footer class="plan-form-actions" aria-label="填报保存与提交">'
       + '<div class="plan-draft-note" id="planDraftStatus" role="status">本机草稿仅保存在当前浏览器；提交后才保存到服务器。</div>'
       + '<div class="plan-action-buttons"><button type="button" class="btn ghost" onclick="App.saveDraftNow()">保存本机草稿</button>'
@@ -1957,11 +1997,21 @@
     var odNum = myItems.filter(itemOverdue).length;
     var myItem = itemStat(cur);
     var projectLines=myBizLines(S.pmProject);
-    var myLnFixed = (S.profile && S.profile.biz_line && projectLines.indexOf(S.profile.biz_line) >= 0) ? S.profile.biz_line : '';
+    var myLnFixed = projectLines.length===1 ? projectLines[0] : '';
     var allTestLines = S.profile && S.profile.biz_line === '*';
     var lineSwitch = projectLines.map(function (l) { return '<option value="' + esc(l) + '"' + (S.pmLine === l ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('');
     var grantError=dataState.businessModuleGrants && dataState.businessModuleGrants.error;
-    var moduleHtml = !commercial ? '<span class="plan-context-label">住宅专业</span><b>'+esc(S.pmLine===LINE_ALL?'住宅综合':S.pmLine)+'</b>' : grantError && S.pmLine==='设计部'
+    var residentialChoices=myProjectReportingLines(pid);
+    if(S.pmReportScope && !professionalPMScope())residentialChoices=[];
+    if(!commercial && residentialChoices.length){
+      var primary=residentialDefaultLine(pid,S.pmPeriod);
+      if(primary && !residentialChoices.includes(primary))residentialChoices.unshift(primary);
+    }
+    var moduleHtml = projectReportingGrantReadFailed(pid,S.pmLine)
+      ? '<span class="plan-context-label">当前专业</span><b>'+esc(S.pmLine)+'</b><span class="muted" role="alert">项目专业授权读取失败，原草稿保留；请刷新后再提交。</span>'
+      : !commercial ? residentialChoices.length>1?'<label class="plan-context-label" for="planResLine">住宅专业</label><select id="planResLine" onchange="App.pmLineSet(this.value)">'+residentialChoices.map(function(line){
+      return '<option value="'+esc(line)+'"'+(S.pmLine===line?' selected':'')+'>'+esc(line===LINE_ALL?'住宅综合':line)+'</option>';
+    }).join('')+'</select>':'<span class="plan-context-label">住宅专业</span><b>'+esc(S.pmLine===LINE_ALL?'住宅综合':S.pmLine)+'</b>' : grantError && S.pmLine==='设计部'
       ? '<span class="plan-context-label">当前商业专业</span><b>'+esc(S.pmLine)+'</b><span class="muted" role="alert">附加专业授权读取失败，原草稿保留；请刷新后再提交。</span>'
       : allTestLines || projectLines.length>1 ? '<label class="plan-context-label" for="planBizLine">'+(allTestLines?'测试账号 · 可切换商业模块':'我的商业专业')+'</label><select id="planBizLine" onchange="App.pmLineSet(this.value)">' + lineSwitch + '</select>' : myLnFixed
       ? '<span class="plan-context-label">我的模块（固定 · 管理员指定）</span><b>' + esc(myLnFixed) + '</b>'
@@ -3300,6 +3350,7 @@
       if(!groups[line])groups[line]=[];
     });
     msOf(pid).forEach(function(m){if(m.discipline && !groups[m.discipline])groups[m.discipline]=[];});
+    projectReportingLines(pid).forEach(function(line){if(!groups[line])groups[line]=[];});
     return groups;
   }
   function schemePreviewUrl(url,pid) {
@@ -3368,7 +3419,7 @@
   function overviewFoldHint() { return '<span class="overview-fold-hint" aria-hidden="true"><span class="when-closed">展开</span><span class="when-open">收起</span></span>'; }
   function overviewFilterHtml(commercial) {
     var selected=commercial?S.overviewUI.line:S.overviewUI.project;
-    var choices=commercial?businessLinesForProjects(overviewProjects(true)).map(function(line){return {id:line,name:line};}):overviewProjectGroups().map(function(group){return {id:group.name,name:group.name};});
+    var choices=commercial?overviewBusinessChoices(overviewProjects(true)).map(function(line){return {id:line,name:line};}):overviewProjectGroups().map(function(group){return {id:group.name,name:group.name};});
     var selectedPeriod=window.PlanningWindows?window.PlanningWindows.periodStart(overviewPeriod()):overviewPeriod();
     return '<div class="overview-filter no-print"><label for="overviewPeriod">查看周期</label><select id="overviewPeriod" onchange="App.overviewPeriod(this.value)">'
       +overviewPeriods().map(function(period){return '<option value="'+esc(period.id)+'"'+(selectedPeriod===period.id?' selected':'')+'>'+esc(period.label)+'</option>';}).join('')+'</select></div>'
@@ -3383,7 +3434,7 @@
     groups.forEach(function(group){group.projects.forEach(function(project){ids.push(project.id);});});
     var lines=[];
     function add(line){if(line && line!=='综合' && line!=='综合 / 未指定专业' && line!=='__unassigned__' && lines.indexOf(line)<0)lines.push(line);}
-    ids.forEach(function(pid){Object.keys(overviewResidentialGroups(pid,S.reports.filter(function(r){return r.project_id===pid;}))).forEach(add);});
+    ids.forEach(function(pid){Object.keys(overviewResidentialGroups(pid,S.reports.filter(function(r){return r.project_id===pid;}))).concat(projectReportingLines(pid)).forEach(add);});
     (S.monthlyPlans || []).forEach(function(plan){if(ids.indexOf(plan.project_id)>=0)add(plan.line);});
     lines.sort(function(a,b){var ai=DISCIPLINES.indexOf(a),bi=DISCIPLINES.indexOf(b);return (ai<0?999:ai)-(bi<0?999:bi) || a.localeCompare(b,'zh-CN');});
     return lines.concat('__unassigned__');
@@ -3398,7 +3449,7 @@
   function overviewProjectHtml(p,rows,commercial,initial) {
     var content='',knownLines=[];
     if(commercial){
-      knownLines=businessLinesForProject(p.id);
+      knownLines=overviewBusinessLines(p.id);
       var firstLine=knownLines.filter(function(line){return rows.some(function(r){return r.line===line;});})[0] || knownLines[0];
       content=knownLines.filter(function(line){return !S.overviewUI.line || S.overviewUI.line===line;}).map(function(line){var reports=rows.filter(function(r){return r.line===line;});
         return '<details class="overview-module'+(reports.length?'':' is-empty')+'" data-module="'+esc(line)+'"'+overviewFoldAttrs('profession',p.id,line,line===firstLine || S.overviewUI.line===line)+'><summary><span class="overview-profession-name">'+esc(line)+'</span><span class="overview-report-count">'+reports.length+' 份填报</span>'+overviewFoldHint()+'</summary>'
@@ -3429,7 +3480,7 @@
   }
   function viewPlanOverview(commercial) {
     var list=overviewProjects(commercial),reports=overviewReports(commercial);
-    if(commercial && S.overviewUI.line)list=list.filter(function(project){return businessLinesForProject(project.id).indexOf(S.overviewUI.line)>=0;});
+    if(commercial && S.overviewUI.line)list=list.filter(function(project){return overviewBusinessLines(project.id).includes(S.overviewUI.line);});
     if(!commercial && S.overviewUI.project && !overviewProjectGroups().some(function(g){return g.name===S.overviewUI.project;}))S.overviewUI.project='';
     if(!commercial && S.overviewUI.project){var selectedGroup=overviewProjectGroups().filter(function(g){return g.name===S.overviewUI.project;})[0];list=selectedGroup?selectedGroup.projects:[];}
     var visibleReports=reports.filter(function(r){return list.some(function(p){return p.id===r.project_id;}) && (!commercial || !S.overviewUI.line || r.line===S.overviewUI.line);});
@@ -4045,7 +4096,46 @@
       + '<div class="card"><h3>说明</h3><div class="muted">协调对象来自公司组织通讯录，可精确到决策层 / 管理层 / 专业条线。总裁端只需要关注落在「决策层」的事项。</div></div>';
   }
 
+  function reportingSettingsProjects() {
+    return S.projects.filter(function(project){
+      var scope=S.reportScopes.find(function(row){return (row.project_ids || []).includes(project.id);});
+      return project.active!==false && (!scope || scope.anchor_project_id===project.id && scope.reporting_mode==='professional');
+    });
+  }
+  function reportingProjectName(project) {
+    var scope=S.reportScopes.find(function(row){return row.anchor_project_id===project.id && row.reporting_mode==='professional';});
+    return scope?scope.name+'（统一专业填报）':project.name;
+  }
+  function viewReportingProfessions() {
+    var projects=reportingSettingsProjects(),current=projects.find(function(p){return p.id===S.reportingProfessionProject;});
+    var lines=current?projectReportingLines(current.id):[];
+    return '<section class="card"><h2>汇报专业设置</h2>'
+      +'<p class="muted">为项目新增自定义专业。新增后在「成员与权限」分配给已有项目权限的提报人。</p>'
+      +'<form class="reporting-profession-form" onsubmit="event.preventDefault();App.addReportingProfession(this)">'
+      +'<label for="reportingProfessionProject">项目</label><select id="reportingProfessionProject" name="project_id" required onchange="App.reportingProfessionProject(this.value)">'
+      +'<option value="">请选择项目</option>'+projects.map(function(p){return '<option value="'+esc(p.id)+'"'+(p===current?' selected':'')+'>'+esc(reportingProjectName(p))+'</option>';}).join('')+'</select>'
+      +(current?'<label for="reportingProfessionName">新专业名称</label><div class="reporting-profession-actions">'
+        +'<input id="reportingProfessionName" name="line" maxlength="40" required placeholder="填写专业名称">'
+        +'<button type="submit" class="btn primary">新增专业</button></div>':'')+'</form>'
+      +(current?'<h3>已新增的专业</h3>'+(lines.length?'<ul class="overview-list">'+lines.map(function(line){return '<li>'+esc(line)+'</li>';}).join('')+'</ul>':'<p class="muted">此项目暂无自定义专业。</p>'):'')+'</section>';
+  }
+  function memberReportingProfessions(member,projects) {
+    if(member.role!=='pm' || member.status!=='approved')return '';
+    var granted=(S.projectReportingGrants || []).filter(function(row){return row.user_id===member.user_id;});
+    var assigned=(S.pms || []).filter(function(row){return row.user_id===member.user_id;}).map(function(row){return row.project_id;});
+    var options=projects.flatMap(function(project){
+      var scope=S.reportScopes.find(function(row){return row.anchor_project_id===project.id;});
+      if(!(scope?scope.project_ids:[project.id]).every(function(pid){return assigned.includes(pid);}))return [];
+      return project.reporting_professions.filter(function(line){return !granted.some(function(row){return row.project_id===project.id && row.line===line;});})
+        .map(function(line){return '<option value="'+esc(JSON.stringify([project.id,line]))+'">'+esc(reportingProjectName(project)+' · '+line)+'</option>';});
+    });
+    var saved=granted.map(function(row){return '<div class="muted">'+esc(projName(row.project_id)+' · '+row.line)+'</div>';}).join('');
+    return saved+(options.length?'<form class="reporting-profession-actions" data-member-id="'+esc(member.user_id)+'" onsubmit="event.preventDefault();App.grantReportingProfession(this)">'
+      +'<select name="project_profession" aria-label="为'+esc(member.name || '提报人')+'分配项目专业" required><option value="">选择项目专业</option>'+options.join('')+'</select>'
+      +'<button class="btn sm" type="submit">分配专业</button></form>':'');
+  }
   function viewMembers() {
+    var reportingProjects=reportingSettingsProjects().filter(function(project){return project.reporting_professions && project.reporting_professions.length;});
     var rows = S.members.map(function (m) {
       var mine = S.pms.filter(function (x) { return x.user_id === m.user_id; }).map(function (x) { return x.project_id; });
       if (m.project_id && mine.indexOf(m.project_id) < 0) mine.push(m.project_id);
@@ -4067,6 +4157,7 @@
         : '<span class="muted">—</span>';
       var extras=(S.businessModuleGrants || []).filter(function(grant){return grant.user_id===m.user_id && grant.project_id==='hf' && grant.line==='设计部' && mine.includes(grant.project_id);});
       if(extras.length)lineCell+='<div class="muted">附加专业：'+extras.map(function(grant){return esc(grant.line)+'（'+esc(projName(grant.project_id))+'）';}).join('、')+'</div>';
+      lineCell+=memberReportingProfessions(m,reportingProjects);
       /* 专业条线（组织口径）：指定后该成员在「我的条线」只看本专业的节点 */
       var discCell = m.role === 'pm'
         ? '<select onchange="App.memberSet(\'' + esc(m.user_id) + '\',\'discipline\',this.value)">'
@@ -4096,7 +4187,7 @@
       + '<b>专业条线</b>：指定后该成员在工作台只看本专业的节点；未指定时，按原项目范围查看全部节点。</div>'
       + '<div class="tablewrap"><table><thead><tr><th style="width:12%">姓名</th><th style="width:11%">账号角色</th><th style="width:22%">负责项目</th>'
       + '<th style="width:13%">专业条线</th>'
-      + '<th style="width:15%">填报模块（商业项目）</th>'
+      + '<th style="width:15%">填报模块 / 项目专业</th>'
       + '<th>管理查看权限</th>'
       + '<th style="width:11%">审核状态</th><th style="width:12%">加入时间</th></tr></thead>'
       + '<tbody>' + (rows || '<tr><td colspan="8" class="empty">暂无成员。</td></tr>') + '</tbody></table></div></div>';
@@ -4174,7 +4265,10 @@
       var analysisIndex=items.findIndex(function(item){return item.group==='analysis';});
       items.splice(analysisIndex<0?items.length:analysisIndex,0,{k:'projectPlanStats',v:'projectPlanStats',label:'项目计划统计',title:'项目计划统计',group:'analysis'});
     }
-    if(role==='ops')items.splice(items.findIndex(function(item){return item.k==='presCom';})+1,0,{k:'adminPlans',v:'adminPlans',label:'批量导入计划',title:'代填与批量导入计划',group:'overview'});
+    if(role==='ops'){
+      items.splice(items.findIndex(function(item){return item.k==='presCom';})+1,0,{k:'adminPlans',v:'adminPlans',label:'批量导入计划',title:'代填与批量导入计划',group:'overview'});
+      items.push({k:'reportingProfessions',v:'reportingProfessions',label:'汇报专业设置',group:'settings'});
+    }
     items.push({k:'library',v:'library',label:'资料共享',group:'projects'});
     if(role==='pm' && canReadManagement())items=items.concat(managementNavItems());
     return items;
@@ -4270,6 +4364,7 @@
       else if(view==='meetings')body=window.ReporterTasks?window.ReporterTasks.renderAdmin():'<div class="card empty">正在加载会议事项…</div>';
       else if(view==='completionStats')body=window.CompletionStatistics?window.CompletionStatistics.pageHtml():'<div class="card empty">正在加载员工统计…</div>';
       else if(view==='projectPlanStats')body=window.ProjectPlanStatistics?window.ProjectPlanStatistics.pageHtml():'<div class="card empty">正在加载项目计划统计…</div>';
+      else if(view==='reportingProfessions')body=viewReportingProfessions();
       else if(view==='lineAdm')body=viewLineAdmin();else if(view==='library')body=viewProjectLibrary();else if(view==='master')body=viewMaster();else body=viewMembers();
     }else{
       if(view==='center')body=viewPMCenter();else if(view==='coordination')body=viewCoordinationPage();else if(view==='history')body=viewPMHistory()+(window.CompletionReview?window.CompletionReview.renderQueue({project_id:S.pmProject}):'');
@@ -4324,7 +4419,7 @@
     overviewFilter:function(value){
       if(!isManagerOverview())return;
       var commercial=S.ptype==='com';
-      if(value && (commercial?businessLinesForProjects(overviewProjects(true)).indexOf(value)<0:!overviewProjectGroups().some(function(g){return g.name===value;})))return;
+      if(value && (commercial?!overviewBusinessChoices(overviewProjects(true)).includes(value):!overviewProjectGroups().some(function(g){return g.name===value;})))return;
       captureBriefDrafts();
       S.overviewUI[commercial?'line':'project']=value;
       if(!commercial)S.overviewUI.discipline='';
@@ -4391,7 +4486,11 @@
       if (attachmentBusy()) return;
       if(S.profile.role!=='pm' || !myProjects().some(function(p){return p.id===pid;}))return;
       if(isCom(pid) && line!==undefined && !canReportBizLine(line,pid))return toast('该商业模块尚未授权，请联系管理员分配。','err');
-      return changePMScope(function(){S.pmProject=pid;if(period)S.pmPeriod=String(period);if(isCom(pid) && line!==undefined)S.pmLine=line;S.view='form';});
+      if(!isCom(pid) && projectReportingLines(pid).includes(line) && !canReportResidentialLine(line,pid))
+        return toast('该项目专业尚未授权，请联系管理员分配。','err');
+      return changePMScope(function(){S.pmProject=pid;if(period)S.pmPeriod=String(period);
+        if(line!==undefined && (isCom(pid) || line===residentialDefaultLine(pid,S.pmPeriod) || myProjectReportingLines(pid).includes(line)))S.pmLine=line;
+        S.view='form';});
     },
     showReportHistory: async function (id) {
       var requestToken={};S.reportHistoryRequest=requestToken;
@@ -4739,8 +4838,12 @@
     /* ---- 商业项目：条线切换与计划事项增删 ---- */
     pmLineSet: async function (v) {
       if (attachmentBusy()) return;
-      if (!S.profile || S.profile.role !== 'pm' || !isCom(S.pmProject)
-        || !myProjects().some(function(p){return p.id===S.pmProject;}) || !canReportBizLine(v,S.pmProject)) return toast('当前账号不能切换该商业模块，请联系管理员。', 'err');
+      var pid=S.pmProject,commercial=isCom(pid);
+      if (!S.profile || S.profile.role !== 'pm' || !myProjects().some(function(p){return p.id===pid;})
+        || (commercial?!canReportBizLine(v,pid):S.pmReportScope && !professionalPMScope()
+          || v!==residentialDefaultLine(pid,S.pmPeriod) && !canReportResidentialLine(v,pid))) {
+        return toast('当前账号未获该项目专业的填报权限。','err');
+      }
       if (S.pmLine === v) return;
       return changePMScope(function(){S.pmLine=v;});
     },
@@ -5223,8 +5326,9 @@
       function sameSession(){return S.uid===saveUid && S.session===saveSession && dataEpoch===saveEpoch;}
       snapDraft();
       var com = isCom(pid), prior = S.pmReport || {};
+      if(projectReportingGrantReadFailed(pid,S.pmLine))return toast('项目专业授权读取失败，请刷新后重试；本机草稿保留。','err');
       if(dataState.reportScopes && dataState.reportScopes.error)return toast('统一填报范围读取失败，请刷新后重试；本机草稿保留。','err');
-      if(professionalPMScope() && DISCIPLINES.indexOf(S.pmLine)<0)return toast('当前账号尚未分配住宅专业，请联系管理员；原草稿保留。','err');
+      if(professionalPMScope() && !canReportResidentialLine(S.pmLine,S.pmProject))return toast('当前账号尚未分配住宅专业，请联系管理员；原草稿保留。','err');
       if(S.pmLegacyReportConflict){saveDraft(true);return toast('本专业该周期已有原项目报告，请核对原历史记录；当前草稿独立保留，不自动覆盖。','err');}
       if (com && !canReportBizLine(S.pmLine)) { saveDraft(true); return toast('商业模块尚未授权，请联系管理员分配；现有本机草稿保留。', 'err'); }
       if(window.MonthlyPlans && window.MonthlyPlans.needsRefresh())return toast('月度计划已被确认，请先重新读取确认版，再提交本周反馈。','err');
@@ -5329,6 +5433,37 @@
       toast('已保存'); await loadData(['members'], true); if(sameMemberSession())renderShell();
     },
 
+    reportingProfessionProject:function(pid){
+      if(S.view!=='reportingProfessions' || S.profile?.role!=='ops')return;
+      S.reportingProfessionProject=pid;renderShell(true);
+    },
+    addReportingProfession:async function(form){
+      if(S.view!=='reportingProfessions' || S.profile?.role!=='ops' || !form.elements.line)return;
+      var project_id=form.elements.project_id.value,line=form.elements.line.value,epoch=dataEpoch,button=form.querySelector('button');
+      if(button.disabled)return;
+      button.disabled=true;
+      var result=await reporterRequest('/api/project-reporting-professions',{project_id:project_id,line:line});
+      if(epoch!==dataEpoch)return;
+      button.disabled=false;
+      if(result.error)return toast(result.error.message,'err');
+      toast('已新增专业，可在成员与权限中分配。');
+      await loadData(['projects'],true);
+      if(epoch===dataEpoch && S.view==='reportingProfessions' && S.reportingProfessionProject===project_id)renderShell(true);
+    },
+    grantReportingProfession:async function(form){
+      if(S.view!=='members' || S.profile?.role!=='ops')return;
+      var value=form.elements.project_profession.value,epoch=dataEpoch,button=form.querySelector('button');
+      if(!value || button.disabled)return;
+      var choice=JSON.parse(value);
+      button.disabled=true;
+      var result=await reporterRequest('/api/project-reporting-grants',{project_id:choice[0],line:choice[1],user_id:form.dataset.memberId});
+      if(epoch!==dataEpoch)return;
+      button.disabled=false;
+      if(result.error)return toast(result.error.message,'err');
+      toast('已分配项目专业。');
+      await loadData(['projectReportingGrants'],true);
+      if(epoch===dataEpoch && S.view==='members')renderShell(true);
+    },
     memberAssign: async function (uid, pid) {
       if (!S.profile || S.profile.role !== 'ops') return toast('无权限：成员管理仅限管理员', 'err');
       if (!pid) return;
@@ -5345,7 +5480,7 @@
       if (r.error) return toast('移除失败：' + (r.error.message || ''), 'err');
       var m = S.members.filter(function (x) { return x.user_id === uid; })[0];
       if (m && m.project_id === pid) await db.from('profiles').update({ project_id: null }).eq('user_id', uid);
-      toast('已移除'); await loadData(['members', 'pms'], true); renderShell();
+      toast('已移除'); await loadData(['members','pms','projectReportingGrants'], true); renderShell();
     },
 
     jumpProject: async function (pid) {
