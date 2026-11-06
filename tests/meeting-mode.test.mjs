@@ -273,6 +273,29 @@ test('commercial and historical selection follow, failed reads retry and delayed
   await expect(page.getByLabel('会议模式')).toHaveValue('weekly');
   await expect(display.locator('#meeting-screen')).toContainText('机房设备安装');
   await expect(display.locator('.meeting-topic')).toContainText('机电工程');
+  const overview=page.locator('table[data-section="plans"]').filter({hasText:'机房设备安装'});
+  const projection=display.locator('[data-projection-section="plans"] .meeting-plan-table').filter({hasText:'机房设备安装'});
+  for(const table of [overview,projection]){
+    await expect(table.locator('td[rowspan="2"]')).toHaveText('机电工程');
+    await expect(table.locator('tbody tr')).toHaveCount(2);
+    await expect(table.locator('tbody tr').nth(0)).toContainText('保留的原进展');
+    await expect(table.locator('tbody tr').nth(1)).toContainText('室外管网联调');
+    await expect(table.locator('tbody tr').nth(1)).toContainText('原进展：等待材料');
+  }
+  mkdirSync(artifacts,{recursive:true});
+  await overview.screenshot({path:path.join(artifacts,'module-groups-overview.png')});
+  await projection.screenshot({path:path.join(artifacts,'module-groups-projection.png')});
+  await page.setViewportSize({width:390,height:844});
+  await display.setViewportSize({width:390,height:844});
+  for(const table of [overview,projection]){
+    await expect(table.locator('td[rowspan="2"]')).toBeVisible();
+    await expect(table.locator('tbody tr').nth(1)).toContainText('室外管网联调');
+    assert.ok(await table.evaluate(node=>node.scrollWidth<=node.clientWidth+1));
+  }
+  await overview.screenshot({path:path.join(artifacts,'module-groups-overview-narrow.png')});
+  await projection.screenshot({path:path.join(artifacts,'module-groups-projection-narrow.png')});
+  await page.setViewportSize({width:1560,height:1050});
+  await display.setViewportSize({width:1560,height:1050});
   const old=new Date(f.runtime.scope.week+'T12:00:00Z');old.setUTCDate(old.getUTCDate()-7);const previous=old.toISOString().slice(0,10);
   await page.locator('#overviewPeriod').selectOption(previous);await expect(display.locator('#meeting-screen')).toContainText('设备安装完成50%');
   await expect(display.locator('#meeting-screen')).not.toContainText('保留的原进展');

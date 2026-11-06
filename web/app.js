@@ -3156,12 +3156,19 @@
     var valid=Array.isArray(rows)?rows.filter(function(row){return row && typeof row==='object' && !Array.isArray(row);}):[];
     return valid.length?'<ul class="overview-list">'+valid.map(function(row){return '<li>'+renderRow(row)+'</li>';}).join('')+'</ul>':overviewEmpty(empty);
   }
-  function overviewTable(section, columns, rows, empty, widths) {
+  function overviewTable(section, columns, rows, empty, widths, moduleSpans) {
     var sizing=widths?columns.map(function(column,index){return '--plan-col-'+column[1]+':'+widths[index];}).join(';'):'';
     return '<div class="overview-table-scroll'+(widths?' overview-plan-adaptive':'')+'"><table class="overview-data-table" data-section="'+section+'"'+(sizing?' style="'+esc(sizing)+'"':'')+'><colgroup>'
       +columns.map(function(c){return '<col class="overview-col-'+c[1]+'">';}).join('')+'</colgroup><thead><tr>'
       +columns.map(function(c){return '<th scope="col" class="overview-head-'+c[1]+'">'+esc(c[0])+'</th>';}).join('')+'</tr></thead><tbody>'
-      +(rows.length?rows.map(function(row){return '<tr>'+columns.map(function(c,i){return '<td class="overview-cell-'+c[1]+'" data-label="'+esc(c[0])+'">'+row[i]+'</td>';}).join('')+'</tr>';}).join('')
+      +(rows.length?rows.map(function(row,index){
+        var span=moduleSpans && moduleSpans[index];
+        return (span===0?'<tr class="overview-module-continuation">':'<tr>')+columns.map(function(c,i){
+          if(c[1]==='module' && span===0)return '';
+          var rowspan=c[1]==='module' && span>1?' rowspan="'+span+'"':'';
+          return '<td class="overview-cell-'+c[1]+'" data-label="'+esc(c[0])+'"'+rowspan+'>'+row[i]+'</td>';
+        }).join('')+'</tr>';
+      }).join('')
         :'<tr><td class="overview-cell-empty" colspan="'+columns.length+'">'+overviewEmpty(empty)+'</td></tr>')+'</tbody></table></div>';
   }
   function overviewRowSource(r,show) { return show?'<span class="overview-meta">填报人：'+esc(r.author_name || '未记录填报人')+' · '+esc(r.line || LINE_ALL)+'</span>':''; }
@@ -3185,16 +3192,19 @@
     }
     if(selectedScope && !selectedScope.scope_id)reports.sort(function(a,b){return selectedScope.projectIds.indexOf(a.project_id)-selectedScope.projectIds.indexOf(b.project_id);});
     var withSource=commercial===false;
-    var rows=[],layoutItems=[];
-    reports.forEach(function(r){itemsOf(r).filter(function(item){return item && typeof item==='object' && !Array.isArray(item);}).forEach(function(item){
+    var rows=[],layoutItems=[],modules=[],sources=[];
+    reports.forEach(function(r,reportIndex){itemsOf(r).filter(function(item){return item && typeof item==='object' && !Array.isArray(item);}).forEach(function(item){
+      var module=richItem(item,'mod',r.line || LINE_ALL);
+      modules.push(module);
+      sources.push(JSON.stringify([reportIndex,item.project_id || (r.report_scope_id?'':r.project_id)]));
       layoutItems.push({source:item.project_id?projName(item.project_id):projName(r.project_id),mod:item.mod || r.line || LINE_ALL,name:item.name || '',due:sd(item.due),progress:(item.prog || '')+(item.blocker?' '+item.blocker:'')});
-      rows.push((withSource?[overviewActualSource(r,item)]:[]).concat([String(rows.length+1),richItem(item,'mod',r.line || LINE_ALL),richItem(item,'name','未命名计划事项')+overviewRowSource(r,reports.length>1),
+      rows.push((withSource?[overviewActualSource(r,item)]:[]).concat([String(rows.length+1),module,richItem(item,'name','未命名计划事项')+overviewRowSource(r,reports.length>1),
         esc(sd(item.due)),(item.prog?richItem(item,'prog'):r._monthly_preview?'<span class="overview-empty" title="月计划已确认，本周尚未提交">本周未提交</span>':overviewEmpty('未填写'))+(item.blocker?'<div class="plan-blocker"><b>遇到卡点：</b>'+richItem(item,'blocker')+'</div>':'')]));
     });});
     var widths=window.MonthlySummaries && window.MonthlySummaries.columnWidths?window.MonthlySummaries.columnWidths(layoutItems,{sequence:true,source:withSource}):null;
     if(widths && withSource)widths=[widths[1],widths[0]].concat(widths.slice(2));
     return overviewTable('plans',(withSource?[['实际项目／分期','source']]:[]).concat([['序号','seq'],['模块或类别','module'],['事项内容','content'],['完成时间','date'],['完成情况及本周计划','progress']]),
-      rows,'暂无当月计划',widths);
+      rows,'暂无当月计划',widths,window.MonthlySummaries && window.MonthlySummaries.moduleRowSpans(modules,sources));
   }
   function overviewCoordHtml(reports,_pid,_line,commercial) {
     var withSource=commercial===false;

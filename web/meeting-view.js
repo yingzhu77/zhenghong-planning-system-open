@@ -92,7 +92,16 @@
   }
   function rich(row,key,fallback){return global.ZHRichText.field(row,key,fallback || '');}
   function projectName(model,pid){var project=model.projects.find(function(p){return p.id===pid;});return project?project.name:pid;}
-  function table(labels,rows,source,items){return rows.length?'<div class="meeting-table-scroll"><table'+(source?' class="meeting-plan-table"><caption>'+source+'</caption>':'>')+(items && global.MonthlySummaries?global.MonthlySummaries.contentColumns(items):'')+'<thead><tr>'+labels.map(function(label){return '<th scope="col">'+esc(label)+'</th>';}).join('')+'</tr></thead><tbody>'+rows.map(function(row){return '<tr>'+row.map(function(cell,i){return '<td data-label="'+esc(labels[i])+'">'+cell+'</td>';}).join('')+'</tr>';}).join('')+'</tbody></table></div>':'<p class="meeting-empty">所选范围暂无记录。</p>';}
+  function table(labels,rows,source,items){
+    if(!rows.length)return '<p class="meeting-empty">所选范围暂无记录。</p>';
+    var summaries=items && global.MonthlySummaries,spans=summaries?summaries.moduleRowSpans(rows.map(function(row){return row[0];})):[];
+    return '<div class="meeting-table-scroll"><table'+(source?' class="meeting-plan-table"><caption>'+source+'</caption>':'>')
+      +(summaries?summaries.contentColumns(items):'')+'<thead><tr>'+labels.map(function(label){return '<th scope="col">'+esc(label)+'</th>';}).join('')
+      +'</tr></thead><tbody>'+rows.map(function(row,index){return '<tr>'+row.map(function(cell,i){
+        var span=i===0?spans[index]:undefined;
+        return span===0?'':'<td data-label="'+esc(labels[i])+'"'+(span>1?' rowspan="'+span+'"':'')+'>'+cell+'</td>';
+      }).join('')+'</tr>';}).join('')+'</tbody></table></div>';
+  }
   function section(key,title,content,selection){return selection.section!=='all' && selection.section!==key?'':'<section class="meeting-section" data-projection-section="'+key+'"><h2>'+esc(title)+'</h2>'+content+'</section>';}
   function fileLink(id,name){return '<a href="/api/report-attachments/'+id+'" target="_blank" rel="noopener noreferrer">'+esc(name)+'</a>';}
   function html(model){
@@ -144,7 +153,8 @@
       var planGroups=[];
       (Array.isArray(biz.items)?biz.items:[]).forEach(function(row){
         var source=sourceFor(row)+(report._monthly_preview?'<small>已确认月计划 · 本周尚未提交</small>':''),group=planGroups[planGroups.length-1];
-        if(!group || group.source!==source){group={source:source,rows:[],items:[]};planGroups.push(group);}
+        var projectId=row.project_id || (report.report_scope_id?'':report.project_id);
+        if(!group || group.source!==source || group.projectId!==projectId){group={source:source,projectId:projectId,rows:[],items:[]};planGroups.push(group);}
         group.items.push({mod:row.mod,name:row.name,due:row.due,progress:row.prog});
         group.rows.push([rich(row,'mod'),rich(row,'name'),esc(row.due || '未设置'),rich(row,'prog','未填写')+(row.blocker?'<p>遇到卡点：'+rich(row,'blocker')+'</p>':'')+(global.MonthlySummaries?global.MonthlySummaries.attentionHtml(row,{referenceDate:selectedStart}):'')]);
       });
@@ -175,7 +185,8 @@
         var items=Array.isArray(plan.items)?plan.items:[],groups=[];
         items.forEach(function(item,index){
           var source=esc(item.project_id?projectName(model,item.project_id):names)+'<small>'+esc(plan.owner_name || plan.confirmed_name || '未记录提报人')+' · '+esc(plan.line || '综合')+' · 已确认</small>',group=groups[groups.length-1];
-          if(!group || group.source!==source){group={source:source,rows:[],items:[]};groups.push(group);}
+          var projectId=item.project_id || (plan.report_scope_id?'':plan.project_id);
+          if(!group || group.source!==source || group.projectId!==projectId){group={source:source,projectId:projectId,rows:[],items:[]};groups.push(group);}
           group.items.push({mod:item.mod,name:item.name,due:item.due,progress:item.prog});
           group.rows.push([rich(plan,'items.'+index+'.mod',item.mod),rich(plan,'items.'+index+'.name',item.name),esc(item.due || '未设置'),(item.prog?rich(plan,'items.'+index+'.prog'):'<span title="尚未填报进展" aria-label="尚未填报进展">—</span>')+(global.MonthlySummaries?global.MonthlySummaries.attentionHtml(item,{referenceDate:selectedMonths.plan+'-01'}):'')]);
         });

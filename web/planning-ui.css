@@ -570,6 +570,8 @@ h2{font-size:20px}h3{font-size:16px}h4{font-size:14px}
 @media(max-width:680px){.planning-ai-entry{justify-content:space-between}.planning-ai-entry .btn{min-height:44px}}
 @media print{.planning-ai-entry{display:none!important}}
 
+.planning-shell .overview-plan-adaptive .overview-data-table td.overview-cell-module[rowspan],
+.monthly-summary-table td[data-label="模块"][rowspan]{background:#d0e0f1}
 @media screen and (max-width:700px){
   .planning-shell .overview-plan-adaptive{border:0;background:transparent;overflow:visible}
   .planning-shell .overview-plan-adaptive .overview-data-table{display:block;min-width:0;max-width:100%;background:transparent}
@@ -580,6 +582,8 @@ h2{font-size:20px}h3{font-size:16px}h4{font-size:14px}
   .planning-shell .overview-plan-adaptive .overview-data-table tbody tr:nth-child(n)>td{background:transparent}
   .overview-plan-adaptive .overview-cell-source,.overview-plan-adaptive .overview-cell-module,.overview-plan-adaptive .overview-cell-content,.overview-plan-adaptive .overview-cell-progress,.overview-plan-adaptive .overview-cell-empty{grid-column:1/-1}
   .overview-plan-adaptive td[data-label]::before{content:attr(data-label);display:block;margin-bottom:4px;font-size:12px;font-weight:600;color:#526985}
+  .overview-plan-adaptive tbody tr:has(+ .overview-module-continuation){margin-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0}
+  .overview-plan-adaptive tbody .overview-module-continuation{border-top:0;border-top-left-radius:0;border-top-right-radius:0}
 }
 
 /* Imported monthly summaries: compact metadata, readable numbered narratives. */

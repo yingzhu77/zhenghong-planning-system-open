@@ -2,6 +2,21 @@
 (function(global){
   'use strict';
   function esc(value){return String(value==null?'':value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  // A zero marks a cell covered by the first row of a consecutive module.
+  // Compare display markup so that distinct rich-text emphasis is retained.
+  function moduleRowSpans(modules,sources){
+    var spans=[],start=0;
+    modules.forEach(function(module,index){
+      if(index && module.trim() && module===modules[start] && (!sources || sources[index]===sources[start])){
+        spans[start]++;
+        spans.push(0);
+      }else{
+        start=index;
+        spans.push(1);
+      }
+    });
+    return spans;
+  }
   function plainLines(value){return String(value).split('\n').map(function(line){return line.trim().replace(/ +/g,' ');}).filter(Boolean).map(esc).join('<br>');}
   // Workbook spaces are layout, not table columns. Recognize explicit list
   // markers only outside parentheses; dates, decimals and building numbers
@@ -74,10 +89,15 @@
     return '<div class="monthly-summary-groups">'+selected.map(function(summary){
       var scope=summary.report_scope_id?(summary.scope_project_ids || []).map(projectName).join('、'):projectName(summary.project_id);
       var caption=esc(scope)+' · '+esc(summary.month)+' · '+esc(summary.line)+' · '+esc(summary.owner_name || '未记录提报人');
-      return '<div class="tablewrap meeting-table-scroll monthly-summary-group" data-monthly-summary-id="'+esc(summary.id)+'"><table class="monthly-summary-table '+(options.projection?'meeting-plan-table':'overview-plan-table')+'"><caption>'+caption+'</caption>'+contentColumns(summary.items)+'<thead><tr>'+['模块','事项','完成时间','月度完成情况'].map(function(label){return '<th scope="col">'+label+'</th>';}).join('')+'</tr></thead><tbody>'+(summary.items || []).map(function(item){
-        return '<tr data-summary-source-id="'+esc(item.source_id)+'">'+[item.mod,item.name,item.due || '未设置',item.progress || '未填写'].map(function(value,index){return '<td data-label="'+['模块','事项','完成时间','月度完成情况'][index]+'">'+(index===1 || index===3?narrative(value):esc(value))+(index===3 && options.projection?attentionHtml(item,options):'')+'</td>';}).join('')+'</tr>';
+      var items=summary.items || [],modules=items.map(function(item){return esc(item.mod);}),spans=moduleRowSpans(modules);
+      var labels=['模块','事项','完成时间','月度完成情况'];
+      return '<div class="tablewrap meeting-table-scroll monthly-summary-group" data-monthly-summary-id="'+esc(summary.id)+'"><table class="monthly-summary-table '+(options.projection?'meeting-plan-table':'overview-plan-table')+'"><caption>'+caption+'</caption>'+contentColumns(items)+'<thead><tr>'+labels.map(function(label){return '<th scope="col">'+label+'</th>';}).join('')+'</tr></thead><tbody>'+items.map(function(item,index){
+        var span=spans[index],module=span?'<td data-label="模块"'+(span>1?' rowspan="'+span+'"':'')+'>'+modules[index]+'</td>':'';
+        return '<tr data-summary-source-id="'+esc(item.source_id)+'">'+module
+          +'<td data-label="事项">'+narrative(item.name)+'</td><td data-label="完成时间">'+esc(item.due || '未设置')+'</td>'
+          +'<td data-label="月度完成情况">'+narrative(item.progress || '未填写')+(options.projection?attentionHtml(item,options):'')+'</td></tr>';
       }).join('')+'</tbody></table></div>';
     }).join('')+'</div>';
   }
-  global.MonthlySummaries={select:select,html:html,narrative:narrative,columnWidths:columnWidths,contentColumns:contentColumns,attention:attention,attentionHtml:attentionHtml};
+  global.MonthlySummaries={select:select,html:html,narrative:narrative,columnWidths:columnWidths,contentColumns:contentColumns,moduleRowSpans:moduleRowSpans,attention:attention,attentionHtml:attentionHtml};
 })(window);

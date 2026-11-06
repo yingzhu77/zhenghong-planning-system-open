@@ -25,15 +25,30 @@ test('numbered monthly narratives align explicit items and remove workbook gaps 
  assert.match(f.MonthlySummaries.narrative('(1) 第一项； (2) 第二项'),/>\(2\)<\/span>/);assert.equal(source.includes('\t\t'),true);
 });
 
+test('only consecutive matching nonempty modules in the same source span item rows',()=>{
+ const f=fixture(),modules=['东区','东区','西区','西区','东区','东区','','','<strong>东区</strong>','东区'];
+ const sources=['A','A','A','A','A','B','B','B','B','B'];
+ assert.deepEqual(Array.from(f.MonthlySummaries.moduleRowSpans(modules,sources)),[2,0,2,0,1,1,1,1,1,1]);
+ const items=modules.slice(0,5).map((mod,i)=>({source_id:'item-'+i,mod,name:'事项'+i,due:'2026-11-0'+(i+1),progress:'进展'+i}));
+ for(const projection of [false,true]){
+  const html=f.MonthlySummaries.html([summary({items})],{projectIds:['project-a'],month:'2026-10',projection});
+  assert.deepEqual([...html.matchAll(/rowspan="2">([^<]+)/g)].map(match=>match[1]),['东区','西区']);
+  assert.deepEqual([...html.matchAll(/data-summary-source-id="([^"]+)"/g)].map(match=>match[1]),items.map(item=>item.source_id));
+  for(const {name,due,progress} of items)for(const text of [name,due,progress])assert.ok(html.includes(text));
+ }
+});
+
 test('actual Edge monthly summary gives narrative columns more space and aligns wrapped numbered items at desktop and mobile sizes',async t=>{
  const f=fixture(),name='1、设备房管线施工完成50%，二区完成100%（10月15日）         2、地下室通风区域施工完成30%\n（3-2、4-1、4-2）       3、首层公区施工完成（10月15日）       4、水电井施工完成20%（水电井10月10号前移交）\n5、风机及隔油设备安装（28/12台）        6、屋面主管线施工完成（4、6、7、9号楼）\n完成标准：施工完成',progress='1、设备房完成20%，二区完成100%   2、完成\n3、完成       4、管井施工及楼样板\n5、设备到货待就位，隔油设备已就位\n6、6-9号楼安装施工';
- const rows=[summary({items:[{source_id:'numbered-source',mod:'东区',name,due:'2026-10-30',progress},{source_id:'plain-source',mod:'西区',name:'供配电： 1、区域配电安装完成；     2、主干线施工完成。',due:'2026-10-20',progress:'1、区域桥架已完成      2、余项待复核'}]})],before=JSON.stringify(rows);
+ const rows=[summary({items:[{source_id:'numbered-source',mod:'东区',name,due:'2026-10-30',progress},{source_id:'another-east',mod:'东区',name:'室外管网通水复核',due:'2026-10-28',progress:'按计划完成'},{source_id:'plain-source',mod:'西区',name:'供配电： 1、区域配电安装完成；     2、主干线施工完成。',due:'2026-10-20',progress:'1、区域桥架已完成      2、余项待复核'}]})],before=JSON.stringify(rows);
  const html=f.MonthlySummaries.html(rows,{projectIds:['project-a'],projects:[{id:'project-a',name:'匿名商业项目'}],month:'2026-10',line:'设计部',projection:true}),css=readFileSync(new URL('../web/meeting-mode.css',import.meta.url),'utf8');
  const browser=await chromium.launch({channel:'msedge',headless:true});t.after(()=>browser.close());const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.setContent('<!doctype html><html lang="zh-CN"><style>'+css+'</style><body class="meeting-display"><main><section class="meeting-section"><h2>本月计划完成情况（月度汇总）</h2>'+html+'</section></main></body></html>');
  const table=page.locator('.monthly-summary-table'),row=table.locator('tbody tr').first(),artifacts=path.resolve('.local/admin-batch-withdrawal-20261102');await mkdir(artifacts,{recursive:true});
  for(const width of [1920,1440,390]){
   await page.setViewportSize({width,height:width===390?844:1080});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+  await expect(table.locator('td[rowspan="2"]')).toHaveText('东区');
+  await expect(table.locator('[data-summary-source-id="another-east"]')).toContainText('室外管网通水复核');
   const body=row.locator('td[data-label="事项"]'),numbers=body.locator('.monthly-summary-number');await expect(numbers).toHaveText(['1、','2、','3、','4、','5、','6、']);
   const positions=await numbers.evaluateAll(nodes=>nodes.map(node=>node.getBoundingClientRect().left));assert.ok(Math.max(...positions)-Math.min(...positions)<1);
   assert.equal((await body.innerText()).replace(/\s/g,''),name.replace(/\s/g,''));assert.equal((await row.locator('td[data-label="月度完成情况"]').innerText()).replace(/\s/g,''),progress.replace(/\s/g,''));
@@ -68,7 +83,7 @@ test('monthly meeting selects adjacent real months and reads complete confirmed 
  const f=fixture(),selection={type:'com',projectIds:['project-a'],period:'2026-11-02',line:'设计部',section:'monthly'};
  assert.equal(f.MeetingView.target(selection).summaryMonth,'2026-10');assert.equal(f.MeetingView.target({...selection,period:'2027-01-04'}).summaryMonth,'2026-12');
  assert.throws(()=>f.MeetingView.target({...selection,summaryMonth:'2026-13'}),/选择无效/);
- const plan={id:'next-plan',project_id:'project-a',plan_month:'2026-11-01',line:'设计部',owner_id:'anonymous-owner',owner_name:'匿名提报人',items:[{source_id:'next-source',mod:'材料',name:'完整的十一月已确认计划',due:'2026-11-28'}],rich_text:{v:1,fields:{'items.0.name':{ops:[{insert:'完整的十一月已确认计划',attributes:{bold:true}}]}}}};
+ const plan={id:'next-plan',project_id:'project-a',plan_month:'2026-11-01',line:'设计部',owner_id:'anonymous-owner',owner_name:'匿名提报人',items:[{source_id:'next-source',mod:'材料',name:'完整的十一月已确认计划',due:'2026-11-28'},{source_id:'next-second',mod:'材料',name:'另一项十一月计划',due:'2026-11-30'}],rich_text:{v:1,fields:{'items.0.name':{ops:[{insert:'完整的十一月已确认计划',attributes:{bold:true}}]}}}};
  const plans=[plan,{...plan}, {...plan,id:'other-line',line:'机电工程',items:[{name:'不显示其他专业'}]}, {...plan,id:'future',plan_month:'2026-12-01',items:[{name:'不显示十二月计划'}]}, {...plan,id:'partial-scope',report_scope_id:'merged-scope',scope_project_ids:['project-a','project-b'],items:[{name:'不显示部分授权范围'}]}],requests=[];
  f.fetch=async(url,options)=>{
   const query=options.body?JSON.parse(options.body):null;requests.push({url,query});let data=[];
@@ -83,6 +98,7 @@ test('monthly meeting selects adjacent real months and reads complete confirmed 
  const model=await f.MeetingView.read('anonymous-admin',selection),before=JSON.stringify(model),html=f.MeetingView.html(model);
  assert.ok(requests.some(request=>request.url==='/api/monthly-summaries?month=2026-10'));assert.ok(requests.every(request=>!request.query?.operation || request.query.operation==='select'));
  assert.match(html,/2026年10月工作总结/);assert.match(html,/2026年11月工作计划/);assert.match(html,/<strong>完整的十一月已确认计划<\/strong>/);
+ assert.match(html,/data-label="模块" rowspan="2">材料<\/td>/);assert.match(html,/另一项十一月计划/);
  assert.equal((html.match(/<strong>完整的十一月已确认计划<\/strong>/g)||[]).length,1);assert.doesNotMatch(html,/不显示其他专业|不显示十二月计划|不显示部分授权范围|周报只含部分事项|读取于|基准节点/);assert.equal(JSON.stringify(model),before);
  const scoped={...plan,id:'scoped',report_scope_id:'merged-scope',scope_project_ids:['project-a','project-b'],items:[{project_id:'project-b',mod:'一期',name:'子项目乙的已确认事项',due:'2026-11-28'}]};const merged=f.MeetingView.html({...model,target:{...model.target,projectIds:['project-a','project-b']},projects:[...model.projects,{id:'project-b',name:'匿名二期'}],plans:[scoped]});assert.match(merged,/<caption>匿名二期<small>匿名提报人 · 设计部 · 已确认<\/small>/);assert.match(merged,/子项目乙的已确认事项/);
  const historical=f.MeetingView.html({...model,target:f.MeetingView.target({...selection,period:'2026-10-26',section:'all'}),reports:[]});assert.doesNotMatch(historical,/完整的十一月已确认计划/);
