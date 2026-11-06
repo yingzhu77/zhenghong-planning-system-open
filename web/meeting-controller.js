@@ -1,13 +1,17 @@
 /* One controller owns one projection window. Draft text is never sent between windows. */
 (function(global){
   'use strict';
-  var cfg,child=null,id='',identity='',uid='',following=true,section='all',summaryMonth='',observed='',lastSent=null,lastShown=null,lastAutomatic=false,sequence=0,connected=false,pending=false,error='',saved=[],timer=null,closeCheck=null;
+  var cfg,child=null,id='',identity='',uid='',following=true,commercialMode='weekly',weeklySection='all',summaryMonth='',observed='',lastSent=null,lastShown=null,lastAutomatic=false,sequence=0,connected=false,pending=false,error='',saved=[],timer=null,closeCheck=null;
   function context(){return cfg && cfg.getContext();}
   function valid(){var now=context();return !!(child && now && now.allowed && identity===now.identity && uid===now.uid);}
   function active(){return valid() && !child.closed;}
   function send(type,extra){if(child && !child.closed)child.postMessage(Object.assign({app:'planning-meeting-v1',id:id,type:type},extra || {}),location.origin);}
   function esc(value){return global.MeetingView.esc(value);}
-  function selection(){var now=context();if(!now || !now.target)return null;return global.MeetingView.target(Object.assign({},now.target,{section:section},section==='monthly' && summaryMonth?{summaryMonth:summaryMonth}:{}));}
+  function selection(){
+    var now=context();if(!now || !now.target)return null;
+    var monthly=now.target.type==='res' || commercialMode==='monthly';
+    return global.MeetingView.target(Object.assign({},now.target,{section:monthly?'monthly':weeklySection},monthly && summaryMonth?{summaryMonth:summaryMonth}:{}));
+  }
   function professionOptions(value){
     var now=context(),lines=[];
     (now && now.projectProfessions || []).filter(function(project){return value.projectIds.includes(project.project_id);}).forEach(function(project){
@@ -25,7 +29,7 @@
     stop(true);var now=context();
     if(!now || !now.allowed || !now.target){if(windowRef)windowRef.close();return cfg.notify('请先打开本人有权查看的计划总览。','err');}
     if(!windowRef)return cfg.notify('请重新开启会议投影。','err');
-    child=windowRef;id=crypto.randomUUID();identity=now.identity;uid=now.uid;following=true;section=Object.hasOwn(global.MeetingView.sections,now.defaultSection)?now.defaultSection:'all';summaryMonth='';observed='';lastSent=null;lastShown=null;saved=[];error='';pending=true;connected=false;
+    child=windowRef;id=crypto.randomUUID();identity=now.identity;uid=now.uid;pending=true;
     global.addEventListener('message',receive);
     child.location=cfg.displayUrl+'#'+id;
     var heartbeatTicks=0;timer=setInterval(function(){
@@ -37,7 +41,7 @@
   }
   function stop(closeWindow){
     var ending=child;send('end');if(timer)clearInterval(timer);timer=null;if(closeCheck)clearTimeout(closeCheck);closeCheck=null;global.removeEventListener('message',receive);
-    child=null;id='';identity='';uid='';following=true;section='all';summaryMonth='';connected=false;pending=false;error='';lastSent=null;lastShown=null;lastAutomatic=false;saved=[];observed='';
+    child=null;id='';identity='';uid='';following=true;commercialMode='weekly';weeklySection='all';summaryMonth='';connected=false;pending=false;error='';lastSent=null;lastShown=null;lastAutomatic=false;saved=[];observed='';
     if(closeWindow===true && ending && !ending.closed)ending.close();
     mount();
   }
@@ -46,7 +50,9 @@
     if(event.origin!==location.origin || event.source!==child || !packet || packet.app!=='planning-meeting-v1' || packet.id!==id)return;
     if(!valid())return stop();
     if(packet.type==='ready'){
-      connected=true;send('heartbeat',{uid:uid});var next=lastSent || selection();if(next)show(next);
+      connected=true;send('heartbeat',{uid:uid});
+      var current=selection(),next=following?current || lastSent:lastSent || current;
+      if(next)show(next);
     }else if(packet.type==='displayed' && packet.sequence===sequence){
       connected=true;pending=false;error='';lastShown={target:lastSent,title:String(packet.title || '').slice(0,500)};
       send('following',{following:following});mount();
@@ -99,20 +105,26 @@
     var host=document.getElementById('meeting-controller-mount');if(!host)return;
     if(child && child.closed)return stop();
     if(!child){host.replaceChildren();return;}
-    var now=context(),selected=selection();
+    var selected=selection(),commercial=selected && selected.type==='com',monthly=selected && selected.section==='monthly';
     var html='<section class="meeting-control" aria-label="会议投影控制"><div class="meeting-control-heading"><b>会议投影控制台</b><span role="status">'+esc(error?'读取失败':pending?'正在读取…':connected?following?'跟随中':'已暂停跟随':'等待投影窗口连接')+'</span></div>'
       +(error?'<p class="meeting-control-error" role="alert">'+esc(error)+'</p>':'')
       +'<div class="meeting-control-actions"><button type="button" data-meeting-toggle>'+esc(following?'暂停跟随':'恢复跟随')+'</button>'
-      +'<label>投影内容<select aria-label="投影内容" data-meeting-section>'+Object.keys(MeetingView.sections).map(function(key){return '<option value="'+key+'"'+(section===key?' selected':'')+'>'+esc(MeetingView.sections[key])+'</option>';}).join('')+'</select></label>'
-      +(section==='monthly'?'<label>总结月份<input type="month" aria-label="总结月份" data-meeting-month value="'+esc(selected && selected.summaryMonth || summaryMonth)+'"></label>':'')
-      +'<button type="button" data-meeting-show'+(!now || !now.target?' disabled':'')+'>展示当前选择</button>'
+      +(selected?'<label>会议模式<select data-meeting-mode'+(commercial?'':' disabled')+'>'
+        +(commercial?'<option value="weekly"'+(!monthly?' selected':'')+'>周例会</option>':'')
+        +'<option value="monthly"'+(monthly?' selected':'')+'>'+(commercial?'月度会':'月度计划会')+'</option></select></label>':'')
+      +(monthly?'<label>总结月份<input type="month" data-meeting-month value="'+esc(selected.summaryMonth)+'"></label>':'')
+      +(commercial && !monthly?'<label>投影内容<select data-meeting-section>'+Object.keys(global.MeetingView.sections).filter(function(key){return key!=='monthly';}).map(function(key){return '<option value="'+key+'"'+(weeklySection===key?' selected':'')+'>'+esc(global.MeetingView.sections[key])+'</option>';}).join('')+'</select></label>':'')
+      +'<button type="button" data-meeting-show'+(!selected?' disabled':'')+'>展示当前选择</button>'
       +'<button type="button" data-meeting-reload'+(!lastSent?' disabled':'')+'>刷新大屏</button><button type="button" data-meeting-previous>上一屏</button><button type="button" data-meeting-next>下一屏</button>'
       +'<button type="button" data-meeting-focus>定位投影窗口</button><button type="button" data-meeting-stop>结束投影</button></div>'
       +(saved.length?'<div class="meeting-recent"><b>刚保存，未自动展示</b>'+saved.map(function(row,index){return '<div><span>'+esc(row.title)+'</span><button type="button" data-meeting-saved="'+index+'">展示这条安排</button></div>';}).join('')+'</div>':'')+'</section>';
     // Only the toolbar is replaced; business form DOM and rich editor selection remain intact.
     host.innerHTML=html;
     host.querySelector('[data-meeting-toggle]').onclick=toggle;
-    host.querySelector('[data-meeting-section]').onchange=function(event){section=event.target.value;refresh();};
+    var mode=host.querySelector('[data-meeting-mode]');
+    if(mode && commercial)mode.onchange=function(event){commercialMode=event.target.value;refresh();};
+    var content=host.querySelector('[data-meeting-section]');
+    if(content)content.onchange=function(event){weeklySection=event.target.value;refresh();};
     var month=host.querySelector('[data-meeting-month]');
     if(month)month.onchange=function(event){
       var previous=summaryMonth;summaryMonth=event.target.value;
