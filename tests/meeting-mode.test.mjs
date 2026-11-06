@@ -109,10 +109,10 @@ test('projection selectors reject invalid payloads and display escapes source te
   const grouped=api.html(model);assert.match(grouped,/二期<small>/);assert.match(grouped,/统一范围 · 未明确子项目/);
 });
 
-test('monthly projection keeps narrative columns left aligned, compact long rows and once-per-group source captions across display sizes',async t=>{
+test('weekly projection centers plan headers and merged modules and balances real progress across display sizes',async t=>{
   const context={console};context.window=context;vm.createContext(context);
   for(const file of ['planning-windows.js','rich-text.js','monthly-summaries.js','meeting-view.js'])vm.runInContext(readFileSync(new URL(file,web),'utf8'),context);
-  const items=Array.from({length:12},(_,i)=>({mod:i%2?'移交事项':'砌筑工程',name:i%2?'屋面移交：示例一号楼与二号楼分批交接，确认施工界面和设备进场条件':'地下室设备房移交：生活水泵房、消防水泵房依计划完成并核对验收资料',due:'2026-10-31',prog:i%3?'按计划推进，已完成施工界面核对，待联合验收':'本周已完成现场核查，剩余事项按原计划推进',...(i===2?{blocker:'等待验收资料'}:{})}));
+  const items=Array.from({length:12},(_,i)=>({mod:i>=4 && i<8?'移交事项':'砌筑工程',name:i%2?'屋面移交：示例一号楼与二号楼分批交接，确认施工界面和设备进场条件':'地下室设备房移交：生活水泵房、消防水泵房依计划完成并核对验收资料',due:'2026-10-31',prog:i%3?'按计划推进，已完成施工界面核对，待联合验收':'本周已完成现场核查，剩余事项按原计划推进',...(i===2?{blocker:'等待验收资料'}:{})}));
   const report={project_id:'com-a',line:'土建工程',author_name:'示例填报人甲',biz:{items},rich_text:{v:1,fields:{'biz.items.0.prog':{ops:[{insert:items[0].prog,attributes:{bold:true,color:'#d81e06'}}]}}}};
   context.ZHRichText.attach(report);
   const model={target:context.MeetingView.target({type:'com',projectIds:['com-a'],period:'2026-10-26',line:'土建工程',section:'plans'}),projects:[{id:'com-a',name:'示例商业项目'}],readAt:'10:00:00',reports:[report],nodes:[],drawings:[],attachments:[]};
@@ -121,14 +121,15 @@ test('monthly projection keeps narrative columns left aligned, compact long rows
   await page.setContent('<!doctype html><html lang="zh-CN"><style>'+readFileSync(new URL('meeting-mode.css',web),'utf8')+'</style><body class="meeting-display"><div class="meeting-display-tools"><b>会议投影</b><span>跟随管理员选择</span></div><main>'+context.MeetingView.html(model)+'</main></body></html>');
   const table=page.locator('.meeting-plan-table');await expect(table.locator('th')).toHaveText(['模块','事项','完成时间','当周进展']);
   await expect(table.locator('caption')).toHaveText('示例商业项目示例填报人甲 · 土建工程');
-  await expect(table.locator('tbody tr')).toHaveCount(12);await expect(table.locator('tbody td')).toHaveCount(48);
+  await expect(table.locator('tbody tr')).toHaveCount(12);await expect(table.locator('td[rowspan="4"]')).toHaveText(['砌筑工程','移交事项','砌筑工程']);
   await expect(table.locator('.rt-red strong,strong.rt-red')).toHaveText(items[0].prog);await expect(table).toContainText('遇到卡点：等待验收资料');
   mkdirSync(artifacts,{recursive:true});
   for(const viewport of [{width:1920,height:1080},{width:1440,height:900},{width:390,height:844}]){
     await page.setViewportSize(viewport);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),true);
     if(viewport.width>700){
-      assert.equal(await table.locator('th,td').evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign==='left' && getComputedStyle(cell).verticalAlign==='top')),true);
+      assert.ok(await table.locator('th,td[data-label="模块"],td[data-label="完成时间"]').evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign==='center' && getComputedStyle(cell).verticalAlign==='middle')));
+      assert.ok(await table.locator('td[data-label="事项"],td[data-label="当周进展"]').evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign==='left' && getComputedStyle(cell).verticalAlign==='middle')));
       const bounds=await table.locator('th').evaluateAll(cells=>cells.map(cell=>cell.getBoundingClientRect().width));
       assert.ok(bounds[1]>bounds[0] && bounds[3]>bounds[2]);
       const head=await table.locator('thead').boundingBox();assert.ok(head.y<250,'compact heading leaves space for the report');
@@ -138,6 +139,24 @@ test('monthly projection keeps narrative columns left aligned, compact long rows
       assert.equal(await table.locator('td[data-label="事项"],td[data-label="当周进展"]').evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign==='left')),true);
     }
     await page.screenshot({path:path.join(artifacts,'display-four-columns-'+viewport.width+'.png')});
+  }
+  await page.setViewportSize({width:1440,height:900});
+  async function widthsAfterRead(prog,blocker){
+    const currentItems=items.slice(0,2).map((item,index)=>({...item,name:item.name.repeat(4),prog:index===0?prog:'',blocker:index===0?blocker:''}));
+    const html=context.MeetingView.html({...model,reports:[{...report,biz:{items:currentItems}}]});
+    await page.locator('main').evaluate((main,html)=>main.innerHTML=html,html);
+    return table.locator('th').evaluateAll(cells=>cells.map(cell=>cell.getBoundingClientRect().width));
+  }
+  const empty=await widthsAfterRead('');
+  assert.deepEqual(await widthsAfterRead('未填写'),empty);
+  const short=await widthsAfterRead('完成');
+  await expect(table.locator('tbody tr').first().locator('td[data-label="当周进展"]')).toHaveText('完成');
+  assert.ok(short[3]>empty[3] && short[1]<empty[1]);
+  await page.screenshot({path:path.join(artifacts,'projection-after-progress-1440.png')});
+  for(const widths of [short,await widthsAfterRead('本周已完成施工并核查验收资料。'.repeat(20)),await widthsAfterRead('', '等待验收资料')]){
+    const share=widths[3]/(widths[1]+widths[3]);
+    assert.ok(share>=.349 && share<=.651,'items and progress share the available narrative width');
+    assert.ok(Math.abs(widths[2]-empty[2])<1,'date column keeps its width');
   }
   model.target.type='res';model.target.line='';model.target.projectIds.push('res-b');model.projects.push({id:'res-b',name:'示例住宅二期'});
   model.reports=[{...report,report_scope_id:'unified',biz:{items:[{...items[0],project_id:'res-b'},{...items[1]}]}},{...report,author_name:'示例填报人乙',biz:{items:[items[2]]}}];

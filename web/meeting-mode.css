@@ -12,6 +12,10 @@
 .meeting-section .meeting-plan-table{font-size:.94em}.meeting-plan-table caption{padding:0 0 8px;color:#42607e;text-align:left;font-size:.76em}.meeting-plan-table caption small{display:inline;font-size:inherit;margin:0 0 0 12px}.meeting-plan-table th,.meeting-plan-table td{text-align:left;vertical-align:top;padding:10px 12px}.meeting-section .meeting-plan-table td:first-child{font-size:inherit;color:inherit}.meeting-plan-table td p{margin:4px 0}.meeting-plan-table td p:first-child{margin-top:0}.meeting-plan-table td p:last-child{margin-bottom:0}.meeting-table-scroll{min-width:0;container-type:inline-size}.meeting-table-scroll+.meeting-table-scroll{margin-top:18px}
 .meeting-plan-table td[data-label="完成时间"]{font-variant-numeric:tabular-nums;white-space:nowrap}.meeting-plan-table td[data-label="模块"]{white-space:normal}
 .meeting-plan-table td[data-label="模块"][rowspan]{background:#e8eff8;border-right:1px solid #d7e2ef}
+@media(min-width:701px){
+  .meeting-plan-table:not(.monthly-summary-table) :is(th,td){vertical-align:middle}
+  .meeting-plan-table:not(.monthly-summary-table) :is(th,td[data-label="模块"],td[data-label="完成时间"]){text-align:center}
+}
 .meeting-month-stack{display:grid;grid-template-columns:minmax(0,1fr);gap:18px}.meeting-month-stack>.meeting-section{min-width:0;margin:0}.meeting-month-stack h2{padding-bottom:10px;border-bottom:1px solid #dce6f1}
 .meeting-attention{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 3px;margin:6px 0 0;padding:4px 7px;border-left:3px solid #b9570b;background:#fff4e7;color:#75400e;font-size:.8em;white-space:normal;line-height:1.45}.meeting-attention b{font-weight:700}.meeting-attention span{overflow-wrap:anywhere}.meeting-data-issue{color:#a4231b;background:#fff1ee;border:1px solid #efc3bb;border-radius:6px;padding:10px 12px;font-size:.85em}
 .meeting-display button:focus-visible,.meeting-display a:focus-visible,.meeting-control :focus-visible{outline:3px solid #2a83d3;outline-offset:3px}

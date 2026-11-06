@@ -96,7 +96,7 @@
     if(!rows.length)return '<p class="meeting-empty">所选范围暂无记录。</p>';
     var summaries=items && global.MonthlySummaries,spans=summaries?summaries.moduleRowSpans(rows.map(function(row){return row[0];})):[];
     return '<div class="meeting-table-scroll"><table'+(source?' class="meeting-plan-table"><caption>'+source+'</caption>':'>')
-      +(summaries?summaries.contentColumns(items):'')+'<thead><tr>'+labels.map(function(label){return '<th scope="col">'+esc(label)+'</th>';}).join('')
+      +(summaries?summaries.contentColumns(items,{balanceProgress:true}):'')+'<thead><tr>'+labels.map(function(label){return '<th scope="col">'+esc(label)+'</th>';}).join('')
       +'</tr></thead><tbody>'+rows.map(function(row,index){return '<tr>'+row.map(function(cell,i){
         var span=i===0?spans[index]:undefined;
         return span===0?'':'<td data-label="'+esc(labels[i])+'"'+(span>1?' rowspan="'+span+'"':'')+'>'+cell+'</td>';
@@ -155,7 +155,7 @@
         var source=sourceFor(row)+(report._monthly_preview?'<small>已确认月计划 · 本周尚未提交</small>':''),group=planGroups[planGroups.length-1];
         var projectId=row.project_id || (report.report_scope_id?'':report.project_id);
         if(!group || group.source!==source || group.projectId!==projectId){group={source:source,projectId:projectId,rows:[],items:[]};planGroups.push(group);}
-        group.items.push({mod:row.mod,name:row.name,due:row.due,progress:row.prog});
+        group.items.push({mod:row.mod,name:row.name,due:row.due,progress:row.prog,blocker:row.blocker});
         group.rows.push([rich(row,'mod'),rich(row,'name'),esc(row.due || '未设置'),rich(row,'prog','未填写')+(row.blocker?'<p>遇到卡点：'+rich(row,'blocker')+'</p>':'')+(global.MonthlySummaries?global.MonthlySummaries.attentionHtml(row,{referenceDate:selectedStart}):'')]);
       });
       planGroups.forEach(function(group){plans.push(table(['模块','事项','完成时间','当周进展'],group.rows,group.source,group.items));});
