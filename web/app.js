@@ -1073,7 +1073,7 @@
         period:window.PlanningWindows.periodStart(overviewPeriod()),line:commercial?S.overviewUI.line || '':S.overviewUI.discipline || '',section:'all'};
     }
     var readable=allowed?detailProjects():[];
-    return {allowed:allowed,uid:S.uid,identity:JSON.stringify([S.uid,dataEpoch]),target:target,defaultSection:'monthly',projects:readable,
+    return {allowed:allowed,uid:S.uid,identity:JSON.stringify([S.uid,dataEpoch]),target:target,projects:readable,
       projectProfessions:readable.map(function(project){return {project_id:String(project.id),lines:project.project_type==='com'?businessLinesForProject(project.id):DISCIPLINES.concat('__unassigned__')};})};
   }
   function reportReferenceContext() {
@@ -3302,9 +3302,43 @@
       var crop=schemePreviewUrl(d.url,pid),url=String(d.url || '').indexOf('/api/scheme-previews/')===0?crop:(typeof d.url==='string' && (/^https?:\/\//i.test(d.url) || /^\/api\/files\/drawings\/[A-Za-z0-9_./-]+$/.test(d.url))?d.url
         : /^drawings\/[A-Za-z0-9_./-]+$/.test(d.path || '')?'/api/files/'+d.path:'');
       var name=d.name || '项目总图',ext=String(d.path || url).split(/[?#]/)[0],image=/\.(?:png|jpe?g|gif|webp|avif)$/i.test(ext) || /\.(?:png|jpe?g|gif|webp|avif)$/i.test(name);
-      return '<figure>'+(crop?'<img src="'+esc(crop)+'" alt="方案总图关键区域" width="320" height="220" loading="lazy" decoding="async">':url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+(image?'<img src="'+esc(url)+'" alt="'+esc(name)+'" width="320" height="220" loading="lazy" decoding="async">':'<span class="overview-drawing-file">打开'+esc(/\.pdf$/i.test(ext)?'PDF总图':'总图资料')+'</span>')+'</a>':overviewEmpty('总图链接待核对'))
+      var title=projName(pid)+' · '+(crop?'方案总图关键区域':name);
+      return '<figure>'+(url && (crop || image)?'<button type="button" class="overview-drawing-preview" aria-label="全屏查看 '+esc(title)+'" aria-haspopup="dialog" data-title="'+esc(title)+'" onclick="App.overviewDrawingFullscreen(this)"><img src="'+esc(url)+'" alt="" width="320" height="220" loading="lazy" decoding="async"><span class="overview-drawing-preview-label">全屏查看</span></button>'
+        :url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer"><span class="overview-drawing-file">打开'+esc(/\.pdf$/i.test(ext)?'PDF总图':'总图资料')+'</span></a>':overviewEmpty('总图链接待核对'))
         +'<figcaption>'+esc(name)+'</figcaption></figure>';
     }).join(''):overviewEmpty('尚未登记项目总图'))+'</aside>';
+  }
+  function openOverviewDrawing(button) {
+    var thumbnail=button.querySelector('img');
+    if(!isManagerOverview() || !thumbnail || rootEl.querySelector('.overview-drawing-dialog'))return;
+    var dialog=document.createElement('dialog');
+    dialog.className='overview-drawing-dialog';
+    dialog.setAttribute('aria-labelledby','overview-drawing-title');
+    dialog.innerHTML='<div class="overview-drawing-stage"><header><h2 id="overview-drawing-title"></h2>'
+      +'<button type="button" autofocus>关闭全屏</button></header><div class="overview-drawing-image"><p role="status" hidden>总图暂无法显示，请关闭后重试。</p></div></div>';
+    var stage=dialog.firstElementChild,imageArea=dialog.querySelector('.overview-drawing-image');
+    var closeButton=dialog.querySelector('button'),image=document.createElement('img'),wasFullscreen=false;
+    dialog.querySelector('h2').textContent=button.dataset.title;
+    image.alt=button.dataset.title;
+    image.addEventListener('error',function(){
+      image.hidden=true;
+      imageArea.querySelector('p').hidden=false;
+    });
+    image.src=thumbnail.getAttribute('src');
+    imageArea.appendChild(image);
+    stage.addEventListener('fullscreenchange',function(){
+      if(document.fullscreenElement===stage)wasFullscreen=true;
+      else if(wasFullscreen && dialog.open)dialog.close();
+    });
+    closeButton.addEventListener('click',function(){dialog.close();});
+    dialog.addEventListener('close',function(){
+      dialog.remove();
+      if(button.isConnected)button.focus({preventScroll:true});
+    },{once:true});
+    // The dialog fills the viewport even when the browser declines native full screen.
+    rootEl.appendChild(dialog);
+    dialog.showModal();
+    if(stage.requestFullscreen)stage.requestFullscreen().catch(function(){});
   }
   function overviewFoldKey(kind,pid,line) { return JSON.stringify([kind,pid,line || '']); }
   function overviewReportFilesHtml(rows,commercial) {
@@ -4300,6 +4334,7 @@
       if(!isManagerOverview() || !overviewPeriods().some(function(period){return period.id===value;}))return;
       captureBriefDrafts();S.overviewUI.period=value;S.overviewUI.open={};return showPage(false);
     },
+    overviewDrawingFullscreen:openOverviewDrawing,
     overviewExpandAll:function(open){
       if(!isManagerOverview())return;
       Array.prototype.forEach.call(rootEl.querySelectorAll('.plan-overview details[data-overview-fold]'),function(el){

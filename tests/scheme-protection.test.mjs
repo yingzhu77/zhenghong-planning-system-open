@@ -194,3 +194,43 @@ test('actual Edge archive navigation reads only key excerpts and the registered 
   const stored = (await f.admin.query('SELECT fields FROM public.project_master WHERE project_id=$1', [pid])).rows[0].fields;
   assert.deepEqual(stored.scheme_catalog, f.catalog); assert.deepEqual(errors, []);
 });
+
+test('Edge overview opens the authorized crop full screen and returns focus without accessing the protected source', { timeout: 60000 }, async t => {
+  const f = await fixture(t), browser = await chromium.launch({ channel: 'msedge', headless: true }); t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } }), errors = [], requested = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => requested.push(new URL(request.url()).pathname));
+  const cropUrl = '/api/scheme-previews/' + pid + '/' + f.sha + '.webp', account = f.accounts.find(account => account.id === 'demo-ops');
+  await page.goto(f.base); await page.locator('#email').fill(account.email); await page.locator('#password').fill(account.password);
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('button', { name: '计划总览', exact: true }).click();
+  await page.getByRole('button', { name: '住宅计划总览', exact: true }).click();
+  const trigger = page.getByRole('button', { name: /全屏查看.*方案总图关键区域/ });
+  await expect(trigger.locator('img')).toHaveAttribute('src', cropUrl);
+  await trigger.click();
+  const dialog = page.getByRole('dialog', { name: /方案总图关键区域/ }), image = dialog.locator('img');
+  await expect(image).toHaveAttribute('src', cropUrl);
+  await expect.poll(() => image.evaluate(node => node.naturalWidth)).toBe(60);
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.className)).toBe('overview-drawing-stage');
+  const artifacts = path.resolve('.local/admin-ui-20261106');
+  await mkdir(artifacts, { recursive: true });
+  await page.screenshot({ path: path.join(artifacts, 'overview-key-drawing-1440.png') });
+  await dialog.getByRole('button', { name: '关闭全屏' }).click();
+  await expect(dialog).toHaveCount(0); await expect(trigger).toBeFocused();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+  await trigger.click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.className)).toBe('overview-drawing-stage');
+  await page.evaluate(() => document.exitFullscreen());
+  await expect(dialog).toHaveCount(0); await expect(trigger).toBeFocused();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => { Element.prototype.requestFullscreen = () => Promise.reject(new Error('Fullscreen unavailable')); });
+  await trigger.click();
+  await expect(dialog).toBeVisible(); await expect.poll(() => image.evaluate(node => node.naturalWidth)).toBe(60);
+  assert.deepEqual(await dialog.evaluate(node => [node.clientWidth, node.clientHeight]), [390, 844]);
+  await page.screenshot({ path: path.join(artifacts, 'overview-key-drawing-390.png') });
+  await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(trigger).toBeFocused();
+  assert.equal(requested.some(name => name === '/api/files/' + original || name === '/api/files/' + oldPreview), false);
+  assert.equal(await page.locator('a[href]').evaluateAll(links => links.some(link => /scheme-source\.pdf|scheme-full-page\.png/.test(link.href))), false);
+  assert.ok(requested.includes(cropUrl)); assert.deepEqual(errors, []);
+});

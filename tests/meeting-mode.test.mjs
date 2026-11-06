@@ -8,6 +8,7 @@ import {chromium,expect} from '@playwright/test';
 import {startPlanningAiLocal} from './helpers/planning-ai-local.mjs';
 import {testPool} from './helpers/pglite-pool.mjs';
 import {executeDatabase} from '../server/database.mjs';
+import {confirmMonthlyPlan} from '../server/monthly-plans.mjs';
 import {webAssets} from '../server/web-assets.mjs';
 
 const web=new URL('../web/',import.meta.url),artifacts=process.env.MEETING_ARTIFACT_DIR || path.join(os.tmpdir(),'planning-meeting');
@@ -15,11 +16,11 @@ const web=new URL('../web/',import.meta.url),artifacts=process.env.MEETING_ARTIF
 function controllerFixture(){
   let mounted=true,serial=0,timerId=0,html='';const intervals=new Map(),timeouts=new Map(),listeners=new Map(),controls=new Map(),notices=[];
   const host={replaceChildren(){html='';},querySelector(selector){
-    if(selector==='[data-meeting-month]' && !html.includes('data-meeting-month'))return null;
+    if(!html.includes(selector.slice(1,-1)))return null;
     if(!controls.has(selector))controls.set(selector,{});return controls.get(selector);
   },querySelectorAll(){return [];}};
   Object.defineProperty(host,'innerHTML',{get:()=>html,set:value=>{html=value;}});
-  const context={allowed:true,uid:'anonymous-ops',identity:'anonymous-ops|1',defaultSection:'all',target:{kind:'report',type:'res',projectIds:['p1'],period:'2026-11-02',line:'',section:'all'},projects:[{id:'p1',project_type:'res'}],projectProfessions:[{project_id:'p1',lines:['工程']}]};
+  const context={allowed:true,uid:'anonymous-ops',identity:'anonymous-ops|1',target:{kind:'report',type:'res',projectIds:['p1'],period:'2026-11-02',line:'',section:'all'},projects:[{id:'p1',project_type:'res'}],projectProfessions:[{project_id:'p1',lines:['工程']}]};
   const env={location:{origin:'https://meeting.example.test'},document:{getElementById:()=>mounted?host:null},
     crypto:{randomUUID:()=>`00000000-0000-4000-8000-${String(++serial).padStart(12,'0')}`},
     setInterval:fn=>{const id=++timerId;intervals.set(id,fn);return id;},clearInterval:id=>intervals.delete(id),
@@ -59,6 +60,20 @@ test('beforeunload from a child reload does not end the projection session',()=>
   assert.match(f.html,/会议投影控制台/);f.api.stop(true);
 });
 
+test('commercial mode changes during popup reload follow the latest selection while paused windows keep their chosen view',()=>{
+  const f=controllerFixture(),child=f.child();f.context.target.type='com';f.api.start(child);f.emit(child,'ready');
+  const lastShow=()=>child.messages.filter(row=>row.packet.type==='show').at(-1).packet;
+  const setMode=value=>f.controls.get('[data-meeting-mode]').onchange({target:{value}});
+  assert.equal(lastShow().target.section,'all');
+  f.emit(child,'displayed',{sequence:lastShow().sequence});f.emit(child,'closed');setMode('monthly');
+  assert.equal(lastShow().target.section,'all');
+  f.emit(child,'ready');assert.equal(lastShow().target.section,'monthly');
+  f.emit(child,'displayed',{sequence:lastShow().sequence});f.controls.get('[data-meeting-toggle]').onclick();
+  f.emit(child,'closed');setMode('weekly');f.emit(child,'ready');assert.equal(lastShow().target.section,'monthly');
+  f.controls.get('[data-meeting-toggle]').onclick();assert.equal(lastShow().target.section,'all');
+  f.api.stop(true);
+});
+
 test('closing while the admin is on another page still clears state before returning to the overview',()=>{
   const f=controllerFixture(),child=f.child();f.api.start(child);
   const target=f.context.target;f.mount(false);f.context.target=null;f.api.refresh();assert.equal(f.api.active(),true);
@@ -67,8 +82,8 @@ test('closing while the admin is on another page still clears state before retur
 });
 
 test('monthly controls keep the explicitly selected summary month through profession changes and refreshes',()=>{
-  const f=controllerFixture();f.context.defaultSection='monthly';const child=f.child();f.api.start(child);f.emit(child,'ready');
-  assert.match(f.html,/总结月份/);assert.doesNotMatch(f.html,/meeting-control-preview|meeting-control-hint/);
+  const f=controllerFixture(),child=f.child();f.api.start(child);f.emit(child,'ready');
+  assert.match(f.html,/总结月份/);assert.match(f.html,/月度计划会/);assert.doesNotMatch(f.html,/周例会|data-meeting-section|meeting-control-preview|meeting-control-hint/);
   const shows=()=>child.messages.filter(row=>row.packet.type==='show').map(row=>row.packet);
   assert.equal(shows().at(-1).target.summaryMonth,'2026-10');
   f.controls.get('[data-meeting-month]').onchange({target:{value:'2026-09'}});assert.equal(shows().at(-1).target.summaryMonth,'2026-09');
@@ -157,6 +172,11 @@ async function fixture(t){
   for(const pid of ['meeting-a','meeting-b'])await executeDatabase(runtime.pool,{id:owner},{table:'reports',operation:'upsert',onConflict:'project_id,period,line',values:{project_id:pid,period:runtime.scope.period,line:'综合',
     biz:{form_version:2,nodes:[],items:[{source_id:'meeting-item',mod:'工程',name:pid==='meeting-a'?'甲项目已提交事项':'乙项目已提交事项',due:runtime.scope.week,prog:'原进展需要保留'}],handover:[]},
     rich_text:{v:1,fields:{'biz.items.0.prog':{ops:[{insert:'原进展需要保留',attributes:{bold:true,color:'#d81e06'}}]}}}}});
+  for(const [pid,name] of [['meeting-a','甲项目已确认事项'],['meeting-b','乙项目已确认事项']]){
+    await confirmMonthlyPlan(runtime.pool,{id:owner},{project_id:pid,line:'工程',month:runtime.scope.month,
+      items:[{source_id:'meeting-plan-item',mod:'工程',name,due:runtime.scope.week}],
+      rich_text:{v:1,fields:{'items.0.name':{ops:[{insert:name,attributes:{bold:true,color:'#d81e06'}}]}}}});
+  }
   await admin.query("UPDATE public.profiles SET role='ops' WHERE user_id=$1",[root]);
   const browser=await chromium.launch({channel:'msedge',headless:true});t.after(()=>browser.close());
   const browserContext=await browser.newContext({viewport:{width:1560,height:1050}}),page=await browserContext.newPage(),errors=[],writes=[];
@@ -177,12 +197,14 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
   const reportsBefore=(await admin.query('SELECT jsonb_agg(to_jsonb(r) ORDER BY id) AS snapshot FROM public.reports r')).rows[0].snapshot;
   const tasksBefore=(await admin.query('SELECT count(*)::int n FROM public.reporter_tasks')).rows[0].n;
   const opening=page.waitForEvent('popup');await page.getByRole('button',{name:'开启会议投影',exact:true}).click();const display=await opening;
-  await page.locator('[data-meeting-section]').selectOption('all');
-  await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  const mode=page.getByLabel('会议模式');
+  await expect(mode).toBeDisabled();await expect(mode.locator('option')).toHaveCount(1);await expect(mode).toHaveValue('monthly');
+  await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
+  await expect(display.locator('#meeting-screen')).not.toContainText('甲项目已提交事项');
   await expect(page.locator('.meeting-control')).toContainText('跟随中');
   await expect(display.locator('input,textarea,select:not(#meeting-profession),[contenteditable]')).toHaveCount(0);
   await expect(display.getByRole('combobox',{name:'投影专业'})).toBeEnabled();
-  await expect(display.locator('.rt-red strong,strong.rt-red')).toContainText('原进展需要保留');
+  await expect(display.locator('.rt-red strong,strong.rt-red')).toContainText('甲项目已确认事项');
   const group=page.locator('[data-project-group="示例住宅甲"]');
   await group.getByRole('button',{name:'新增工作安排',exact:true}).click();const draft=group.locator('.overview-meeting-draft');
   await draft.getByRole('combobox',{name:'工作安排提出领导'}).selectOption(f.leader);
@@ -195,13 +217,13 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
   const untouched=await display.locator('#meeting-screen').innerHTML();
   await page.locator('[data-meeting-toggle]').click();await page.locator('#overviewFilter').selectOption('示例住宅乙');
   await expect(page.locator('[data-project-group="示例住宅乙"]')).toContainText('乙项目已提交事项');
-  await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   assert.equal(await display.locator('#meeting-screen').innerHTML(),untouched);
-  await page.locator('[data-meeting-toggle]').click();await expect(display.locator('#meeting-screen')).toContainText('乙项目已提交事项');
+  await page.locator('[data-meeting-toggle]').click();await expect(display.locator('#meeting-screen')).toContainText('乙项目已确认事项');
   await page.locator('[data-meeting-toggle]').click();await page.locator('#overviewFilter').selectOption('示例住宅甲');
   await expect(draft.locator('.ql-editor')).toContainText('尚未保存的领导要求');
   await expect(draft.locator('.ql-editor strong')).toContainText('尚未保存的领导要求');
-  await page.locator('[data-meeting-show]').click();await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await page.locator('[data-meeting-show]').click();await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   const beforeSave=await display.locator('#meeting-screen').innerHTML();
   await draft.getByRole('button',{name:'保存安排',exact:true}).click();await expect(draft).toHaveCount(0);
   await expect(page.locator('.meeting-recent')).toContainText('刚保存，未自动展示');
@@ -215,7 +237,7 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
   await expect(page.locator('.meeting-control')).toContainText('已暂停跟随');
   mkdirSync(artifacts,{recursive:true});await page.evaluate(()=>scrollTo(0,0));
   await page.screenshot({path:path.join(artifacts,'controller-desktop.png')});await display.screenshot({path:path.join(artifacts,'display-saved-arrangement.png')});
-  await page.locator('[data-meeting-show]').click();await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await page.locator('[data-meeting-show]').click();await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   const beforeFont=await display.locator('.meeting-plan-table td[data-label="事项"]').first().evaluate(node=>parseFloat(getComputedStyle(node).fontSize));
   await display.locator('#meeting-font-more').click();assert.equal(await display.evaluate(()=>document.documentElement.style.getPropertyValue('--meeting-font')),'24px');
   assert.ok(await display.locator('.meeting-plan-table td[data-label="事项"]').first().evaluate(node=>parseFloat(getComputedStyle(node).fontSize))>beforeFont);
@@ -229,7 +251,7 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
   await admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES($1,'meeting-a','pzo')",[f.root]);
   await page.locator('#overviewFilter').selectOption('示例住宅乙');await page.locator('[data-meeting-show]').click();
   await expect(display.locator('#meeting-screen')).toContainText('项目读取权限或类型已变化');
-  await expect(display.locator('#meeting-screen')).not.toContainText('乙项目已提交事项');
+  await expect(display.locator('#meeting-screen')).not.toContainText('乙项目已确认事项');
   await admin.query("UPDATE public.profiles SET role='pm' WHERE user_id=$1",[f.root]);
   await page.locator('[data-meeting-show]').click();await expect(display.locator('#meeting-screen')).toContainText('当前身份无权使用会议投影');
   await page.getByRole('button',{name:'退出登录',exact:true}).click();await expect(display.locator('#meeting-screen')).toContainText('会议投影已结束');
@@ -242,13 +264,13 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
 test('commercial and historical selection follow, failed reads retry and delayed responses cannot replace a newer screen',async t=>{
   const f=await fixture(t),{page}=f;
   const popup=page.waitForEvent('popup');await page.getByRole('button',{name:'开启会议投影',exact:true}).click();const display=await popup;
-  await page.locator('[data-meeting-section]').selectOption('all');
-  await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   const unchanged=await display.locator('#meeting-screen').innerHTML();
   await display.evaluate(()=>window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:window,data:{app:'planning-meeting-v1',id:location.hash.slice(1),type:'end'}})));
   await display.evaluate(()=>window.dispatchEvent(new MessageEvent('message',{origin:'https://foreign.invalid',source:opener,data:{app:'planning-meeting-v1',id:location.hash.slice(1),type:'end'}})));
   assert.equal(await display.locator('#meeting-screen').innerHTML(),unchanged);
   await page.evaluate(()=>App.view('presCom'));await page.locator('#overviewFilter').selectOption(f.runtime.scope.line);
+  await expect(page.getByLabel('会议模式')).toHaveValue('weekly');
   await expect(display.locator('#meeting-screen')).toContainText('机房设备安装');
   await expect(display.locator('.meeting-topic')).toContainText('机电工程');
   const old=new Date(f.runtime.scope.week+'T12:00:00Z');old.setUTCDate(old.getUTCDate()-7);const previous=old.toISOString().slice(0,10);
@@ -257,7 +279,7 @@ test('commercial and historical selection follow, failed reads retry and delayed
   await page.locator('[data-meeting-section]').selectOption('plans');await expect(display.locator('[data-projection-section]')).toHaveCount(1);
   await expect(display.locator('[data-projection-section="plans"]')).toBeVisible();
   await page.locator('#overviewPeriod').selectOption(f.runtime.scope.week);await page.evaluate(()=>App.view('pres'));
-  await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   let fail=true;
   await display.route('**/api/db',async route=>{
     const body=route.request().postDataJSON();
@@ -265,8 +287,8 @@ test('commercial and historical selection follow, failed reads retry and delayed
     return route.continue();
   });
   await page.locator('[data-meeting-reload]').click();await expect(display.locator('#meeting-screen')).toContainText('隔离读取失败');
-  await expect(display.locator('#meeting-screen')).not.toContainText('甲项目已提交事项');
-  await page.locator('[data-meeting-reload]').click();await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await expect(display.locator('#meeting-screen')).not.toContainText('甲项目已确认事项');
+  await page.locator('[data-meeting-reload]').click();await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   await display.unroute('**/api/db');
   let release,entered;const delayed=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);
   await display.route('**/api/db',async route=>{
@@ -275,10 +297,10 @@ test('commercial and historical selection follow, failed reads retry and delayed
     else await route.continue();
   });
   await page.locator('#overviewFilter').selectOption('示例住宅乙');await delayed;
-  await page.locator('[data-meeting-toggle]').click();await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
-  release();await display.unroute('**/api/db');await expect(display.locator('#meeting-screen')).not.toContainText('乙项目已提交事项');
+  await page.locator('[data-meeting-toggle]').click();await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
+  release();await display.unroute('**/api/db');await expect(display.locator('#meeting-screen')).not.toContainText('乙项目已确认事项');
   await page.locator('#overviewFilter').selectOption('示例住宅甲');await page.locator('[data-meeting-toggle]').click();
-  await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   let releaseAgain,enteredAgain;const delayedAgain=new Promise(resolve=>enteredAgain=resolve),gateAgain=new Promise(resolve=>releaseAgain=resolve);
   await display.route('**/api/db',async route=>{
     const body=route.request().postDataJSON();
@@ -286,9 +308,9 @@ test('commercial and historical selection follow, failed reads retry and delayed
     else await route.continue();
   });
   await page.locator('#overviewFilter').selectOption('示例住宅乙');await delayedAgain;
-  await page.locator('#overviewFilter').selectOption('示例住宅甲');await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
-  releaseAgain();await display.unroute('**/api/db');await expect(display.locator('#meeting-screen')).not.toContainText('乙项目已提交事项');
-  await display.reload();await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await page.locator('#overviewFilter').selectOption('示例住宅甲');await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
+  releaseAgain();await display.unroute('**/api/db');await expect(display.locator('#meeting-screen')).not.toContainText('乙项目已确认事项');
+  await display.reload();await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   await page.reload();await expect(display.locator('#meeting-screen')).toContainText(/投影已结束|管理员连接已断开/);
   assert.deepEqual(f.writes,[]);assert.deepEqual(f.errors,[]);
 });
@@ -302,15 +324,13 @@ test('blocked popups and closed windows preserve the original arrangement draft 
   await expect(draft.locator('.ql-editor')).toContainText('弹窗受限时必须保留的草稿');
   await page.evaluate(()=>window.open=window.originalMeetingOpen);
   const popup=page.waitForEvent('popup');await page.getByRole('button',{name:'开启会议投影',exact:true}).click();const display=await popup;
-  await page.locator('[data-meeting-section]').selectOption('all');
-  await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   await page.evaluate(()=>App.view('projectPlanStats'));await expect(page.locator('.meeting-control')).toHaveCount(0);
-  await expect(display.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   await display.close();await page.evaluate(()=>App.view('pres'));await expect(page.locator('#overviewFilter')).toBeVisible();
   await expect(page.locator('.meeting-control')).toHaveCount(0);assert.equal(await page.evaluate(()=>MeetingController.active()),false);
   const again=page.waitForEvent('popup');await page.getByRole('button',{name:'开启会议投影',exact:true}).click();const second=await again;
-  await page.locator('[data-meeting-section]').selectOption('all');
-  await expect(second.locator('#meeting-screen')).toContainText('甲项目已提交事项');
+  await expect(second.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   await expect(draft.locator('.ql-editor')).toContainText('弹窗受限时必须保留的草稿');
   await page.locator('[data-meeting-stop]').click();await expect.poll(()=>second.isClosed()).toBe(true);await expect(page.locator('.meeting-control')).toHaveCount(0);
   assert.deepEqual(f.writes,[]);assert.deepEqual(f.errors,[]);

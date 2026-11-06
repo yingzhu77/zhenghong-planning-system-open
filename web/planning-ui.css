@@ -212,7 +212,7 @@ h2{font-size:20px}h3{font-size:16px}h4{font-size:14px}
 .overview-plan-adaptive .overview-col-progress{width:var(--plan-col-progress)}
 .planning-shell .overview-plan-adaptive .overview-data-table td{padding:10px 12px;line-height:1.55;vertical-align:top}
 .planning-shell .overview-plan-adaptive .overview-data-table td.overview-cell-module{text-align:left;overflow-wrap:anywhere}
-.planning-shell .overview-plan-adaptive .overview-data-table th:nth-last-child(3),.planning-shell .overview-plan-adaptive .overview-data-table th:last-child{white-space:normal}
+.planning-shell .overview-plan-adaptive .overview-data-table th.overview-head-source,.planning-shell .overview-plan-adaptive .overview-data-table th.overview-head-module,.planning-shell .overview-plan-adaptive .overview-data-table th:nth-last-child(3),.planning-shell .overview-plan-adaptive .overview-data-table th:last-child{white-space:normal;overflow-wrap:anywhere}
 .planning-shell .overview-plan-adaptive .overview-data-table td.overview-cell-date{padding-inline:6px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .planning-shell .overview-plan-adaptive .overview-data-table td.overview-cell-seq{padding-inline:4px;font-variant-numeric:tabular-nums}
 .planning-shell .overview-plan-adaptive .overview-data-table th.overview-head-seq{padding-inline:4px}
@@ -272,6 +272,19 @@ h2{font-size:20px}h3{font-size:16px}h4{font-size:14px}
 .overview-project-drawing figure{margin:0 0 16px}
 .overview-project-drawing figure>a{display:block;border:1px solid #c9d9eb;border-radius:7px;overflow:hidden;background:#f7f9fc;padding:6px}
 .overview-project-drawing img{display:block;width:100%;height:auto;max-height:min(65vh,620px);object-fit:contain;background:#fff}
+.overview-drawing-preview{display:block;width:100%;padding:0;border:1px solid #c9d9eb;border-radius:7px;overflow:hidden;background:#eef4fb;color:#17477b;cursor:zoom-in}
+.overview-drawing-preview-label{display:block;padding:6px 10px;font-size:12px;font-weight:600;text-align:center}
+.overview-drawing-preview:hover .overview-drawing-preview-label{background:#dfeaf6}
+.overview-drawing-preview:focus-visible,.overview-drawing-stage button:focus-visible{outline:2px solid #286ca8;outline-offset:2px}
+.overview-drawing-dialog{position:fixed;inset:0;margin:0;width:100%;height:100%;max-width:none;max-height:none;padding:0;border:0;background:#0f1e2e;color:#f5f9ff}
+.overview-drawing-stage{display:grid;grid-template-rows:auto minmax(0,1fr);height:100%;background:#0f1e2e;color:#f5f9ff}
+.overview-drawing-stage header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px clamp(12px,3vw,36px);border-bottom:1px solid #40576e}
+.overview-drawing-stage h2{margin:0;color:inherit;font-size:clamp(15px,2vw,20px);overflow-wrap:anywhere}
+.overview-drawing-stage button{flex:none;min-height:44px;padding:0 12px;border:1px solid #8198b0;border-radius:7px;background:#263d53;color:inherit;cursor:pointer}
+.overview-drawing-stage button:hover{background:#344e69}
+.overview-drawing-image{display:grid;place-items:center;min-height:0;padding:clamp(8px,2vw,24px)}
+.overview-drawing-image img:not([hidden]){display:block;width:100%;height:100%;min-height:0;object-fit:contain}
+@media print{.overview-drawing-dialog,.overview-drawing-preview-label{display:none!important}}
 .overview-project-drawing figcaption{font-size:12px;color:var(--mut);margin-top:6px;overflow-wrap:anywhere}
 .overview-project-drawing>.overview-empty{display:block;min-height:0;padding:10px 12px;text-align:left;background:#eef4fb;border:1px dashed #c9d9eb;border-radius:7px}
 .overview-drawing-file{display:block;padding:18px 10px;text-align:center;color:var(--planning-blue);font-size:13px}

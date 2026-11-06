@@ -101,14 +101,14 @@ test('attention notices use unresolved source evidence and valid overdue dates w
  assert.match(f.MonthlySummaries.attentionHtml({progress:'延期<detail>'},options),/title="依据：延期&lt;detail&gt;"/);assert.match(f.MonthlySummaries.attentionHtml({progress:'完成50%',due:'2026-10-20'},options),/计划日已过/);
 });
 
-test('actual Edge monthly meeting keeps both months visible, fits dates and shares width according to content, then stacks on narrow screens',async t=>{
+test('actual Edge monthly meeting stacks full-width tables and fits dates at desktop and mobile widths',async t=>{
  const f=fixture(),module='山丘草帽钢结构、贝壳采光顶立面钢结构及玻璃盒子钢结构（施工单位甲）',plans=[{id:'plan',project_id:'project-a',plan_month:'2026-11-01',line:'设计部',owner_name:'匿名提报人',items:[{mod:module,name:'钢结构施工',due:'2026-11-30'},{mod:'材料封样',name:'完成材料封样',due:'2026-11-20'}]}];
  const model={target:f.MeetingView.target({type:'com',projectIds:['project-a'],period:'2026-11-02',line:'设计部',section:'monthly'}),projects:[{id:'project-a',name:'匿名商业'}],reports:[],plans,nodes:[],drawings:[],attachments:[],monthlySummaries:[summary({items:[{source_id:'one',mod:'东区',name:'设备安装及调试\n完成标准：完成安装验收',due:'2026-10-30',progress:'1、材料未到位，安装完成50%；2、设备等待移交'},{source_id:'two',mod:'西区',name:'钢结构施工',due:'2026-10-20',progress:'没有延期，风险已解决，已完成'}]})]},before=JSON.stringify(model),css=readFileSync(new URL('../web/meeting-mode.css',import.meta.url),'utf8');
  const browser=await chromium.launch({channel:'msedge',headless:true});t.after(()=>browser.close());const page=await browser.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.setContent('<!doctype html><html lang="zh-CN"><style>'+css+'</style><body class="meeting-display"><main>'+f.MeetingView.html(model)+'</main></body></html>');
- const artifacts=path.resolve('.local/admin-ui-20261105');await mkdir(artifacts,{recursive:true});
+ const artifacts=path.resolve('.local/admin-ui-20261106');await mkdir(artifacts,{recursive:true});
  for(const width of [1920,1440,1200,900,390]){
-  await page.setViewportSize({width,height:width===390?844:1080});const panes=await page.locator('.meeting-month-grid>.meeting-section').evaluateAll(nodes=>nodes.map(node=>({x:node.offsetLeft,y:node.offsetTop,width:node.getBoundingClientRect().width})));
-  if(width>=1200){assert.equal(panes[0].y,panes[1].y);assert.ok(panes[1].x>panes[0].x);}else assert.ok(panes[1].y>panes[0].y);
+  await page.setViewportSize({width,height:width===390?844:1080});const panes=await page.locator('.meeting-month-stack>.meeting-section').evaluateAll(nodes=>nodes.map(node=>({x:node.offsetLeft,y:node.offsetTop,width:node.getBoundingClientRect().width})));
+  assert.equal(panes[0].x,panes[1].x);assert.equal(panes[0].width,panes[1].width);assert.ok(panes[1].y>panes[0].y);assert.ok(panes[0].width>width*.9);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   if(width>700){assert.equal(await page.locator('td[data-label="完成时间"]').evaluateAll(nodes=>nodes.every(node=>node.scrollWidth<=node.clientWidth+1)),true,'date text fits at '+width);}
   await page.screenshot({path:path.join(artifacts,'monthly-meeting-'+width+'.png'),fullPage:true});
