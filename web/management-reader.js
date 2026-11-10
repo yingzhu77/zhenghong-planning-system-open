@@ -1,9 +1,9 @@
-/* All-project management reading uses a separate API and never seeds personal reporting state. */
+/* Management reading uses server-enforced scopes and never seeds reporting state. */
 (function(global){
   'use strict';
   var cfg,S,uid,session,activeRoute='',generation=0,catalog=[],pages=new Map();
-  var VIEWS={managementCoord:'coordination',managementCompletion:'completions',managementMeetings:'meetings',managementArchive:'archive',managementLibrary:'projects'};
-  var TITLES={managementCoord:'协调需求',managementCompletion:'完成与延期记录',managementMeetings:'会议事项',managementArchive:'全项目档案',managementLibrary:'全项目资料共享'};
+  var VIEWS={managementPlans:'plans',managementCoord:'coordination',managementCompletion:'completions',managementMeetings:'meetings',managementArchive:'archive',managementLibrary:'projects'};
+  var TITLES={managementPlans:'月计划与周进展',managementCoord:'协调需求',managementCompletion:'完成与延期记录',managementMeetings:'会议事项',managementArchive:'项目档案',managementLibrary:'资料共享'};
   var STATUS={pending:'待审核',approved:'已通过',rejected:'已退回',reopened:'已重新打开',open:'待处理',in_progress:'推进中',completed:'本人反馈完成',done:'已完成',closed:'已关闭',cancelled:'已取消'};
   var SOURCE={independent_coordination:'独立协调',report_coord:'报告协调需求',report_handover:'工作面移交'};
   var MEETING={requirement:'会议要求事项',special:'专项会议决议事项',legacy:'原会议事项（待分类）'};
@@ -15,7 +15,8 @@
   }
   function allowed(){return !!(cfg && cfg.canRead && cfg.canRead());}
   function esc(v){return cfg.esc(v==null?'':v);}
-  function page(route){if(!pages.has(route))pages.set(route,{project:'',tab:'plan',data:null,busy:false,pending:null,error:'',revision:0});return pages.get(route);}
+  function currentMonth(){return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit'}).format(new Date());}
+  function page(route){if(!pages.has(route))pages.set(route,{project:'',month:currentMonth(),tab:'plan',data:null,busy:false,pending:null,error:'',revision:0});return pages.get(route);}
   function projectId(route){return page(route).project || null;}
   function projects(){return catalog.slice();}
   function selectionRequired(route){return route==='managementArchive' || route==='managementLibrary';}
@@ -28,6 +29,7 @@
     if(p.data && !options.force && !more)return true;
     var version=++p.revision,epoch=generation,identity=uid,login=session,selected=p.project;
     var request={view:VIEWS[route],limit:100};
+    if(route==='managementPlans')request.month=p.month;
     if(selected)request.project_id=selected;
     if(more)request.cursor=p.data.next_cursor;
     function live(){return generation===epoch && uid===identity && S.uid===identity && session===login && S.session===login && S.view===route && allowed() && p.revision===version && p.project===selected;}
@@ -39,6 +41,7 @@
         if(!result || result.error)throw new Error(result && result.error && result.error.message || '只读资料读取失败，请重试。');
         var data=result.data;
         if(!data || !Array.isArray(data.projects) || !Array.isArray(data.rows))throw new Error('只读资料返回不完整，请刷新重试。');
+        if(route==='managementPlans' && data.month!==request.month)throw new Error('计划月份已变化，请重新读取。');
         catalog=data.projects;
         if(selected && !catalog.some(function(project){return project.id===selected;}))throw new Error('所选项目已不在可查看范围内，请重新选择项目。');
         if(selectionRequired(route) && !selected)p.project=data.project_id || (catalog[0] && catalog[0].id) || '';
@@ -58,6 +61,11 @@
   }
   async function refresh(){if(!allowed() || !VIEWS[S.view])return;var route=S.view,pending=load(route,{force:true});cfg.render();await pending;if(S.view===route && allowed())cfg.render();}
   async function more(){if(!allowed() || !VIEWS[S.view])return;var route=S.view;var promise=load(route,{more:true});cfg.render();await promise;if(S.view===route && allowed())cfg.render();}
+  async function month(value){
+    if(!allowed() || S.view!=='managementPlans' || !/^[1-9][0-9]{3}-(0[1-9]|1[0-2])$/.test(value))return;
+    var p=page(S.view);p.month=value;p.revision++;p.busy=false;p.pending=null;p.data=null;p.error='';
+    var route=S.view,pending=load(route);cfg.render();await pending;if(S.view===route && allowed())cfg.render();
+  }
   function archiveTab(value){if(!allowed() || S.view!=='managementArchive' || !['plan','basic','planning','products','areas','units','standards'].includes(value))return;page(S.view).tab=value;cfg.render();}
   function rich(row,key,fallback){return cfg.richItem(row,key,fallback || '—');}
   function text(value){return value===null || value===undefined || value===''?'—':esc(value);}
@@ -103,9 +111,30 @@
     return body+history(row.history || row.events || row.review_history)+'</article>';
   }
   function toolbar(route,p){
-    return '<section class="card management-reader-toolbar"><div><h2>'+esc(TITLES[route])+'</h2><p class="muted">全部项目 · 只读查看</p></div><div class="management-reader-controls">'+(route==='managementArchive'?'':'<label>项目<select aria-label="只读查看项目" onchange="ManagementReader.project(this.value)">'
-      +(!selectionRequired(route)?'<option value="">全部项目</option>':'')+catalog.map(function(row){return '<option value="'+esc(row.id)+'"'+(p.project===row.id?' selected':'')+'>'+esc(row.name)+(row.project_type==='com'?'（商业）':'（住宅）')+'</option>';}).join('')+'</select></label>'
+    var scoped=p.data?p.data.read_scope==='projects':S.profile && S.profile.role==='viewer' && S.profile.viewer_scope==='projects';
+    return '<section class="card management-reader-toolbar"><div><h2>'+esc(TITLES[route])+'</h2><p class="muted">'+(scoped?'已分配项目':'全部项目')+' · 只读查看</p></div><div class="management-reader-controls">'+(route==='managementPlans'?'<label>计划月份<input type="month" aria-label="只读计划月份" value="'+esc(p.month)+'" onchange="ManagementReader.month(this.value)"></label>':'')+(route==='managementArchive'?'':'<label>项目<select aria-label="只读查看项目" onchange="ManagementReader.project(this.value)">'
+      +(!selectionRequired(route)?'<option value="">'+(scoped?'所有已分配项目':'全部项目')+'</option>':'')+catalog.map(function(row){return '<option value="'+esc(row.id)+'"'+(p.project===row.id?' selected':'')+'>'+esc(row.name)+(row.project_type==='com'?'（商业）':'（住宅）')+'</option>';}).join('')+'</select></label>'
       )+'<button class="btn ghost sm" type="button" onclick="ManagementReader.refresh()"'+(p.busy?' disabled':'')+'>刷新只读资料</button></div></section>';
+  }
+  function planTable(row,items,prefix,progress,positions){
+    return '<div class="tablewrap management-reader-plan-scroll"><table class="management-reader-plan"><thead><tr><th>模块 / 实际项目</th><th>事项</th><th>完成时间</th>'+(progress?'<th>周进展 / 卡点</th>':'')+'</tr></thead><tbody>'+items.map(function(item,index){
+      index=positions?positions[index]:index;
+      var source=item.project_id?((catalog.find(function(p){return p.id===item.project_id;}) || {}).name || item.project_id):'';
+      return '<tr><td data-label="模块 / 实际项目">'+rich(row,prefix+index+'.mod',item.mod)+(source?'<small>'+esc(source)+'</small>':'')+'</td><td data-label="事项">'+rich(row,prefix+index+'.name',item.name)+'</td><td data-label="完成时间">'+text(item.due)+'</td>'
+        +(progress?'<td data-label="周进展 / 卡点">'+rich(row,prefix+index+'.prog',item.prog || '未填写')+(item.blocker?'<p>卡点：'+rich(row,prefix+index+'.blocker',item.blocker)+'</p>':'')+'</td>':'')+'</tr>';
+    }).join('')+'</tbody></table></div>';
+  }
+  function plan(row){
+    var reports=Array.isArray(row.reports)?row.reports:[];
+    return '<section class="card management-reader-record"><div class="cardhd"><h3>'+text(row.line)+' · '+text(row.owner_name)+'</h3><span class="chip">'+esc(projectName(row))+'</span></div>'
+      +'<p class="management-reader-basis">'+text(row.month)+' 已确认月计划 · 确认时间 '+date(row.confirmed_at)+'</p>'+planTable(row,row.items || [],'items.',false)
+      +(reports.length?'<details class="management-reader-history"><summary>已提交周进展（'+reports.length+'）</summary>'+reports.map(function(report){
+        // Keep the original index for rich-text paths when a merged report
+        // contains several confirmed plans. Never show another plan's items.
+        var items=(report.biz && Array.isArray(report.biz.items)?report.biz.items:[]),selected=[],positions=[];
+        items.forEach(function(item,index){if(item.monthly_plan_id===row.id || report.biz.monthly_plan_id===row.id){selected.push(item);positions.push(index);}});
+        return '<article><h4>'+text(report.period)+'</h4>'+(selected.length?planTable(report,selected,'biz.items.',true,positions):'<p class="muted">本报告未登记该计划的逐项进展。</p>')+'</article>';
+      }).join('')+'</details>':'<p class="muted">该计划暂无已提交周进展。</p>')+'</section>';
   }
   function archive(p){
     if(!global.ZHReporterArchive)return '<div class="card empty">档案组件尚未加载，请刷新重试。</div>';
@@ -123,11 +152,11 @@
     if(p.data){
       if(route==='managementArchive')body+=p.project?archive(p):'<div class="card empty">没有可查看的项目。</div>';
       else if(route==='managementLibrary')body+=p.project && global.ProjectLibrary?global.ProjectLibrary.html(p.project):'<div class="card empty">没有可查看的项目资料。</div>';
-      else body+=(route==='managementCoord'?'<p class="management-reader-basis">报告来源展示当前周的协调需求与工作面移交；独立协调展示已保存记录。未明确归属项目的记录仍标注“未指定项目”，并按报告候选项目范围参与筛选。</p>':route==='managementCompletion'?'<p class="management-reader-basis">以下为申报时事项快照和已保存的审核状态、说明及历史记录。</p>':'')
-        +(p.data.rows.length?p.data.rows.map(function(row){return record(row,route);}).join(''):'<div class="card empty">当前范围暂无已保存记录。</div>')
+      else body+=(route==='managementPlans'?'<p class="management-reader-basis">按月份查看已确认月计划及关联的已提交周进展。核心节点可在项目档案中查看。</p>':route==='managementCoord'?'<p class="management-reader-basis">报告来源展示当前周的协调需求与工作面移交；独立协调展示已保存记录。未明确归属项目的记录仍标注“未指定项目”，并按报告候选项目范围参与筛选。</p>':route==='managementCompletion'?'<p class="management-reader-basis">以下为申报时事项快照和已保存的审核状态、说明及历史记录。</p>':'')
+        +(p.data.rows.length?p.data.rows.map(function(row){return route==='managementPlans'?plan(row):record(row,route);}).join(''):'<div class="card empty">'+(route==='managementPlans'?'当前月份和项目范围暂无已确认月计划。':'当前范围暂无已保存记录。')+'</div>')
         +(p.data.has_more?'<div class="management-reader-more"><button class="btn" type="button" onclick="ManagementReader.more()"'+(p.busy?' disabled':'')+'>加载更多记录</button></div>':'');
     }else if(!p.busy && !p.error)body+='<div class="card empty">尚未读取资料，请刷新。</div>';
     return '<div class="management-reader" data-management-view="'+esc(VIEWS[route])+'">'+body+'</div>';
   }
-  global.ManagementReader={configure:configure,reset:reset,load:load,html:html,project:project,projectId:projectId,projects:projects,refresh:refresh,more:more,archiveTab:archiveTab};
+  global.ManagementReader={configure:configure,reset:reset,load:load,html:html,project:project,month:month,projectId:projectId,projects:projects,refresh:refresh,more:more,archiveTab:archiveTab};
 })(window);

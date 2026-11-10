@@ -48,10 +48,10 @@ export async function createCoordinationTask(pool, user, request) {
   const rich = validateRichText('coordination_tasks', request.rich_text === undefined ? {} : request.rich_text, { what });
   return withIdentity(pool, user.id, async client => {
     const profile = await actor(client, user, pid, ['pm']);
-    const people = (await client.query("SELECT user_id,name FROM app_private.project_people($1) WHERE role='pm' AND user_id=ANY($2::text[])", [pid, [user.id, ownerId]])).rows;
-    if (!people.some(person => person.user_id === user.id)) fail(403, '仅本项目有效填报人可发起协调', 'coordination_forbidden');
+    const people = (await client.query("SELECT user_id,name,role FROM app_private.project_people($1) WHERE role IN ('pm','viewer') AND user_id=ANY($2::text[])", [pid, [user.id, ownerId]])).rows;
+    if (!people.some(person => person.user_id === user.id && person.role==='pm')) fail(403, '仅本项目有效填报人可发起协调', 'coordination_forbidden');
     const owner = people.find(person => person.user_id === ownerId);
-    if (!owner) fail(400, '请选择本项目有效填报人作为承办人');
+    if (!owner) fail(400, '请选择本项目有效人员作为协调对象');
     // The client keeps one UUID while retrying a draft. A primary-key conflict
     // never updates source evidence or discloses another author's existing row.
     const inserted = (await client.query('INSERT INTO public.coordination_tasks(id,project_id,author_id,author_name,owner_id,owner_name,what,due,rich_text) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING RETURNING ' + columns,

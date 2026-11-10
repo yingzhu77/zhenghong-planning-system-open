@@ -40,7 +40,7 @@ async function fixture(role='viewer',cap=false){
     }
     if(pathname==='/api/project-library/list')return route.fulfill({contentType:'application/json',body:JSON.stringify({data:{items:[{id:'file',title:'匿名资料',name:'anonymous.pdf',version:1,category:'计划资料',mime:'application/pdf',size:1024,uploaded_name:'匿名上传人',created_at:'2026-10-23T01:00:00Z',can_withdraw:true}],categories:['计划资料'],configured:true,unlocked:false,can_manage:true,can_upload:true}})});
     if(pathname==='/api/project-library/unlock')return route.fulfill({contentType:'application/json',body:JSON.stringify({data:{}})});
-    if(pathname==='/api/report-scopes/list')return route.fulfill({contentType:'application/json',body:JSON.stringify({data:[]})});
+    if(['/api/report-scopes/list','/api/commercial-module-grants','/api/project-reporting-grants','/api/monthly-summaries'].includes(pathname))return route.fulfill({contentType:'application/json',body:JSON.stringify({data:[]})});
     assert.fail('unexpected isolated route: '+pathname);
   }
   await page.route('**/*',async route=>{
@@ -49,7 +49,7 @@ async function fixture(role='viewer',cap=false){
     if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<!doctype html><html lang="zh-CN"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><div id="toast"></div></body></html>'});
     if(url.pathname==='/logo.png')return route.fulfill({contentType:'image/png',body:fs.readFileSync(new URL('logo.png',web))});
     if(!url.pathname.startsWith('/api/'))return route.fulfill({status:404,body:''});
-    const body=route.request().postDataJSON();calls.push({path:url.pathname,body});
+    const body=route.request().postDataJSON() || {};calls.push({path:url.pathname,body});
     if(behavior.hold===body.view){behavior.hold=null;behavior.held.push(()=>respond(route,body));return;}
     return respond(route,body);
   });
@@ -82,8 +82,8 @@ test('viewer login and real navigation expose only read-only tasks and project f
     await page.evaluate(()=>window.managementAudit.afterLogin());
     await expect(page.locator('.management-reader')).toHaveAttribute('data-management-view','coordination');
     const state=await page.evaluate(()=>{const h=window.managementAudit;return {groups:h.planningGroups(h.planningNavItems()).map(x=>x.label),keys:h.planningNavItems().map(x=>x.k),data:h.pageDataKeys(),manager:h.isPlanningManager(),reviewer:h.isReviewer(),reads:window.dbReads};});
-    assert.deepEqual(state.groups,['事项管理','项目资料']);assert.deepEqual(state.data,[]);assert.equal(state.manager,false);assert.equal(state.reviewer,false);assert.deepEqual(state.reads,[]);
-    assert.deepEqual(state.keys,['managementCoord','managementCompletion','managementMeetings','managementArchive','managementLibrary']);
+    assert.deepEqual(state.groups,['计划总览','事项管理','项目资料']);assert.deepEqual(state.data,[]);assert.equal(state.manager,false);assert.equal(state.reviewer,false);assert.deepEqual(state.reads,[]);
+    assert.deepEqual(state.keys,['managementPlans','managementCoord','managementCompletion','managementMeetings','managementArchive','managementLibrary']);
     await expect(page.locator('#pmPeriod')).toHaveCount(0);await expect(page.locator('textarea,input[type="file"],[contenteditable="true"]')).toHaveCount(0);
     await expect(page.locator('.rt-red strong')).toHaveText('协调正文');await expect(page.locator('.management-reader-basis').first()).toContainText('当前周');
     await page.getByRole('button',{name:'加载更多记录',exact:true}).click();await expect(page.locator('.management-reader-record')).toHaveCount(3);

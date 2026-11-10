@@ -49,6 +49,7 @@ services:
       - ./db/034-shenzhen-merged-reporting.sql:/docker-entrypoint-initdb.d/034-shenzhen-merged-reporting.sql:ro
       - ./db/035-admin-monthly-batch-withdrawal.sql:/docker-entrypoint-initdb.d/035-admin-monthly-batch-withdrawal.sql:ro
       - ./db/036-project-reporting-professions.sql:/docker-entrypoint-initdb.d/036-project-reporting-professions.sql:ro
+      - ./db/037-project-scoped-viewers.sql:/docker-entrypoint-initdb.d/037-project-scoped-viewers.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s

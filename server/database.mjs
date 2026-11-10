@@ -11,7 +11,7 @@ import { preserveSchemeMaster, sanitizeSchemeRows } from './scheme-protection.mj
 const fields = (text) => text.split(/\s+/).filter(Boolean);
 export const TABLES = Object.freeze({
   projects: fields('id name sort_order active created_at camera_url biz_meta project_type display_group reporting_professions'),
-  profiles: fields('user_id name role project_id status created_at biz_line discipline management_viewer'),
+  profiles: fields('user_id name role project_id status created_at biz_line discipline management_viewer viewer_scope'),
   project_members: fields('user_id project_id role_in_project created_at'),
   org: fields('id name dept title org_level sort_order'),
   plan_versions: fields('id project_id version_name effective_date note created_at'),
@@ -387,8 +387,9 @@ export async function prepareMutation(client, user, request) {
         continue;
       }
       if (!ops || !['update'].includes(operation)) throw new HttpError(403, '成员管理仅限运营管理员');
-      if (Object.keys(row).some((c) => !['name', 'role', 'status', 'project_id', 'biz_line', 'discipline', 'management_viewer'].includes(c))) throw new HttpError(400, '不支持的成员字段');
+      if (Object.keys(row).some((c) => !['name', 'role', 'status', 'project_id', 'biz_line', 'discipline', 'management_viewer', 'viewer_scope'].includes(c))) throw new HttpError(400, '不支持的成员字段');
       if (row.management_viewer !== undefined && typeof row.management_viewer !== 'boolean') throw new HttpError(400, '管理查看权限格式不正确');
+      if (row.viewer_scope !== undefined && !['all','projects'].includes(row.viewer_scope)) throw new HttpError(400, '请选择全部项目或已分配项目的只读范围');
       if (row.role !== undefined && !roles.has(row.role)) throw new HttpError(400, '角色不正确');
       if (row.status !== undefined && !['pending', 'approved', 'rejected'].includes(row.status)) throw new HttpError(400, '审核状态不正确');
       if (row.biz_line !== undefined && ![null, '', '*', ...BUSINESS_MODULES].includes(row.biz_line)) throw new HttpError(400, '商业模块不正确');
@@ -528,7 +529,7 @@ export async function prepareMutation(client, user, request) {
       row.updated_at = new Date().toISOString();
     } else if (table === 'project_members') {
       if (!ops) throw new HttpError(403, '项目分配仅限运营管理员');
-      if (row.role_in_project && row.role_in_project !== 'pm') throw new HttpError(400, '项目成员角色不正确');
+      if (row.role_in_project && !['pm','viewer'].includes(row.role_in_project)) throw new HttpError(400, '项目成员角色不正确');
     } else {
       if (!admin) throw new HttpError(403, '此操作仅限运营管理员或总裁');
       if (table === 'projects' && row.display_group != null && (typeof row.display_group !== 'string' || !row.display_group.trim() || row.display_group.length > 100 || row.display_group !== row.display_group.trim())) throw new HttpError(400, '项目展示分组不正确');

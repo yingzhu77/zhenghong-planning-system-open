@@ -1043,7 +1043,7 @@
       if(!projectsReady)return renderFail('负责项目读取失败，请刷新重试。');
       if(!myProjects().length)return renderFail('当前尚未分配负责项目，请联系管理员。');
     }
-    S.view = S.profile.role === 'viewer' ? 'managementCoord' : S.profile.role === 'pm' ? 'form' : isPzo() && myProjects().some(function(p){return isCom(p.id);}) ? 'presCom' : 'pres';
+    S.view = S.profile.role === 'viewer' ? (S.profile.viewer_scope==='projects'?'managementPlans':'managementCoord') : S.profile.role === 'pm' ? 'form' : isPzo() && myProjects().some(function(p){return isCom(p.id);}) ? 'presCom' : 'pres';
     if(S.profile.role==='viewer')return showPage();
     if (window.PlanningBoot) {
       try { await Promise.all([loadPageData(), window.PlanningBoot.ensureEditor(), S.profile.role === 'pm' && window.PlanningBoot.ensureReporter ? window.PlanningBoot.ensureReporter() : Promise.resolve(),
@@ -1900,7 +1900,7 @@
     var people=S.projectPeople || [];
     if(selected && !people.some(function(person){return person.name===selected;}))opts.push('<option value="'+esc(selected)+'" selected>'+esc(selected)+'（原记录）</option>');
     people.forEach(function (o) {
-      var detail=o.discipline || o.biz_line || ROLE_LABEL[o.role] || '';
+      var detail=o.role==='viewer'?'只读协调对象':o.discipline || o.biz_line || ROLE_LABEL[o.role] || '';
       opts.push('<option value="' + esc(o.name) + '"' + (selected === o.name ? ' selected' : '') + '>' + esc(o.name) + (detail ? '（' + esc(detail) + '）' : '') + '</option>');
     });
     return opts.join('');
@@ -4138,7 +4138,7 @@
     var reportingProjects=reportingSettingsProjects().filter(function(project){return project.reporting_professions && project.reporting_professions.length;});
     var rows = S.members.map(function (m) {
       var mine = S.pms.filter(function (x) { return x.user_id === m.user_id; }).map(function (x) { return x.project_id; });
-      if (m.project_id && mine.indexOf(m.project_id) < 0) mine.push(m.project_id);
+      if (m.role!=='viewer' && m.project_id && mine.indexOf(m.project_id) < 0) mine.push(m.project_id);
       var chips = mine.map(function (pid) {
         return '<span class="pchip">' + esc(projName(pid)) + '<b onclick="App.memberUnassign(\'' + esc(m.user_id) + '\',\'' + esc(pid) + '\')">×</b></span>';
       }).join('');
@@ -4147,9 +4147,9 @@
         ? '<select onchange="App.memberAssign(\'' + esc(m.user_id) + '\',this.value)" style="width:150px;margin-top:6px"><option value="">＋ 添加项目</option>'
           + rest.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>'; }).join('') + '</select>'
         : '';
-      var isPending = m.status !== 'approved' || (m.role === 'pm' && !mine.length);
+      var isPending = m.status !== 'approved' || ((m.role === 'pm' || m.role==='viewer' && m.viewer_scope==='projects') && !mine.length);
       var hasCom = mine.filter(function (pid) { return isCom(pid); }).length > 0;
-      var lineCell = hasCom
+      var lineCell = hasCom && m.role==='pm'
         ? '<select onchange="App.memberSet(\'' + esc(m.user_id) + '\',\'biz_line\',this.value)">'
           + ['<option value="">未指定模块</option>', '<option value="*"' + (m.biz_line === '*' ? ' selected' : '') + '>全部商业模块（测试）</option>'].concat(businessLinesForProjects(S.projects.filter(function(p){return mine.indexOf(p.id)>=0 && isCom(p.id);})).map(function (l) {
               return '<option value="' + esc(l) + '"' + (m.biz_line === l ? ' selected' : '') + '>' + esc(l) + '</option>';
@@ -4170,10 +4170,10 @@
         + '<td><select onchange="App.memberSet(\'' + esc(m.user_id) + '\',\'role\',this.value)">'
         + ['pm', 'ops', 'president', 'pzo', 'viewer'].map(function (r) { return '<option value="' + r + '" ' + (m.role === r ? 'selected' : '') + '>' + ROLE_LABEL[r] + '</option>'; }).join('')
         + '</select></td>'
-        + '<td>' + (m.role === 'pm' ? (chips || '<span class="muted">未分配</span>') + addSel : m.role==='viewer'?'<span class="muted">全部项目（只读）</span>':'<span class="muted">全部项目（汇总端）</span>') + '</td>'
+        + '<td>' + (m.role === 'pm' || m.role==='viewer' && m.viewer_scope==='projects' ? (chips || '<span class="muted">未分配</span>') + addSel : m.role==='viewer'?'<span class="muted">全部项目（只读）</span>':'<span class="muted">全部项目（汇总端）</span>') + '</td>'
         + '<td>' + discCell + '</td>'
         + '<td>' + lineCell + '</td>'
-        + '<td>' + (m.role==='pm'?'<label><input type="checkbox" '+(m.management_viewer?'checked ':'')+'onchange="App.memberSet(\''+esc(m.user_id)+'\',\'management_viewer\',this.checked)">全项目只读</label>':m.role==='viewer'?'<span class="muted">全部项目只读</span>':'<span class="muted">—</span>') + '</td>'
+        + '<td>' + (m.role==='pm'?'<label><input type="checkbox" '+(m.management_viewer?'checked ':'')+'onchange="App.memberSet(\''+esc(m.user_id)+'\',\'management_viewer\',this.checked)">全项目只读</label>':m.role==='viewer'?'<select aria-label="查看人项目范围" onchange="App.memberSet(\''+esc(m.user_id)+'\',\'viewer_scope\',this.value)"><option value="all"'+(m.viewer_scope!=='projects'?' selected':'')+'>全部项目只读</option><option value="projects"'+(m.viewer_scope==='projects'?' selected':'')+'>已分配项目只读</option></select>':'<span class="muted">—</span>') + '</td>'
         + '<td><select onchange="App.memberSet(\'' + esc(m.user_id) + '\',\'status\',this.value)">'
         + ['pending', 'approved'].map(function (s) { return '<option value="' + s + '" ' + (m.status === s ? 'selected' : '') + '>' + (s === 'approved' ? '已通过' : '待审核') + '</option>'; }).join('')
         + '</select></td>'
@@ -4181,7 +4181,7 @@
     }).join('');
 
     return '<div class="card"><h2>成员管理</h2>'
-      + '<div class="notice"><b>账号角色</b>：提报人、管理员、总裁、项目总、查看人。查看人仅可查看全部项目的事项管理与项目资料；提报人可另外授权全项目只读，原填报职责不变。自助注册固定为「待审核」的提报人，角色与只读权限由管理员授权。<br>'
+      + '<div class="notice"><b>账号角色</b>：提报人、管理员、总裁、项目总、查看人。查看人可授权全部项目或已分配项目的计划、事项与资料只读；指定项目查看人可作为本项目协调对象。提报人可另外授权全项目只读，原填报职责不变。自助注册固定为「待审核」的提报人，角色与只读权限由管理员授权。<br>'
       + '<b>项目类型</b>：住宅与商业共用提报人角色，按获授权项目显示相应表单。商业项目（弘坊）沿用已分配的专业模块，各人填报自己获授权的部分。<br>'
       + '<b>特殊账号权限</b>：管理员管理项目和成员；总裁查看计划总览并记录总裁交代；项目总查看商业计划总览并记录项目总安排。历史评价保留只读，具体操作沿用现有权限，特殊账号均不能修改他人的原始提报。<br>'
       + '<b>专业条线</b>：指定后该成员在工作台只看本专业的节点；未指定时，按原项目范围查看全部节点。</div>'
@@ -4275,16 +4275,17 @@
   }
   function canReadManagement() { return !!(S.profile && S.profile.status==='approved' && (S.profile.role==='viewer' || S.profile.role==='pm' && S.profile.management_viewer===true)); }
   function managementNavItems() { return [
+    {k:'managementPlans',v:'managementPlans',label:'计划查看（只读）',group:'overview'},
     {k:'managementCoord',v:'managementCoord',label:'协调需求（只读）',group:'collaboration'},
     {k:'managementCompletion',v:'managementCompletion',label:'完成与延期记录',group:'collaboration'},
     {k:'managementMeetings',v:'managementMeetings',label:'会议事项（只读）',group:'collaboration'},
-    {k:'managementArchive',v:'managementArchive',label:'全项目档案（只读）',group:'projects'},
-    {k:'managementLibrary',v:'managementLibrary',label:'全项目资料共享（只读）',group:'projects'}]; }
+    {k:'managementArchive',v:'managementArchive',label:'项目档案（只读）',group:'projects'},
+    {k:'managementLibrary',v:'managementLibrary',label:'资料共享（只读）',group:'projects'}]; }
   function isManagementReadView(view) { return canReadManagement() && managementNavItems().some(function(item){return item.k===view;}); }
   function isPlanningManager() { return isReviewer() || isPzo(); }
   function planningGroups(items) {
     var labels={work:'工作台',form:'本期填报',projects:'项目资料',history:'历史记录',overview:'计划总览',analysis:'统计分析',collaboration:'事项管理',settings:'系统设置'};
-    var order=S.profile.role==='viewer'?['collaboration','projects']:isPlanningManager()?['overview','analysis','collaboration','projects','settings']:['work','form','collaboration','projects','history'];
+    var order=S.profile.role==='viewer'?['overview','collaboration','projects']:isPlanningManager()?['overview','analysis','collaboration','projects','settings']:['work','form','overview','collaboration','projects','history'];
     return order.filter(function(key){return items.some(function(item){return item.group===key;});}).map(function(key){return {key:key,label:labels[key]};});
   }
   function detailProjects() {
@@ -5409,6 +5410,7 @@
       /* 函数级权限拦截：总裁为只读浏览，成员管理仅限运营管理员 */
       if (!S.profile || S.profile.role !== 'ops') return toast('无权限：成员管理仅限管理员', 'err');
       if(field==='management_viewer' && typeof value!=='boolean')return;
+      if(field==='viewer_scope' && !['all','projects'].includes(value))return;
       var memberActor=S.uid,memberSession=S.session;
       function sameMemberSession(){return S.uid===memberActor && S.session===memberSession && S.profile && S.profile.role==='ops';}
       if (field === 'role') {
@@ -5467,7 +5469,8 @@
     memberAssign: async function (uid, pid) {
       if (!S.profile || S.profile.role !== 'ops') return toast('无权限：成员管理仅限管理员', 'err');
       if (!pid) return;
-      var r = await db.from('project_members').insert({ user_id: uid, project_id: pid, role_in_project: 'pm' });
+      var member=S.members.find(function(row){return row.user_id===uid;});
+      var r = await db.from('project_members').insert({ user_id: uid, project_id: pid, role_in_project: member && member.role==='viewer'?'viewer':'pm' });
       if (r.error) return toast('分配失败：' + (r.error.message || ''), 'err');
       toast('已分配项目'); await loadData(['pms'], true); renderShell();
     },

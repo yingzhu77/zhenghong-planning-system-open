@@ -72,7 +72,7 @@
         var people = check(response, '本项目承办人读取失败，请重试');
         if (!live()) return { data: null, error: { code: 'stale_coordination', message: '承办人读取条件已变化' } };
         if (!Array.isArray(people)) throw new Error('承办人名单读取结果不完整，请重试');
-        entry.people = people.filter(function (person) { return person.role === 'pm'; }); entry.peopleReady = true;
+        entry.people = people.filter(function (person) { return person.role === 'pm' || person.role === 'viewer'; }); entry.peopleReady = true;
         return { data: entry.people, error: null };
       } catch (error) {
         if (live()) entry.peopleError = error.message || '本项目承办人读取失败，请重试';
@@ -127,13 +127,14 @@
     if (cfg.flush) cfg.flush(); capture(pid);
     if (!draft.what.trim()) { draft.error = '请填写具体协调事项'; cfg.render(); return; }
     if (!entry.peopleReady || entry.peopleError || !entry.people.some(function (person) { return person.user_id === draft.owner_id; })) {
-      draft.error = '请从本项目有效填报人名单选择一名承办人'; cfg.render(); return;
+      draft.error = '请从本项目有效人员名单选择协调对象'; cfg.render(); return;
     }
     if (draft.due && !validDate(draft.due)) { draft.error = '请填写有效的最晚日期，或留空待确定'; cfg.render(); return; }
     var payload = { id: draft.id, project_id: pid, owner_id: draft.owner_id, what: draft.what.trim(), due: draft.due || '' };
     if (cfg.richCopy) payload = cfg.richCopy(draft, payload, { what: 'what' });
     if (cfg.richCollect) payload = cfg.richCollect(payload);
     var generation = epoch, view = S.view, active = cfg;
+    var readonlyTarget=entry.people.some(function(person){return person.user_id===draft.owner_id && person.role==='viewer';});
     draft.busy = true; draft.error = ''; active.render();
     try {
       var row = check(await active.request('/api/coordination-tasks/create', payload), '发起结果未能确认，请刷新列表核对后重试');
@@ -142,7 +143,7 @@
       [entry, state('*')].forEach(function (scope) { scope.revision++; scope.pending = null; scope.ready = false; });
       mergeRows(pid, (S.coordinationTasks || []).filter(function (item) { return item.project_id === pid && item.id !== row.id; }).concat([row]));
       entry.draft = freshDraft(); entry.draft.resetPending = true;
-      if (current(pid, generation, view) && active.toast) active.toast('协调事项已发起，承办人可在工作台办理');
+      if (current(pid, generation, view) && active.toast) active.toast(readonlyTarget?'协调事项已发起，对方可在协调需求中查看':'协调事项已发起，承办人可在工作台办理');
       try { if (active.afterCreated) await active.afterCreated(row); }
       catch (_) { if (current(pid, generation, view) && active.toast) active.toast('协调事项已发起，关联列表刷新失败，请手动刷新；无需再次发起', 'err'); }
     } catch (error) {
@@ -175,19 +176,20 @@
     if (!allowed(projectId)) return;
     var entry = state(projectId);
     if (Array.isArray(rows)) { entry.ready = true; entry.error = ''; }
-    if (Array.isArray(people)) { entry.people = people.filter(function (person) { return person.role === 'pm'; }); entry.peopleReady = true; entry.peopleError = ''; }
+    if (Array.isArray(people)) { entry.people = people.filter(function (person) { return person.role === 'pm' || person.role === 'viewer'; }); entry.peopleReady = true; entry.peopleError = ''; }
   }
   function reset(){epoch++;states=Object.create(null);identity=null;sessionIdentity=null;}
   function render(options) {
     var pid = typeof options === 'string' ? options : options && options.project_id || S && S.pmProject;
     if (!allowed(pid)) return '';
     var entry = state(pid), draft = entry.draft, disabled = draft.busy ? ' disabled' : '';
+    var readOnlyRecipient=entry.people.some(function(person){return person.user_id===draft.owner_id && person.role==='viewer';});
     draft.resetPending = false;
     var peopleDisabled = disabled || !entry.peopleReady || entry.peopleError ? ' disabled' : '';
     var rows = (S.coordinationTasks || []).filter(function (row) { return row.project_id === pid && row.author_id === S.uid; });
     var clickPid = esc(JSON.stringify(pid));
     return '<section class="card coordination-workbench" data-coordination-project="' + esc(pid) + '"><div class="cardhd"><h3>协调申请</h3><button type="button" class="btn" onclick="CoordinationWorkbench.refresh(' + clickPid + ')"' + (entry.pending || entry.peoplePending || entry.refreshing ? ' disabled' : '') + '>刷新协调事项</button></div>'
-      + '<p class="muted">选择本项目承办人直接发起。事项会送到承办人的工作台，由你确认完成与延期申请。</p>'
+      + '<p class="muted">'+(readOnlyRecipient?'所选对象仅有查看权限，收到的事项可在其协调需求中查看，不开放完成或延期申报。':'选择本项目承办人直接发起。事项会送到承办人的工作台，由你确认完成与延期申请。')+'</p>'
       + (entry.error || state('*').error ? '<p class="completion-error" role="alert">' + esc(entry.error || state('*').error) + '；已加载记录保留。</p>' : '')
       + (entry.peopleError ? '<p class="completion-error" role="alert">' + esc(entry.peopleError) + '</p>' : '')
       + '<div class="completion-filters"><label>承办人<select id="' + esc(inputId(pid, 'owner_id')) + '" onchange="CoordinationWorkbench.change(' + clickPid + ',\'owner_id\',this.value)"' + peopleDisabled + '><option value="">选择实名承办人</option>'
