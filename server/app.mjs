@@ -26,7 +26,7 @@ import { uploadReportAttachment, listReportAttachments, loadReportAttachment, di
 import { pipeline } from 'node:stream/promises';
 import { loadFile, MAX_FILE_BYTES, saveUpload } from './files.mjs';
 import { HttpError, publicError } from './errors.mjs';
-import { webAssets } from './web-assets.mjs';
+import { sendWebContent, webAssets, webContent } from './web-assets.mjs';
 import { readOnlyGate, readOnlyHtml } from './read-only.mjs';
 import { planningAIChat } from './planning-ai.mjs';
 import { loadPlanningAIMemory, savePlanningAIConversation, savePlanningAIPreference } from './planning-ai-memory.mjs';
@@ -112,7 +112,7 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   app.post('/api/report-scopes/list', auth.requireUser, express.json({limit:'16kb'}), asyncRoute(async(req,res)=>{
     res.json({data:await listReportScopes(pool,req.user,req.body || {}),error:null});
   }));
-  for (const route of ['open', 'change', 'publish', 'settings']) {
+  for (const route of ['open', 'change', 'publish', 'settings', 'catalog']) {
     app.post('/api/weekly-collaboration/' + route, auth.requireUser, express.json({ limit: route === 'change' ? '256kb' : '16kb' }), asyncRoute(async (req, res) => {
       const data = await weeklyCollaboration[route](req.user, req.body ?? {});
       res.json({ data, error: null });
@@ -363,20 +363,23 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   }));
   app.use('/api', (req, res) => res.status(404).json({ data: null, error: { code: 'not_found', message: '接口不存在' } }));
   const assets = webAssets(webRoot);
+  const indexPage = webContent(readOnlyHtml(assets.html,config));
   app.get(['/', '/index.html'], (req, res) => {
-    res.set('Cache-Control', 'no-cache, max-age=0, must-revalidate').type('html').send(readOnlyHtml(assets.html, config));
+    res.set('Cache-Control','no-cache, max-age=0, must-revalidate').type('html');
+    sendWebContent(req,res,indexPage);
   });
   app.get(/^\/assets\//, (req, res, next) => {
     const asset = assets.responses.get(req.path);
     if (!asset) return next();
-    res.set('Cache-Control', 'public, max-age=31536000, immutable').type(path.extname(asset.name)).send(asset.body);
+    res.set('Cache-Control','public, max-age=31536000, immutable').type(path.extname(asset.name));
+    sendWebContent(req,res,asset);
   });
   app.use(express.static(webRoot, { dotfiles: 'deny', index: false, fallthrough: true, setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, max-age=0') }));
   app.use((req, res) => res.status(404).send('Not found'));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
     const result = publicError(error.code === 'P3801'
-      ? new HttpError(409, '该周弘坊设计部已启用协同填报，请从协同填报页面提交。', 'P3801') : error);
+      ? new HttpError(409, '该项目专业本周已启用协同填报，或报告周格式不正确。请在本期填报核对周期和协同状态。', 'P3801') : error);
     if (result.status >= 500) console.error('[request failed]', { code: error.code || error.name, route: req.path,
       ...(error.code==='attachment_cleanup_failed'?{phase:error.cleanupPhase || 'upload-file',attachmentId:error.attachmentId || null,
         cleanupCode:error.cleanupCause?.code || error.cause?.code || null,cleanupFailures:error.cleanupFailures || []}:{}) });

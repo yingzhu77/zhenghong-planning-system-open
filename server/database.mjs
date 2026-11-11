@@ -207,8 +207,8 @@ export function reportWeekStart(label, reference = new Date()) {
   return candidates.length ? iso(candidates[0]) : '';
 }
 
-export async function lockHongfangWeeklyWrite(client, week) {
-  await client.query("SELECT pg_advisory_xact_lock(hashtextextended('hongfang-design-weekly:'||$1,0))", [week]);
+export async function lockWeeklyCollaborationWrite(client, projectId, line, week) {
+  await client.query('SELECT app_private.lock_weekly_collaboration_write($1,$2,$3::date)', [projectId,line,week]);
 }
 
 export async function reportDelay(client, projects, nodes = []) {
@@ -452,13 +452,14 @@ export async function prepareMutation(client, user, request) {
         if (existing && existing.author_id !== user.id) throw new HttpError(403, '只能修改本人提交的周报');
         if (existing) richExisting = existing;
       }
-      if (pid === 'hf' && line === '设计部') {
-        const week = existing
-          ? (await client.query('SELECT app_private.hongfang_weekly_existing_report_week($1,$2)::text AS week', [period,existing.submitted_at])).rows[0].week
-          : (await client.query('SELECT app_private.report_week_start($1,now())::text AS week', [period])).rows[0].week;
-        if (!week) throw new HttpError(409, '弘坊设计部周报需要有效的报告周');
-        // The pilot uses this lock before validating attachment references.
-        await lockHongfangWeeklyWrite(client,week);
+      if (line !== '综合') {
+        // Use the 039 lock identity before locking plan references or attachments.
+        // The existing week parser also supports preparing writes in older migration fixtures.
+        await client.query(String.raw`SELECT pg_advisory_xact_lock(hashtextextended('weekly-collaboration:'||
+          jsonb_build_array($1::text,$2::text,to_char(COALESCE(
+            app_private.report_week_start(regexp_replace($3::text,'第[[:space:]]*0*([0-9]{1,2})[[:space:]]*周','第\1周'),COALESCE($4::timestamptz,now())),
+            date_trunc('week',COALESCE($4::timestamptz,now()) AT TIME ZONE 'Asia/Shanghai')::date),'YYYY-MM-DD'))::text,0))`,
+          [pid,line,period,existing?.submitted_at ?? null]);
       }
       row.line = line;
       const scope = await resolveReportScope(client, user, row, existing, period, pid);

@@ -81,6 +81,7 @@
   min-width: 0;
   table-layout: fixed;
 }
+.collaboration-table .collaboration-project,
 .collaboration-table .collaboration-module { width: 12%; }
 .collaboration-table .collaboration-task { width: 30%; }
 .collaboration-table .collaboration-date { width: 12ch; }
@@ -93,8 +94,9 @@
   vertical-align: middle;
   overflow-wrap: anywhere;
 }
-.collaboration-table td:first-child,
-.collaboration-table td:nth-child(3) {
+.collaboration-table td[data-label="实际项目／分期"],
+.collaboration-table td[data-label="模块"],
+.collaboration-table td[data-label="完成时间"] {
   text-align: center;
 }
 .collaboration-cell .ql-container {
@@ -147,11 +149,14 @@
 .collaboration-settings label {
   display: grid;
   gap: 4px;
+  min-width: 0;
+  max-width: 100%;
   color: #294968;
 }
 .collaboration-settings input,
 .collaboration-settings select {
   min-height: 38px;
+  max-width: 100%;
 }
 .collaboration-copy-text {
   display: block;

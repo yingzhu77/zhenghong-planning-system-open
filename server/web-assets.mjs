@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 
 const files = ['logo.png', 'login-bg-desktop.avif', 'login-bg-mobile.avif', 'login-bg-desktop.webp', 'login-bg-mobile.webp',
   'styles.css', 'planning-ui.css', 'cloud-compat.js', 'login-boot.js', 'app.js', 'password-change.js', 'password-change.css',
@@ -13,6 +14,20 @@ const files = ['logo.png', 'login-bg-desktop.avif', 'login-bg-mobile.avif', 'log
   'management-reader.js','management-reader.css','planning-ai.js','planning-ai-draft.js','planning-ai-memory.js','planning-ai.css',
   'report-reference.js','report-reference.css','meeting-view.js','meeting-controller.js','meeting-display.js','meeting-display.html','meeting-mode.css',
   'weekly-collaboration.js', 'weekly-collaboration.css', 'vendor/weekly-collaboration.js'];
+
+export function webContent(value) {
+  const body=Buffer.isBuffer(value)?value:Buffer.from(value);
+  const compressed=body.length>=1024?gzipSync(body):null;
+  return {body,gzip:compressed && compressed.length<body.length?compressed:null};
+}
+
+export function sendWebContent(req,res,content) {
+  if (content.gzip) {
+    res.vary('Accept-Encoding');
+    if (req.acceptsEncodings('gzip','identity')==='gzip') return res.set('Content-Encoding','gzip').send(content.gzip);
+  }
+  return res.send(content.body);
+}
 
 // The public asset list is fixed. URLs identify the bytes actually served,
 // including the versioned image references inside CSS.
@@ -32,7 +47,7 @@ export function webAssets(webRoot) {
     const hash = createHash('sha256').update(body).digest('hex').slice(0, 16);
     const url = `/assets/${hash}/${name}`;
     manifest[name] = url;
-    responses.set(url, { body, name });
+    responses.set(url,{name,...(/\.(?:html|css|js)$/.test(name)?webContent(body):{body})});
     return url;
   }
   files.forEach(prepare);

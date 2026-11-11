@@ -52,11 +52,13 @@
   function canReportResidentialLine(line,pid) {
     return DISCIPLINES.includes(line) && (S.profile || {}).discipline===line || myProjectReportingLines(pid).includes(line);
   }
-  function residentialReportLine(pid,period) {
+  function residentialReportLine(pid,period,defaultLine) {
     var scope=reportScopeFor(pid,period);
     if(projectReportingGrantReadFailed(pid,S.pmLine))return S.pmLine;
     if((!scope || scope.reporting_mode==='professional') && myProjectReportingLines(pid).includes(S.pmLine))return S.pmLine;
-    return residentialDefaultLine(pid,period);
+    var selected=S.pmLegacyResidentialSelection;
+    if(!scope && selected && selected.project===pid && selected.period===period && canReportResidentialLine(selected.line,pid))return selected.line;
+    return defaultLine===undefined?residentialDefaultLine(pid,period):defaultLine;
   }
   function residentialDefaultLine(pid,period) {
     var scope=reportScopeFor(pid,period), discipline=(S.profile || {}).discipline;
@@ -432,6 +434,10 @@
 
   function draftKey() {
     if (S.pmReportScope && window.ReportScopes) return window.ReportScopes.draftKey(S.uid,S.pmReportScope,S.pmPeriod,null,S.pmLine);
+    if(S.pmLegacyResidentialProfession && S.pmLine===S.pmLegacyResidentialProfession) {
+      var week=window.PlanningWindows?window.PlanningWindows.periodStart(S.pmPeriod):S.pmPeriod;
+      return 'zh_draft_residential_profession:'+JSON.stringify([S.uid,S.pmProject,S.pmLine,week]);
+    }
     /* 商业项目按模块分别暂存，避免切换模块时草稿互相覆盖 */
     var ln = (S.pmProject && isCom(S.pmProject)) ? '_' + String(S.pmLine || '') : '';
     return 'zh_draft_' + (S.uid || 'anon') + '_' + (S.pmProject || '') + ln + '_' + (weekNo(S.pmPeriod) || '0');
@@ -1471,6 +1477,7 @@
     dataEpoch++; pageNavigation++; dataState = {};
     Object.keys(dataSources).forEach(function (key) { S[key] = []; });
     S.loadErrors = []; S.pmReport = null; S.pmProject = null; S.pmLine = null; S.pmReportScope=null; S.pmScopeId=null; S.pmLegacyReportConflict=null; S.pmScopeTransition = null; delete S.pmRenderedScope;
+    S.pmLegacyResidentialProfession=null;S.pmLegacyResidentialSelection=null;
     clearTimeout(draftAutosaveTimer);
     S.briefDrafts = {}; S.reviewRichDrafts = {}; S.formRich = {}; S.lineEdits = {};
     S.overviewUI = { project: '', line: '', discipline: '', open: {} };
@@ -1632,7 +1639,7 @@
           ? window.PlanningBoot.ensureAdmin() : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureOverview && isManagerOverview()
           ? window.PlanningBoot.ensureOverview() : Promise.resolve(),
-        window.PlanningBoot && window.PlanningBoot.ensureMonthlySummaries && S.profile && S.profile.role==='pm' && ['form','professionalOverview'].includes(S.view)
+        window.PlanningBoot && window.PlanningBoot.ensureMonthlySummaries && S.view==='professionalOverview'
           ? window.PlanningBoot.ensureMonthlySummaries() : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureStatistics && S.view==='completionStats'
           ? window.PlanningBoot.ensureStatistics() : Promise.resolve(),
@@ -1701,6 +1708,7 @@
     S.pmReportScope=reportScopeFor(pid,period);
     S.pmScopeId=S.pmReportScope?S.pmReportScope.id:null;
     S.pmLegacyReportConflict=null;
+    S.pmLegacyResidentialProfession=null;
     if(S.pmReportScope)pid=S.pmReportScope.anchor_project_id;
     S.pmProject = pid;
     var wn = weekNo(period);
@@ -1710,7 +1718,9 @@
       S.pmLine = selectedBizLine();
       S.pmReport = lineReport(pid, period, S.pmLine);
     } else {
-      S.pmLine = residentialReportLine(pid,period);
+      var defaultLine=residentialDefaultLine(pid,period), discipline=(S.profile || {}).discipline;
+      if(!S.pmReportScope && defaultLine===LINE_ALL && DISCIPLINES.includes(discipline))S.pmLegacyResidentialProfession=discipline;
+      S.pmLine = residentialReportLine(pid,period,defaultLine);
       S.pmReport = S.pmReportScope && window.ReportScopes?window.ReportScopes.findReport(S.reports,S.pmReportScope,period,null,S.pmLine,S.uid):mine.filter(function (r) {
         return (window.PlanningWindows?window.PlanningWindows.samePeriod(r.period,period,r.submitted_at || r.created_at):r.period===period) && (r.line || LINE_ALL) === S.pmLine;
       })[0] || null;
@@ -1921,17 +1931,27 @@
     return opts.join('');
   }
 
+  function weeklyCollaborationTarget(pid,line,scope) {
+    var project=projOf(pid), commercial=isCom(pid);
+    if(!S.profile || S.profile.role!=='pm' || S.profile.status!=='approved' || !project || project.active===false || !line
+      || dataState.reportScopes && dataState.reportScopes.error || projectReportingGrantReadFailed(pid,line))return null;
+    if(scope && (commercial || scope.reporting_mode!=='professional' || scope.anchor_project_id!==pid))return null;
+    if(!scope && !commercial && (S.reportScopes || []).some(function(candidate){return candidate.project_ids.includes(pid);}))return null;
+    if(commercial ? !canReportBizLine(line,pid) : line===LINE_ALL || !canReportResidentialLine(line,pid))return null;
+    var members=new Set(S.pms.filter(function(row){return row.user_id===S.uid;}).map(function(row){return row.project_id;}));
+    if(!(scope?scope.project_ids:[pid]).every(function(id){return members.has(id);}))return null;
+    return {project_id:pid,line:line,report_scope_id:scope?scope.id:null,project_name:scope?scope.name:project.name,
+      projectNames:scope?Object.fromEntries(scope.project_ids.map(function(id){return [id,projName(id)];})):null};
+  }
   function weeklyCollaborationScope() {
-    return S.profile && S.profile.role==='pm' && S.profile.status==='approved' && S.pmProject==='hf'
-      && S.pmLine==='设计部' && myProjects().some(function(project){return project.id==='hf' && project.project_type==='com' && project.active!==false;})
-      && S.pms.some(function(member){return member.user_id===S.uid && member.project_id==='hf' && member.role_in_project==='pm';})
-      && canReportBizLine(S.pmLine,S.pmProject);
+    return weeklyCollaborationTarget(S.pmProject,S.pmLine,S.pmReportScope);
   }
   function weeklyCollaborationContext() {
     var settings=S.view==='weeklyCollaborationSettings' && S.profile && S.profile.role==='ops' && S.profile.status==='approved';
-    if (!settings && (S.view!=='weeklyCollaboration' || !weeklyCollaborationScope())) return null;
+    var scope=S.view==='weeklyCollaboration' && weeklyCollaborationScope();
+    if (!settings && !scope) return null;
     var period=settings?currentPeriod():S.pmPeriod || currentPeriod();
-    return {mode:settings?'settings':'editor',uid:S.uid,period:period,
+    return {mode:settings?'settings':'editor',scope:scope,uid:S.uid,period:period,
       week:window.PlanningWindows.periodStart(period),
       attachmentIds:function(){return window.ReportAttachments ? window.ReportAttachments.ids() : [];},
       notify:toast,onPublished:function(report){
@@ -1947,7 +1967,7 @@
   /* 填报页只调整布局；字段、提交动作和项目/模块授权沿用原逻辑。 */
   function planFormContext(pid, cur, moduleHtml, commercial) {
     var projects = reportingProjects();
-    var project = !commercial && projects.length > 1
+    var project = projects.length > 1
       ? '<select id="planProject" aria-label="当前填报项目" onchange="App.switchProject(this.value)">'
         + projects.map(function (p) { return '<option value="' + esc(p.id) + '"' + (pid === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select>'
       : '<b>' + esc(reportScopeName(pid)) + '</b>';
@@ -1986,13 +2006,19 @@
       return '--entry-col-'+column+':'+widths[index];
     }).join(';'):'';
   }
-  function sizeEditedPlanTable(table) {
+  function samplePlanRows(rows,editedRow) {
+    var count=Math.min(rows.length,24), sampled=[];
+    for(var i=0;i<count;i++)sampled.push(rows[Math.round(i*(rows.length-1)/Math.max(count-1,1))]);
+    if(editedRow && !sampled.includes(editedRow))sampled.push(editedRow);
+    return sampled;
+  }
+  function sizeEditedPlanTable(table,editedRow) {
     if(!table.isConnected || !window.MonthlySummaries)return;
     function field(row,index) {
       var cell=row.cells[index], input=cell.querySelector('textarea[data-rich],input');
       return input?input.value:cell.textContent;
     }
-    var items=Array.from(table.querySelectorAll('tr[data-row]'),function(row){
+    var items=samplePlanRows(table.tBodies[0].rows,editedRow).filter(function(row){return row.cells.length===4;}).map(function(row){
       return {mod:field(row,0),name:field(row,1),due:field(row,2),progress:field(row,3)};
     });
     var sizing=planEntrySizing(items);
@@ -2037,7 +2063,7 @@
         + '<textarea rows="1" data-grow data-rich id="co_what_' + i + '" oninput="App.grow(this)" placeholder="需要对方做什么">' + esc(r.what || '') + '</textarea>'
         + '<input type="date" aria-label="协调最晚时间" id="co_by_' + i + '" value="' + esc(dstr(r.by)) + '"></div>';
     }).join('');
-    var itemSizing=planEntrySizing((S.bizItems || []).map(function(item){
+    var itemSizing=window.MonthlySummaries && planEntrySizing(samplePlanRows(S.bizItems || []).map(function(item){
       return {mod:item.mod,name:item.name,due:item.due,progress:item.prog,blocker:item.blocker};
     }));
     var dueList = [];
@@ -2066,6 +2092,7 @@
     var grantError=dataState.businessModuleGrants && dataState.businessModuleGrants.error;
     var residentialChoices=myProjectReportingLines(pid);
     if(S.pmReportScope && !professionalPMScope())residentialChoices=[];
+    if(S.pmLegacyResidentialProfession && !residentialChoices.includes(S.pmLegacyResidentialProfession))residentialChoices.push(S.pmLegacyResidentialProfession);
     if(!commercial && residentialChoices.length){
       var primary=residentialDefaultLine(pid,S.pmPeriod);
       if(primary && !residentialChoices.includes(primary))residentialChoices.unshift(primary);
@@ -2086,7 +2113,7 @@
 
     return (commercial ? '' : dlNodes) + dlMods + '<div class="workgrid onecol plan-form report3-compact-form" data-shared-rich-editor><div class="colmain">'
       + planFormContext(pid, cur, moduleHtml, commercial)
-      + (weeklyCollaborationScope()?'<div class="notice"><button type="button" class="btn ghost" data-open-weekly-collaboration onclick="App.openWeeklyCollaboration()">协同填报</button> 弘坊设计部成员可共同填写当周进展和卡点，提交负责人由管理员按周指定。</div>':'')
+      + (weeklyCollaborationScope()?'<div class="notice"><button type="button" class="btn ghost" data-open-weekly-collaboration onclick="App.openWeeklyCollaboration()">协同填报</button> 管理员按周启用后，本项目本专业成员可共同填写当周进展和卡点。</div>':'')
       + '<div class="planning-ai-entry"><button type="button" class="btn primary" onclick="App.openPlanningAI()">AI 填报助手</button></div>'
       + legacyScopeDraftsHtml()
       + '<details class="plan-help"><summary>项目快览</summary><div class="plan-help-content">'
@@ -3370,8 +3397,10 @@
     if(!projectIds.has(report.project_id))return false;
     if(report.report_scope_id && (!Array.isArray(report.scope_project_ids) || !report.scope_project_ids.includes(report.project_id)
       || !report.scope_project_ids.every(function(pid){return projectIds.has(pid);})))return false;
-    return report.author_id===S.uid || report.project_id==='hf' && report.line==='设计部'
-      && !!bizOf(report).weekly_collaboration && canReportBizLine(report.line,report.project_id);
+    if(report.author_id===S.uid)return true;
+    if(!bizOf(report).weekly_collaboration)return false;
+    var scope=report.report_scope_id && (S.reportScopes || []).find(function(row){return row.id===report.report_scope_id;});
+    return (!report.report_scope_id || !!scope) && !!weeklyCollaborationTarget(report.project_id,report.line,scope);
   }
   function professionalOverviewButton(report,snapshot) {
     if(!professionalOverviewAllowed(report))return '';
@@ -4549,6 +4578,12 @@
       +'<nav class="planning-mainnav" aria-label="主导航">'+primary+'</nav>'+(!rev?'<div class="planning-header-tools">'+right+'</div>':'')+'<div class="planning-identity"><span class="nm">'+esc(S.profile.name || '')+'</span><span class="rl">'+esc(ROLE_LABEL[S.profile.role] || '')+'</span><button type="button" onclick="App.logout()">退出登录</button></div></header>'
       +secondary+'<div class="work">'+(rev?'<header class="topbar"><div class="tb-main"></div><div class="tb-right">'+right+'</div></header>':'')+'<main>'+(rev && isManagerOverview()?'<div id="meeting-controller-mount"></div>':'')+body+'</main></div></div>'
       +(!managementRead && window.CompletionReview?window.CompletionReview.overlayHtml():''),keepScroll);
+    if(S.view==='form' && !window.MonthlySummaries && window.PlanningBoot && window.PlanningBoot.ensureMonthlySummaries) {
+      var table=rootEl.querySelector && rootEl.querySelector('.report3-monthly-table'), sizingEpoch=dataEpoch;
+      if(table)window.PlanningBoot.ensureMonthlySummaries().then(function(){
+        if(S.view==='form' && sizingEpoch===dataEpoch)sizeEditedPlanTable(table);
+      }).catch(function(){});
+    }
   }
 
   /* ================= 对外动作 ================= */
@@ -5028,7 +5063,11 @@
         return toast('当前账号未获该项目专业的填报权限。','err');
       }
       if (S.pmLine === v) return;
-      return changePMScope(function(){S.pmLine=v;});
+      return changePMScope(function(){
+        if(S.pmLegacyResidentialProfession)S.pmLegacyResidentialSelection=v===S.pmLegacyResidentialProfession
+          ? {project:pid,period:S.pmPeriod,line:v}:null;
+        S.pmLine=v;
+      });
     },
 
     /* ---- 商业项目：① 本月核心节点计划 ---- */
@@ -5585,6 +5624,8 @@
         await loadData(['reports','reporterTasks','completions','reportAttachments'],true);
         if(!sameSession() || S.pmProject!==pid || S.pmPeriod!==savePeriod || S.pmLine!==saveLine || pageNavigation!==saveNavigation)return;
         var saved=result.data[0];
+        S.pmReport=saved;
+        buildNodeRows();
         S.professionalOverview={id:String(saved.id),savedAt:saved.updated_at || saved.submitted_at || '',revision:Array.isArray(saved.history)?saved.history.length+1:null};
         S.view='professionalOverview';await showPage(false);
       } finally { if(S.submittingReport===saveToken)S.submittingReport=null; }
@@ -5719,9 +5760,10 @@
     function onChange(event,delay) {
       if(event.target.closest && event.target.closest('.planning-ai-dialog'))return;
       var table=S.view==='form' && event.target.closest && event.target.closest('.report3-monthly-table');
-      if(table && /^bi_(mod|nm|due|pg)_/.test(event.target.id || '')){
+      if(table && window.MonthlySummaries && /^bi_(mod|nm|due|pg)_/.test(event.target.id || '')){
+        var row=event.target.closest('tr[data-row]');
         clearTimeout(planSizingTimer);
-        planSizingTimer=setTimeout(function(){sizeEditedPlanTable(table);},220);
+        planSizingTimer=setTimeout(function(){sizeEditedPlanTable(table,row);},320);
       }
       schedule(delay);
     }

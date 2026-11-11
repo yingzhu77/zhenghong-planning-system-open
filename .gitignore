@@ -24,7 +24,6 @@
 !/LICENSE
 !/THIRD_PARTY_NOTICES.md
 !/CONTRIBUTING.md
-!/docs/AGENT_HANDOFF.md
 !/tests/compressed-request.test.mjs
 !/compose.yaml
 !/db/000-role.sh
@@ -321,6 +320,8 @@
 !/web/weekly-collaboration.css
 !/tests/weekly-collaboration-browser.test.mjs
 !/server/weekly-collaboration.mjs
+!/db/039-weekly-collaboration-scopes.sql
+!/tests/weekly-collaboration-scopes.test.mjs
 !/tests/admin-plan-batches.test.mjs
 !/tests/request-origin.test.mjs
 !/docs/PROJECT_KNOWLEDGE.md

@@ -21,6 +21,7 @@ npm run test:db
 |---|---|
 | 页面读取、缓存与性能 | 固定输入及实际版本；身份、范围、保存失效、撤权、失败和迟到响应隔离 |
 | 填报与富文本草稿 | 住宅／商业、固定列、格式、跨窗口冲突、失败留稿与历史来源 |
+| 周报协同扩围 | 商业、自定义专业、独立住宅、合并成员权限、038 草稿和回执迁移、同格合并、同周专业隔离、并发只提交一次 |
 | 月计划确认、撤回及管理员保存 | 原确认人、完整成员权限、当前／下月隔离、旧版本核对、引用锁、原子保存及幂等回执 |
 | Excel解析与分配 | 正文月份、物理源行、表头／合并格、计划日与实际日分离、原完成文字、专业目录及真实授权目标 |
 | AI与个人记忆 | 受控来源、返回前核权、候选需本人确认、续接／编辑／删除、版本冲突及旧保存不能复活 |
@@ -38,6 +39,7 @@ node --test tests/admin-plans-ui.test.mjs
 node --test tests/admin-monthly-plans.test.mjs tests/admin-plan-ai.test.mjs
 node --test tests/monthly-plan-summaries.test.mjs tests/monthly-summaries-ui.test.mjs
 node --test tests/meeting-mode.test.mjs tests/meeting-display-ui.test.mjs
+node --test tests/weekly-collaboration-scopes.test.mjs tests/weekly-collaboration-browser.test.mjs tests/web-assets.test.mjs
 ```
 
 调用这些完整文件可能涵盖多于发布记录中筛选的用例；以本次实际运行的命令、版本和退出结果为准。

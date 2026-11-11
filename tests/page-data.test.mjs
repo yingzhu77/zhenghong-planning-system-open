@@ -681,7 +681,10 @@ test('native changes with a delayed new scope cannot autosave old DOM after 700m
         if (entry === 'module') await page.locator('#planBizLine').selectOption('机电工程');
         else if (entry === 'period') await page.locator('#pmPeriod').selectOption('第42周');
         else if (entry === 'project') await page.locator('#planProject').selectOption('p2');
-        else await page.locator('.planning-mainnav').getByRole('button', {name: '历史记录', exact: true}).click();
+        else {
+          await page.locator('.planning-mainnav .planning-primary-trigger').filter({hasText:'历史记录'}).click();
+          await page.locator('.planning-dropdown[aria-label="历史记录子菜单"]').getByRole('button', {name: '历史记录', exact: true}).click();
+        }
         await page.waitForFunction(() => window.waitingForAttachmentRead === true);
         await browserExpect(page.locator('[role="status"]')).toContainText('正在加载填报页面');
         await browserExpect(page.locator('#bi_nm_0')).toHaveCount(0);
@@ -695,7 +698,8 @@ test('native changes with a delayed new scope cannot autosave old DOM after 700m
         await page.evaluate(() => window.releaseAttachmentRead());
         await page.waitForFunction(() => !window.scopeTest.S.pmScopeTransition);
         if (entry === 'history') {
-          await page.locator('.planning-mainnav').getByRole('button', {name: '本期填报', exact: true}).click();
+          await page.locator('.planning-mainnav .planning-primary-trigger').filter({hasText:'本期填报'}).click();
+          await page.locator('.planning-dropdown[aria-label="本期填报子菜单"]').getByRole('button', {name: '本期填报', exact: true}).click();
           await browserExpect(page.locator('#bi_nm_0')).toHaveValue('旧范围尚未提交的输入');
         } else {
           await browserExpect(page.locator('#bi_nm_0')).toHaveValue('新范围计划');

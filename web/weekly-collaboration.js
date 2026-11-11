@@ -74,60 +74,118 @@
 
   function settings(root, config) {
     root.innerHTML = '<section class="card collaboration-panel">'
-      + '<header><h2>弘坊设计部周报协同设置</h2><p>按报告周指定一位提交负责人。设计部成员可共同填写已确认月计划的周进展和卡点。</p></header>'
+      + '<header><h2>周报协同设置</h2><p>按项目、专业和报告周指定一位提交负责人，即可启用该周的协同填报。</p></header>'
       + '<form class="collaboration-settings"><label>报告周起始日（周一）<input type="date" data-weekly-collaboration-week></label>'
       + '<button type="button" class="btn ghost" data-collaboration-load>读取该周</button>'
+      + '<label>项目<select data-weekly-collaboration-project></select></label>'
+      + '<label>汇报专业<select data-weekly-collaboration-profession></select></label>'
       + '<label>提交负责人<select data-weekly-collaboration-submitter required></select></label>'
       + '<button type="submit" class="btn primary" data-weekly-collaboration-designate>保存负责人</button></form>'
       + '<p role="status" class="collaboration-status" data-collaboration-status></p></section>';
     const date = root.querySelector('input');
-    const select = root.querySelector('select');
+    const project = root.querySelector('[data-weekly-collaboration-project]');
+    const profession = root.querySelector('[data-weekly-collaboration-profession]');
+    const select = root.querySelector('[data-weekly-collaboration-submitter]');
     const submit = root.querySelector('[data-weekly-collaboration-designate]');
+    const reload = root.querySelector('[data-collaboration-load]');
     const status = root.querySelector('[data-collaboration-status]');
+    let projects = [];
     let state, serial = 0;
     let closed = false;
     const controller = new AbortController();
     date.value = config.week;
+    function show(state, text) {
+      status.dataset.state = state;
+      status.textContent = text;
+    }
+    function options(input, label, entries, previous) {
+      input.replaceChildren(new Option(label, ''));
+      for (const [name, value] of entries) input.append(new Option(name,value));
+      input.value = entries.some(([,value]) => value === previous) ? previous : entries.length === 1 ? entries[0][1] : '';
+    }
+    function selectedProject() { return projects.find(entry => entry.project_id === project.value); }
+    function resetReporter() {
+      state = null;
+      select.replaceChildren(new Option('请选择提交负责人', ''));
+      select.disabled = submit.disabled = true;
+    }
     function refreshButton() {
       submit.disabled = !state || !state.can_configure || !select.value || select.value === state.submitter_id;
     }
-    async function load(submitterId) {
+    async function loadSettings(submitterId) {
       const version = ++serial;
-      const week = date.value;
-      state = null;
-      select.disabled = submit.disabled = true;
-      if (!week || global.PlanningWindows.periodStart(week) !== week) {
-        status.dataset.state = 'error'; status.textContent = '请选择周一作为报告周起始日。'; return;
+      const target = selectedProject();
+      resetReporter();
+      if (!target || !profession.value) {
+        show('blocked', target ? '请选择汇报专业。' : '请选择项目。');
+        return;
       }
-      status.dataset.state = 'loading'; status.textContent = '正在读取本周协同设置…';
+      if (submitterId) date.disabled = reload.disabled = project.disabled = profession.disabled = true;
+      show('loading', submitterId ? '正在保存负责人…' : '正在读取本周协同设置…');
       try {
-        const body = submitterId ? {week, submitter_id:submitterId} : {week};
+        const body = {week:date.value, project_id:target.project_id, report_scope_id:target.report_scope_id ?? null, line:profession.value};
+        if (submitterId) body.submitter_id = submitterId;
         const next = await request('settings', body, controller.signal);
         if (closed || version !== serial) return;
         state = next;
-        select.replaceChildren(new Option('请选择提交负责人', ''));
         for (const person of next.eligible || []) select.append(new Option(person.name, person.user_id));
         select.value = next.submitter_id || '';
         select.disabled = !next.can_configure;
         refreshButton();
         const name = next.submitter_name ? '本周负责人为' + next.submitter_name + '。' : '';
-        status.dataset.state = 'saved';
-        status.textContent = (submitterId ? '已保存。' : '') + name + (statusMessages[next.status] || '')
-          + (!next.can_configure && next.status === 'ready' ? '已有协同进展，负责人已锁定。' : '');
+        show('saved', (submitterId ? '已保存。' : '') + name + (statusMessages[next.status] || '')
+          + (!next.can_configure && next.status === 'ready' ? '已有协同进展，负责人已锁定。' : ''));
       } catch (error) {
         if (closed || version !== serial) return;
-        status.dataset.state = error.status ? 'error' : 'offline';
-        status.textContent = error.status ? error.message : '连接中断，请重新读取该周。';
+        show(error.status ? 'error' : 'offline', error.status ? error.message : '连接中断，请重新读取该周。');
+      } finally {
+        if (submitterId && !closed && version === serial) date.disabled = reload.disabled = project.disabled = profession.disabled = false;
       }
     }
-    date.addEventListener('change', () => load());
+    function loadProfessions(previous) {
+      const target = selectedProject();
+      options(profession, '请选择汇报专业', (target?.professions || []).map(line => [line,line]), previous);
+      profession.disabled = !target;
+      loadSettings();
+    }
+    async function loadCatalog() {
+      const version = ++serial;
+      const week = date.value;
+      const previousProject = project.value, previousLine = profession.value;
+      project.disabled = profession.disabled = true;
+      resetReporter();
+      if (!week || global.PlanningWindows.periodStart(week) !== week) {
+        show('error', '请选择周一作为报告周起始日。');
+        return;
+      }
+      show('loading', '正在读取可启用协同的项目和专业…');
+      try {
+        const result = await request('catalog', {week}, controller.signal);
+        if (closed || version !== serial) return;
+        projects = result.projects;
+        options(project,'请选择项目',projects.map(entry => [entry.project_name,entry.project_id]),previousProject);
+        if (!projects.length) {
+          options(profession, '请选择汇报专业', []);
+          show('blocked','该报告周暂无可启用协同的项目专业。');
+          return;
+        }
+        project.disabled = false;
+        loadProfessions(project.value === previousProject ? previousLine : '');
+      } catch (error) {
+        if (closed || version !== serial) return;
+        show(error.status ? 'error' : 'offline', error.status ? error.message : '连接中断，请重新读取该周。');
+      }
+    }
+    date.addEventListener('change', loadCatalog);
+    project.addEventListener('change', () => loadProfessions());
+    profession.addEventListener('change', () => loadSettings());
     select.addEventListener('change', refreshButton);
-    root.querySelector('[data-collaboration-load]').addEventListener('click', () => load());
+    reload.addEventListener('click', loadCatalog);
     root.querySelector('form').addEventListener('submit', event => {
       event.preventDefault();
-      if (!submit.disabled) load(select.value);
+      if (!submit.disabled) loadSettings(select.value);
     });
-    load();
+    loadCatalog();
     return {root, close() { closed = true; controller.abort(); }, canLeave() { return true; }};
   }
 
@@ -135,6 +193,8 @@
     constructor(root, config) {
       this.root = root;
       this.config = config;
+      const {project_id,line,report_scope_id} = config.scope;
+      this.target = {week:config.week,project_id,line,report_scope_id,tab_id:uuid()};
       this.state = null;
       this.editors = new Map();
       this.queue = [];
@@ -155,9 +215,14 @@
       this.connect();
     }
 
+    request(action, body, signal) {
+      return request(action, {...this.target,...body}, signal);
+    }
+
     markup() {
+      const scope = this.config.scope;
       this.root.innerHTML = '<section class="card collaboration-panel" aria-labelledby="collaboration-title">'
-        + '<header class="collaboration-header"><div><h2 id="collaboration-title">弘坊设计部协同填报</h2><p>' + esc(period(this.config.week)) + ' · 共同填写当周进展和卡点</p></div>'
+        + '<header class="collaboration-header"><div><h2 id="collaboration-title">' + esc(scope.project_name + ' · ' + scope.line) + '协同填报</h2><p>' + esc(period(this.config.week)) + ' · 共同填写当周进展和卡点</p></div>'
         + '<button type="button" class="btn ghost" onclick="App.view(\'form\')">返回本期填报</button></header>'
         + '<div class="collaboration-meta"><span data-collaboration-owner></span><span data-collaboration-presence></span></div>'
         + '<div class="collaboration-statusbar"><p class="collaboration-status" role="status" data-collaboration-status></p>'
@@ -203,7 +268,7 @@
       this.connecting = true;
       const number = ++this.requestNumber;
       try {
-        const next = await request('open', {week:this.config.week}, this.controller.signal);
+        const next = await this.request('open', {}, this.controller.signal);
         if (this.closed) return;
         clearTimeout(this.reconnectTimer);
         this.online = true;
@@ -255,8 +320,8 @@
       const number = ++this.requestNumber;
       let repeat = true;
       try {
-        const {week, revision, cursor} = this.state;
-        const next = await request('poll', {week, since_revision:revision, since_cursor:cursor, active_cell:this.activeCell || null}, controller.signal);
+        const {revision, cursor} = this.state;
+        const next = await this.request('poll', {since_revision:revision, since_cursor:cursor, active_cell:this.activeCell || null}, controller.signal);
         if (this.closed || this.revoked) return;
         this.online = true;
         if (next) this.accept(next, number);
@@ -300,16 +365,21 @@
     createEditors(plan, cells) {
       this.destroyEditors();
       this.planId = plan.id;
-      this.storageKey = 'zh_weekly_collaboration:' + JSON.stringify([this.config.uid, this.config.week, this.planId]);
+      const {project_id,line,report_scope_id,week} = this.target;
+      this.storageKey = 'zh_weekly_collaboration:' + JSON.stringify([this.config.uid,project_id,line,report_scope_id,week,this.planId]);
+      this.legacyStorageKey = project_id === 'hf' && line === '设计部' && !report_scope_id
+        ? 'zh_weekly_collaboration:' + JSON.stringify([this.config.uid,week,this.planId]) : '';
       this.vendor = global.PlanningCollaborationVendor;
       if (!this.vendor || !global.Quill) throw new Error('协同编辑组件未就绪。');
       const {Y, QuillBinding} = this.vendor;
       const items = Array.isArray(plan.items) ? plan.items : [];
+      const projectNames = this.config.scope.projectNames || {};
       this.loadQueue(new Set(items.flatMap(item => [item.source_id + ':prog', item.source_id + ':blocker'])));
       this.table.innerHTML = '<div class="tablewrap collaboration-tablewrap"><table class="collaboration-table">'
-        + '<colgroup><col class="collaboration-module"><col class="collaboration-task"><col class="collaboration-date"><col><col></colgroup>'
-        + '<thead><tr><th scope="col">模块</th><th scope="col">事项</th><th scope="col">完成时间</th><th scope="col">当周进展</th><th scope="col">卡点</th></tr></thead><tbody>'
-        + items.map((item,index) => '<tr><td data-label="模块"><div>' + planField(plan, 'mod', item, index) + '</div></td><td data-label="事项"><div>' + planField(plan,'name',item,index)
+        + '<colgroup>' + (report_scope_id ? '<col class="collaboration-project">' : '') + '<col class="collaboration-module"><col class="collaboration-task"><col class="collaboration-date"><col><col></colgroup>'
+        + '<thead><tr>' + (report_scope_id ? '<th scope="col">实际项目／分期</th>' : '') + '<th scope="col">模块</th><th scope="col">事项</th><th scope="col">完成时间</th><th scope="col">当周进展</th><th scope="col">卡点</th></tr></thead><tbody>'
+        + items.map((item,index) => '<tr>' + (report_scope_id ? '<td data-label="实际项目／分期"><div>' + esc(projectNames[item.project_id] || '未明确') + '</div></td>' : '')
+          + '<td data-label="模块"><div>' + planField(plan, 'mod', item, index) + '</div></td><td data-label="事项"><div>' + planField(plan,'name',item,index)
           + '</div></td><td data-label="完成时间"><div>' + esc(item.due || '—') + '</div></td>'
           + [['prog','当周进展'],['blocker','卡点']].map(([field,label]) => '<td data-label="' + label + '"><div class="collaboration-cell" data-collaboration-cell="'
             + esc(item.source_id + ':' + field) + '" data-editor-label="' + esc(item.name + ' · ' + label) + '"><div data-collaboration-editor></div><small data-collaboration-cell-presence></small></div></td>').join('') + '</tr>').join('')
@@ -351,7 +421,10 @@
       let unreadable = false;
       let records = [];
       try {
-        records = JSON.parse(global.localStorage.getItem(this.storageKey) || '[]');
+        const saved = global.localStorage.getItem(this.storageKey);
+        const legacy = saved === null && this.legacyStorageKey ? global.localStorage.getItem(this.legacyStorageKey) : null;
+        this.readLegacyQueue = legacy !== null;
+        records = JSON.parse(saved ?? legacy ?? '[]');
         if (!Array.isArray(records)) { unreadable = true; records = []; }
       } catch (_) { unreadable = true; }
       this.queue = records.filter(record => {
@@ -403,6 +476,10 @@
       try {
         if (this.queue.length) global.localStorage.setItem(this.storageKey, JSON.stringify(this.queue));
         else global.localStorage.removeItem(this.storageKey);
+        if (this.readLegacyQueue) {
+          global.localStorage.removeItem(this.legacyStorageKey);
+          this.readLegacyQueue = false;
+        }
         this.persisted = true;
       } catch (_) { this.persisted = false; }
     }
@@ -421,7 +498,7 @@
       const number = ++this.requestNumber;
       try {
         const {cell, operation_id, update} = current;
-        const next = await request('change', {week:this.config.week, plan_id:this.planId, cell, operation_id, update}, this.controller.signal);
+        const next = await this.request('change', {plan_id:this.planId, cell, operation_id, update}, this.controller.signal);
         if (this.closed || this.revoked) return;
         this.queue.shift();
         this.storeQueue();
@@ -444,14 +521,14 @@
       this.error = '';
       this.notice = '';
       if (!this.publishAttempt || this.publishAttempt.revision !== this.state.revision || this.publishAttempt.plan_id !== this.planId) {
-        this.publishAttempt = {week:this.config.week, plan_id:this.planId, revision:this.state.revision, operation_id:uuid()};
+        this.publishAttempt = {plan_id:this.planId, revision:this.state.revision, operation_id:uuid()};
         const ids = this.config.attachmentIds?.() || [];
         if (ids.length) Object.assign(this.publishAttempt, {attachment_ids:ids, period:this.config.period});
       }
       const number = ++this.requestNumber;
       this.paint();
       try {
-        const next = await request('publish', this.publishAttempt, this.controller.signal);
+        const next = await this.request('publish', this.publishAttempt, this.controller.signal);
         if (this.closed) return;
         this.accept(next, number);
         this.publishAttempt = null;
