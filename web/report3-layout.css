@@ -5,10 +5,12 @@
 .rich-toolbar-target{font-size:12px;color:#65758b;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:5px}
 [data-shared-rich-toolbar]{min-width:0}
 [data-shared-rich-editor] .rich-input[data-shared-rich="true"]{margin:0}
+.report3-monthly-wrap{container-type:inline-size}
 .planning-shell .report3-monthly-table{width:100%;table-layout:fixed}
-.planning-shell .report3-monthly-table>thead>tr>th,.planning-shell .report3-monthly-table>tbody>tr>td{padding:9px 10px;vertical-align:top;overflow-wrap:anywhere}
-.report3-monthly-table th:nth-child(1){width:15%}.report3-monthly-table th:nth-child(2){width:32%}
-.report3-monthly-table th:nth-child(3){width:13%}.report3-monthly-table th:nth-child(4){width:40%}
+.planning-shell .report3-monthly-table>thead>tr>th,.planning-shell .report3-monthly-table>tbody>tr>td{padding:9px 10px;vertical-align:middle;overflow-wrap:anywhere}
+.report3-monthly-table th,.report3-monthly-table td[data-label="模块"],.report3-monthly-table td[data-label="完成时间"]{text-align:center}
+.report3-monthly-table th:nth-child(1){width:var(--entry-col-module,15%)}.report3-monthly-table th:nth-child(2){width:var(--entry-col-content,32%)}
+.report3-monthly-table th:nth-child(3){width:var(--entry-col-date,13%)}.report3-monthly-table th:nth-child(4){width:var(--entry-col-progress,40%)}
 .monthly-next-plan .plan-form-table{width:100%;table-layout:fixed}
 .monthly-next-plan th:nth-child(1){width:20%}.monthly-next-plan th:nth-child(2){width:43%}
 .monthly-next-plan th:nth-child(3){width:25%}.monthly-next-plan th:nth-child(4){width:12%}
@@ -44,7 +46,7 @@
   .planning-shell .report3-monthly-table,.planning-shell .report3-monthly-table>tbody{display:block;min-width:0!important}
   .planning-shell .report3-monthly-table>thead{display:none}
   .planning-shell .report3-monthly-table>tbody>tr{display:block;padding:12px;border:1px solid #e0e7f0;border-radius:8px;margin:0 0 10px;background:#fafcfe}
-  .planning-shell .report3-monthly-table>tbody>tr>td{display:block;width:100%!important;padding:0 0 10px;border:0;background:transparent!important}
+  .planning-shell .report3-monthly-table>tbody>tr>td{display:block;width:100%!important;padding:0 0 10px;border:0;background:transparent!important;text-align:left}
   .planning-shell .report3-monthly-table>tbody>tr>td:last-child{padding-bottom:0}
   .report3-monthly-table td[data-label]::before{content:attr(data-label);display:block;font-size:12px;color:#596e89;margin-bottom:5px;font-weight:500}
   .planning-shell .report3-monthly-table .rich-input .ql-editor{font-size:16px;min-height:58px}

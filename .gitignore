@@ -316,6 +316,11 @@
 !/tests/project-scoped-viewers.test.mjs
 !/server/project-reporting-professions.mjs
 !/server/admin-plan-batches.mjs
+!/db/038-hongfang-weekly-collaboration.sql
+!/web/weekly-collaboration.js
+!/web/weekly-collaboration.css
+!/tests/weekly-collaboration-browser.test.mjs
+!/server/weekly-collaboration.mjs
 !/tests/admin-plan-batches.test.mjs
 !/tests/request-origin.test.mjs
 !/docs/PROJECT_KNOWLEDGE.md

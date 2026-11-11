@@ -7,7 +7,7 @@ import {chromium, expect} from '@playwright/test';
 
 const web = new URL('../web/', import.meta.url);
 const app = fs.readFileSync(new URL('app.js', web), 'utf8')
-  .replace('window.App = App;', 'window.App = App; window.audit = {S,configureReporter,renderShell,preparePM,loadPageData,loadData};')
+  .replace('window.App = App;', 'window.App = App; window.audit = {S,configureReporter,renderShell,preparePM,loadPageData,loadData,bindDraftAutosave};')
   .replace(/\(async function boot\(\) \{[\s\S]*?\}\)\(\);/, '');
 const artifacts = process.env.REPORT3_ARTIFACT_DIR || path.join(os.tmpdir(), 'report3-layout-artifacts');
 
@@ -28,10 +28,11 @@ test('personal reporting renders compact desktop and mobile tables, shared forma
     await page.evaluate(() => {
       const line = '土建工程（东地块）', period = '2026-10-19';
       const item = {source_id: 'fixed-item', mod: '砌筑工程', name: '匿名已确认月计划事项，包含足够长的正文用于检查换行', due: '2026-10-23', prog: '原进展', blocker: '原卡点'};
-      const report = {id: 11, project_id: 'p1', line, period, author_id: 'anonymous', author_name: '匿名填报人', status: '正常', submitted_at: '2026-10-19T05:00:00Z',
+      const report = {id: 11, project_id: 'p1', line, period, author_id: 'anonymous', author_name: '匿名填报人', status: '正常', submitted_at: '2026-10-19T05:00:00Z', updated_at: '2026-10-20T05:00:00Z',
         coord_items: [{source_id: 'old-coordination', who_id: 'other', who: '匿名承办人', what: '旧报告协调事项需保留', by: '2026-10-24'}],
         node_items: [], biz: {form_version: 2, monthly_plan_id: 'confirmed-plan', monthly_plan_month: '2026-10', nodes: [{source_id:'custom-node',name:'匿名自填节点',plan:'2026-10-23',prog:'原节点反馈'}], items: [item], handover: []}};
-      const otherReport = {id: 12, project_id: 'p1', line: '成本', period, author_id: 'other', author_name: '匿名另一填报人',
+      report.history = [{at: report.updated_at, data: {...report, updated_at: report.submitted_at, biz: {...report.biz, items: [{...item, prog: '原历史版本的单独反馈'}]}}}];
+      const otherReport = {id: 12, project_id: 'p1', line: '成本', period, author_id: 'other', author_name: '匿名另一填报人', submitted_at: report.submitted_at,
         coord_items: [{source_id: 'not-for-me', who_id: 'third', who: '第三位承办人', what: '未指定给本人的需求不应显示', by: '2026-10-24'}], biz: {nodes: [], items: [], handover: []}};
       window.fixtureTables = {
         projects: [{id: 'p1', name: '匿名版式项目', project_type: 'com', active: true}],
@@ -60,7 +61,7 @@ test('personal reporting renders compact desktop and mobile tables, shared forma
     for (const name of ['styles.css', 'planning-ui.css', 'report3-layout.css', 'personal-report4.css', 'selection-format.css', 'reporter-workbench.css', 'reporter-tasks.css', 'completion-review.css', 'vendor/quill/quill.core.css']) {
       await page.addStyleTag({content: fs.readFileSync(new URL(name, web), 'utf8')});
     }
-    for (const name of ['vendor/quill/quill.js', 'rich-text.js', 'rich-editor.js', 'planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'monthly-plans.js', 'reporter-tasks.js', 'coordination-workbench.js', 'completion-review.js', 'report-attachments.js']) {
+    for (const name of ['vendor/quill/quill.js', 'rich-text.js', 'rich-editor.js', 'planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'monthly-plans.js', 'monthly-summaries.js', 'reporter-tasks.js', 'coordination-workbench.js', 'completion-review.js', 'report-attachments.js']) {
       await page.addScriptTag({content: fs.readFileSync(new URL(name, web), 'utf8')});
     }
     await page.addScriptTag({content: app});
@@ -69,7 +70,7 @@ test('personal reporting renders compact desktop and mobile tables, shared forma
       Object.assign(S, {uid: 'anonymous', session: {}, profile: {user_id: 'anonymous', name: '匿名填报人', role: 'pm', status: 'approved', project_id: 'p1', biz_line: '土建工程（东地块）'},
         projects: f.projects, pms: f.project_members, reports: f.reports, monthlyPlans: f.monthlyPlans, projectPeople: f.projectPeople, coordinationTasks: f.coordinationTasks,
         view: 'form', pmProject: 'p1', pmLine: '土建工程（东地块）', pmPeriod: '2026-10-19'});
-      await h.loadData(['milestones'], true); h.configureReporter(); await h.preparePM(); h.renderShell();
+      h.bindDraftAutosave(); await h.loadData(['milestones'], true); h.configureReporter(); await h.preparePM(); h.renderShell();
     });
     await expect(page.locator('.report3-monthly-table thead th')).toHaveText(['模块', '事项', '完成时间', '当周进展']);
     const narrativeCells=page.locator('.report3-monthly-table td[data-label="事项"],.report3-monthly-table td[data-label="当周进展"]');
@@ -96,6 +97,12 @@ test('personal reporting renders compact desktop and mobile tables, shared forma
     await expect(page.locator('#baseline-core-summary')).not.toContainText('匿名已确认月计划事项');
     await expect(page.locator('#baseline-core-summary input, #baseline-core-summary textarea')).toHaveCount(0);
     const editor = page.locator('[data-rich-editor-for="bi_pg_0"] .ql-editor');
+    const formHeaders = page.locator('.report3-monthly-table th');
+    const originalWidths = await formHeaders.evaluateAll(nodes=>nodes.map(node=>node.getBoundingClientRect().width));
+    await editor.fill('进展反馈与后续核对说明'.repeat(26));
+    await expect.poll(()=>formHeaders.nth(3).evaluate(node=>node.getBoundingClientRect().width)).toBeGreaterThan(originalWidths[3]+40);
+    assert.ok(Math.abs(await formHeaders.nth(2).evaluate(node=>node.getBoundingClientRect().width)-originalWidths[2])<2);
+    assert.ok(await page.evaluate(()=>document.activeElement.matches('.ql-editor')));
     await editor.fill('第二部分新进展保持原来源'); await editor.press('Control+A');
     await page.getByRole('toolbar', {name: '所选文字格式'}).getByRole('button', {name: '加粗', exact: true}).click();
     await editor.press('End');await editor.press('Enter');await editor.press('a');
@@ -158,6 +165,26 @@ test('personal reporting renders compact desktop and mobile tables, shared forma
     await expect(page.locator('[data-rich-editor-for="bi_pg_0"] .ql-editor strong')).toContainText('第二部分新进展保持原来源');
     await expect(page.locator('.report3-monthly-table').getByRole('button',{name:'完成／延期申报',exact:true})).toHaveCount(1);
     await expect(page.locator('#bi_blocker_0')).toHaveCount(0);
+    await page.evaluate(()=>window.App.openProfessionalOverview(11,'2026-10-19T05:00:00Z'));
+    const overview=page.locator('.professional-overview');
+    await expect(overview).toHaveAttribute('data-report-version','1');
+    await expect(overview.locator('[data-section="plans"]')).toContainText('原历史版本的单独反馈');
+    await expect(overview).not.toContainText('第二部分新进展保持原来源');
+    await expect(overview.locator('textarea,[contenteditable="true"]')).toHaveCount(0);
+    await expect(overview.locator('#professionalOverviewReport option')).toHaveCount(1);
+    await overview.locator('#professionalOverviewVersion').selectOption('2');
+    await expect(overview.locator('[data-section="plans"]')).toContainText('原卡点');
+    await expect(overview).not.toContainText('原历史版本的单独反馈');
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
+    await page.screenshot({path:path.join(artifacts,'professional-overview-mobile.png'),fullPage:true});
+    await page.setViewportSize({width:1440,height:950});
+    await expect(overview.locator('[data-section="plans"] td.overview-cell-module')).toHaveCSS('text-align','center');
+    await expect(overview.locator('[data-section="plans"] td.overview-cell-module')).toHaveCSS('vertical-align','middle');
+    await expect(overview.locator('[data-section="plans"] td.overview-cell-content')).toHaveCSS('text-align','left');
+    await expect(overview.locator('[data-section="plans"] th.overview-head-seq')).toHaveCSS('white-space','nowrap');
+    const [targetWidth,subjectWidth]=await overview.locator('[data-section="coord"] th').evaluateAll(nodes=>nodes.slice(1,3).map(node=>node.getBoundingClientRect().width));
+    assert.ok(subjectWidth>targetWidth*2,'coordination narrative receives more space than the recipient');
+    await page.screenshot({path:path.join(artifacts,'professional-overview-desktop.png'),fullPage:true});
     assert.deepEqual(errors, []);
     assert.ok(requests.every(request => !/\/(?:save|create|confirm|request|review|upload)$/.test(request.url)), 'render verification must not submit any business mutation');
     fs.writeFileSync(path.join(artifacts, 'report3-layout-ui-result.json'), JSON.stringify({desktop: true, mobile: true, coordinationOldAndNew: true, draftFormattingPreserved: true, browserErrors: errors, businessWrites: 0, mockedRequests: requests}, null, 2));

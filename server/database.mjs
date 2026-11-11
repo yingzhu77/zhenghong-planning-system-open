@@ -207,6 +207,24 @@ export function reportWeekStart(label, reference = new Date()) {
   return candidates.length ? iso(candidates[0]) : '';
 }
 
+export async function lockHongfangWeeklyWrite(client, week) {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended('hongfang-design-weekly:'||$1,0))", [week]);
+}
+
+export async function reportDelay(client, projects, nodes = []) {
+  const baseline = (await client.query('SELECT plan_date,forecast_date FROM public.milestones WHERE project_id=ANY($1::text[]) AND NOT done', [projects])).rows;
+  const deltas = [...nodes.map(node => ({plan_date:node.plan,forecast_date:node.forecast})), ...baseline]
+    .filter(node => node.plan_date && node.forecast_date).map(node => {
+      const date = value => value instanceof Date ? value.getTime() : Date.parse(String(value).slice(0, 10) + 'T00:00:00Z');
+      return Math.round((date(node.forecast_date) - date(node.plan_date)) / 86400000);
+    }).filter(Number.isFinite);
+  return deltas.length ? Math.max(...deltas) : 0;
+}
+
+export function reportStatus(delay) {
+  return delay >= 15 ? '异常' : delay >= 5 ? '关注' : '正常';
+}
+
 async function syncReportMeetingProgress(client, user, row, existing) {
   if (!row.biz || !Object.hasOwn(row.biz, 'followups')) return;
   const report = { ...existing, ...row }, now = new Date();
@@ -434,6 +452,14 @@ export async function prepareMutation(client, user, request) {
         if (existing && existing.author_id !== user.id) throw new HttpError(403, '只能修改本人提交的周报');
         if (existing) richExisting = existing;
       }
+      if (pid === 'hf' && line === '设计部') {
+        const week = existing
+          ? (await client.query('SELECT app_private.hongfang_weekly_existing_report_week($1,$2)::text AS week', [period,existing.submitted_at])).rows[0].week
+          : (await client.query('SELECT app_private.report_week_start($1,now())::text AS week', [period])).rows[0].week;
+        if (!week) throw new HttpError(409, '弘坊设计部周报需要有效的报告周');
+        // The pilot uses this lock before validating attachment references.
+        await lockHongfangWeeklyWrite(client,week);
+      }
       row.line = line;
       const scope = await resolveReportScope(client, user, row, existing, period, pid);
       if (scope) {
@@ -486,15 +512,8 @@ export async function prepareMutation(client, user, request) {
       await validateReportAttachmentReferences(client,user.id,profile,row,existing);
       if (operation !== 'update') row.author_id = user.id;
       row.updated_at = new Date().toISOString();
-      const nodes = row.node_items ?? existing?.node_items ?? [];
-      const baseline = (await client.query('SELECT plan_date,forecast_date FROM public.milestones WHERE project_id=ANY($1::text[]) AND NOT done', [row.scope_project_ids || existing?.scope_project_ids || [pid]])).rows;
-      const deltas = [...nodes.map((n) => ({ plan_date: n.plan, forecast_date: n.forecast })), ...baseline]
-        .filter((n) => n.plan_date && n.forecast_date).map((n) => {
-          const date = (x) => x instanceof Date ? x.getTime() : Date.parse(String(x).slice(0, 10) + 'T00:00:00Z');
-          return Math.round((date(n.forecast_date) - date(n.plan_date)) / 86400000);
-        }).filter(Number.isFinite);
-      const delay = deltas.length ? Math.max(...deltas) : 0;
-      row.status = delay >= 15 ? '异常' : delay >= 5 ? '关注' : '正常';
+      const delay = await reportDelay(client,row.scope_project_ids || existing?.scope_project_ids || [pid],row.node_items ?? existing?.node_items ?? []);
+      row.status = reportStatus(delay);
       row.self_speed = project.project_type === 'com' ? null : delay >= 5 ? '滞后' : delay <= -5 ? '领跑' : '达标';
       row.self_effect = null;
     } else if (['leader_reviews', 'leader_notes'].includes(table)) {

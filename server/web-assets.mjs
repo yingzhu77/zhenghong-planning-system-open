@@ -11,7 +11,8 @@ const files = ['logo.png', 'login-bg-desktop.avif', 'login-bg-mobile.avif', 'log
   'report3-layout.css','personal-report4.css','project-library.js','project-library.css',
   'project-plan-statistics.js','project-plan-statistics.css','admin-plan-overview.js','admin-plan-overview.css','admin-plans.js','admin-plans.css',
   'management-reader.js','management-reader.css','planning-ai.js','planning-ai-draft.js','planning-ai-memory.js','planning-ai.css',
-  'report-reference.js','report-reference.css','meeting-view.js','meeting-controller.js','meeting-display.js','meeting-display.html','meeting-mode.css'];
+  'report-reference.js','report-reference.css','meeting-view.js','meeting-controller.js','meeting-display.js','meeting-display.html','meeting-mode.css',
+  'weekly-collaboration.js', 'weekly-collaboration.css', 'vendor/weekly-collaboration.js'];
 
 // The public asset list is fixed. URLs identify the bytes actually served,
 // including the versioned image references inside CSS.

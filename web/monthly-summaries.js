@@ -39,22 +39,27 @@
     options=options || {};
     function width(value){return Array.from(String(value || '').replace(/\s+/g,' ')).reduce(function(total,char){return total+(/[^\x00-\xff]/.test(char)?1:.5);},0);}
     function progress(value){var text=String(value || '').trim();return /^(?:未填写|未提交|本周未提交|本周尚未提交|暂无进展|[—-])$/.test(text)?'':text;}
-    var sizes=[width('模块'),1,width('完成时间')*2,0],sourceSize=2;
+    var sizes=[width(options.sequence?'模块或类别':'模块'),1,width('完成时间')*2,0],sourceSize=2;
     (items || []).forEach(function(item){
       sizes[0]=Math.max(sizes[0],width(item.mod));sizes[1]=Math.max(sizes[1],width(item.name));
       sizes[2]=Math.max(sizes[2],width(item.due || '未设置')*2);
       sizes[3]=Math.max(sizes[3],width(progress(item.progress))+width(progress(item.blocker)));
       sourceSize=Math.max(sourceSize,width(item.source));
     });
-    var date={value:sizes[2]+3,unit:'ch'},prefix=[];
-    if(options.sequence)prefix.push({value:4,unit:'ch',cap:5});
+    var date={value:options.editableProgress?20:Math.min(sizes[2]+3,18),unit:'ch'},prefix=[];
+    if(options.sequence)prefix.push({value:6,unit:'ch',cap:7});
     if(options.source)prefix.push({value:2*Math.sqrt(sourceSize)+1,unit:'em',cap:18});
     function fixed(spec,part){var value=(spec.value*part).toFixed(3)+spec.unit;return spec.cap?'min('+value+', '+(spec.cap*part).toFixed(3)+'cqw)':value;}
     var nameWeight=Math.log2(1+sizes[1]),progressWeight=Math.log2(1+Math.max(1,sizes[3])),share=nameWeight/(nameWeight+progressWeight);
-    if(options.balanceProgress && sizes[3])share=Math.min(.65,Math.max(.35,share));
+    if(options.balanceProgress && (sizes[3] || options.editableProgress))share=Math.min(.65,Math.max(.35,share));
     var moduleWeight=Math.log2(1+sizes[0]),moduleShare=moduleWeight/(moduleWeight+nameWeight+progressWeight),metadata=prefix.concat([date]);
     function available(part){return 'calc('+(100*part).toFixed(3)+'cqw'+metadata.map(function(spec){return ' - '+fixed(spec,part);}).join('')+')';}
-    function moduleWidth(part){return 'min('+((sizes[0]+1.5)*part).toFixed(3)+'em, '+available(moduleShare*part)+')';}
+    function moduleWidth(part){
+      var content=((sizes[0]+1.5)*part).toFixed(3)+'em', room=available(moduleShare*part);
+      return options.editableProgress || options.sequence
+        ? 'clamp('+(7*part).toFixed(3)+'em, '+content+', '+room+')'
+        : 'min('+content+', '+room+')';
+    }
     function narrativeWidth(part){return 'calc('+available(part)+' - '+moduleWidth(part)+')';}
     return prefix.map(function(spec){return fixed(spec,1);}).concat([moduleWidth(1),narrativeWidth(share),fixed(date,1),narrativeWidth(1-share)]);
   }

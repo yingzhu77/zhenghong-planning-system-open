@@ -168,6 +168,7 @@ function run(role, options = {}) {
     : role === 'pm-com'
     ? [{ user_id: 'u-pm2', project_id: 'p3', role_in_project: 'pm' }]
     : [{ user_id: 'u-pm', project_id: 'p1', role_in_project: 'pm' }];
+  for (const project_id of options.extraProjectIds || []) DB.project_members.push({user_id:'u-pm',project_id,role_in_project:'pm'});
 
   const root = makeEl('root');
   const body = makeEl('body');
@@ -386,7 +387,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     ok(navLabels(html, ['项目档案', '资料共享'], '子导航') && has(main(html), 'admin-archive'), '项目资料应提供项目档案和已有资料共享入口');
     noCameraUi(html, '运营项目资料');
     await App.section('settings'); html = root.innerHTML;
-    ok(navLabels(html, ['节点归属设置', '成员与权限', '汇报专业设置'], '子导航') && has(main(html), 'App.lineSaveAll'), '系统设置应包含原有设置及汇报专业入口');
+    ok(navLabels(html, ['节点归属设置', '成员与权限', '汇报专业设置', '周报协同设置'], '子导航') && has(main(html), 'App.lineSaveAll'), '系统设置应包含原有设置、汇报专业及周报协同入口');
     await App.view('members'); html = root.innerHTML;
     ok(has(main(html), 'App.memberSet'), '成员与权限入口未通向原成员管理');
 
@@ -821,11 +822,12 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     const previousDate = new Date(SHANGHAI_TODAY); previousDate.setDate(previousDate.getDate() - 7);
     const previousPeriod = '第' + isoWeek(previousDate) + '周（' + weekRange(previousDate) + '）';
     const originalReports = DB.reports;
+    const previousSave = '2026-01-08T10:00:00Z';
     DB.reports = [...originalReports, {
       ...originalReports[0], id: 'r-history', period: previousPeriod,
       change_text: '历史周期正文 **历史加粗**', node_items: [],
       history: [{ at: '2026-01-09T00:00:00Z', by: 'u-pm', data: {
-        ...originalReports[0], period: previousPeriod, change_text: '历史版本原文', node_items: []
+        ...originalReports[0], id: 'r-history', period: previousPeriod, updated_at: previousSave, change_text: '历史版本原文', node_items: []
       } }]
     }];
     DB.leader_reviews = [
@@ -857,6 +859,13 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
       await App.detailTab('history'); html = root.innerHTML;
       ok(has(main(html), '历史版本原文') && has(main(html), '历史版本 1'), '项目详情未保留版本原文');
       ok(!has(main(html), '幕墙样板通过验收') && !has(main(html), '<b>进度可控</b>'), '历史版本页混入其他周期正文');
+      await App.openProfessionalOverview('r-history',previousSave); html = root.innerHTML;
+      ok(has(main(html),'data-report-version="1"') && has(main(html),'历史版本原文') && !has(main(html),'历史周期正文'), '本专业总览应打开精确的住宅历史版本');
+      App.professionalOverviewVersion(2); html = root.innerHTML;
+      ok(has(main(html),'data-report-version="2"') && has(main(html),'历史周期正文') && !has(main(html),'历史版本原文'), '本专业总览未切换到当前版本');
+      await App.openProfessionalOverview('r3b'); html = root.innerHTML;
+      ok(!has(main(html),'西地块总包清单编制') && has(main(html),'当前账号无法读取该报告的所选版本'), '本专业总览暴露了未授权的其他报告');
+      await App.openProjectDetail('p1'); await App.detailPeriod(previousPeriod);
       await App.detailTab('data'); html = root.innerHTML;
       ok(has(main(html), '示例住宅总图') && !has(main(html), 'App.masterSave'), 'PM 详情资料未保持项目资料和只读约束');
       await App.fillProject('p1', previousPeriod); html = root.innerHTML;
@@ -879,6 +888,23 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
       delete DB.leader_notes;
     }
     console.log('Project detail render OK');
+  }
+
+  {
+    const originals = DB.reports;
+    const scoped = {...originals[0], id:'r-scope-overview', line:'工程', report_scope_id:'example-unified', scope_project_ids:['p1','p2'],
+      biz:{form_version:2, items:[{project_id:'p1',mod:'同模块',name:'一期原事项'},{project_id:'p2',mod:'同模块',name:'二期原事项'}]}};
+    DB.reports = [...originals, scoped];
+    try {
+      const full = await run('pm',{pmDiscipline:'工程',extraProjectIds:['p2']});
+      await full.App.openProfessionalOverview(scoped.id);
+      const html = main(full.root.innerHTML);
+      ok(has(html,'实际项目／分期') && has(html,'示例住宅一号') && has(html,'示例住宅二号') && has(html,'一期原事项') && has(html,'二期原事项'), '统一住宅总览应保留两条事项的实际分期');
+      ok(!has(html,'rowspan="2"'), '相同模块跨实际分期不能合并');
+      const partial = await run('pm',{pmDiscipline:'工程'});
+      await partial.App.openProfessionalOverview(scoped.id);
+      ok(!has(main(partial.root.innerHTML),'二期原事项') && has(main(partial.root.innerHTML),'当前账号无法读取该报告的所选版本'), '缺少住宅分期权限时不能读取完整统一范围快照');
+    } finally { DB.reports = originals; }
   }
 
   ok(DB.projects[0].camera_url === '主入口塔吊|https://cam.example.com/p1\n地下室|https://cam.example.com/p1b', '撤销监控展示不应改写存量项目监控数据');

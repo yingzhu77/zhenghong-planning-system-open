@@ -1,0 +1,200 @@
+.collaboration-panel {
+  color: #162d47;
+}
+.collaboration-panel [hidden] {
+  display: none !important;
+}
+.collaboration-panel h2 {
+  margin: 0 0 5px;
+  font-size: 20px;
+  color: #183f68;
+}
+.collaboration-panel header p {
+  margin: 0;
+  color: #52657a;
+}
+.collaboration-header,
+.collaboration-meta,
+.collaboration-statusbar,
+.collaboration-footer,
+.collaboration-settings {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.collaboration-header {
+  justify-content: space-between;
+}
+.collaboration-meta {
+  margin-top: 12px;
+  color: #425971;
+  overflow-wrap: anywhere;
+}
+.collaboration-statusbar {
+  margin: 8px 0 12px;
+}
+[data-collaboration-notice] {
+  margin-bottom: 8px;
+}
+.collaboration-status {
+  margin: 0;
+  padding: 7px 10px;
+  background: #eef4fa;
+  border-radius: 5px;
+  color: #254d75;
+}
+.collaboration-status[data-state="saved"] {
+  color: #146544;
+  background: #e9f4ee;
+}
+.collaboration-status[data-state="pending"],
+.collaboration-status[data-state="offline"] {
+  color: #765018;
+  background: #fff2d9;
+}
+.collaboration-status[data-state="error"] {
+  color: #9a2529;
+  background: #fbecee;
+}
+.collaboration-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.collaboration-toolbar button {
+  padding: 5px 10px;
+  color: #21496f;
+  background: #fff;
+  border: 1px solid #b4c7dc;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.collaboration-toolbar button:first-child {
+  font-weight: 700;
+}
+.collaboration-toolbar button:nth-child(2) {
+  color: #c11b10;
+}
+.planning-shell .collaboration-tablewrap > .collaboration-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+.collaboration-table .collaboration-module { width: 12%; }
+.collaboration-table .collaboration-task { width: 30%; }
+.collaboration-table .collaboration-date { width: 12ch; }
+.collaboration-table th {
+  color: white;
+  background: #234e7b;
+  text-align: center;
+}
+.collaboration-table td {
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+.collaboration-table td:first-child,
+.collaboration-table td:nth-child(3) {
+  text-align: center;
+}
+.collaboration-cell .ql-container {
+  min-height: 42px;
+  height: auto;
+  background: #fff;
+  border: 1px solid #b4c7dc;
+  border-radius: 5px;
+}
+.collaboration-cell .ql-container:focus-within {
+  border-color: #276397;
+  box-shadow: 0 0 0 2px #dcecf9;
+}
+.collaboration-cell .ql-container.ql-disabled {
+  background: #f2f5f9;
+  border-color: transparent;
+}
+.collaboration-cell .ql-editor {
+  min-height: 40px;
+  height: auto;
+  padding: 8px;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.collaboration-cell [data-collaboration-cell-presence] {
+  display: block;
+  margin: 3px 2px 0;
+  color: #285883;
+}
+.collaboration-cell [data-collaboration-cell-presence]:empty {
+  display: none;
+}
+.collaboration-footer {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.collaboration-footer p {
+  margin: 0 auto 0 0;
+  color: #52657a;
+}
+.collaboration-attachments {
+  margin: 10px 0 0;
+  color: #52657a;
+}
+.collaboration-settings {
+  align-items: flex-end;
+  margin: 16px 0;
+}
+.collaboration-settings label {
+  display: grid;
+  gap: 4px;
+  color: #294968;
+}
+.collaboration-settings input,
+.collaboration-settings select {
+  min-height: 38px;
+}
+.collaboration-copy-text {
+  display: block;
+  width: 100%;
+  min-height: 8em;
+  margin: 0 0 10px;
+}
+@media (max-width: 700px) {
+  .collaboration-table colgroup,
+  .collaboration-table thead {
+    display: none;
+  }
+  .planning-shell .collaboration-tablewrap > .collaboration-table,
+  .collaboration-table tbody {
+    display: block;
+  }
+  .collaboration-table tbody > tr {
+    display: block;
+    margin-bottom: 8px;
+    padding: 4px 8px;
+    border: 1px solid #cfdae7;
+    border-radius: 6px;
+  }
+  .collaboration-table tbody > tr > td {
+    display: grid;
+    grid-template-columns: 5.2em minmax(0, 1fr);
+    gap: 4px;
+    text-align: left;
+    padding: 5px 0;
+    border: 0;
+  }
+  .collaboration-table td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: #244c73;
+  }
+}
+@media print {
+  .collaboration-panel button,
+  .collaboration-meta,
+  .collaboration-statusbar,
+  .collaboration-toolbar,
+  .collaboration-cell [data-collaboration-cell-presence] {
+    display: none !important;
+  }
+}

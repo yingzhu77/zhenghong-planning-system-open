@@ -63,6 +63,8 @@ node --test --test-concurrency=1 tests/admin-plan-batches.test.mjs tests/admin-p
 
 结构初始化改动应运行 `npm run test:db`；跨模块、认证或共享契约改动按风险扩大检查。`npm test` 提供整套测试入口，不要求每个文案或样式改动都重复全量运行。测试使用匿名和可丢弃数据；需要浏览器的用例还应按其夹具要求准备可用浏览器。未完成的验证明确记录，不能写成通过。
 
+首次运行直接调用 `node --test` 的页面或接口测试前，先执行 `npm run assets:vendor` 生成浏览器共编资源。`npm test` 和 `npm start` 会自动生成。
+
 既有浏览器夹具使用 Microsoft Edge（`channel: 'msedge'`）。先检查是否已安装；缺失时按系统安装Edge，或使用 `npx playwright install msedge`（部分系统需要安装权限）。不能因缺少浏览器而跳过后声称UI测试通过；日常打开本地预览可用现代浏览器。
 
 `.gitignore` 使用逐文件白名单。新增源码先检查内容，再加入准确例外；不要用强制添加绕过范围。只暂存本次审阅过的文件，完成以下检查后提交：

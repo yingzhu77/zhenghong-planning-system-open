@@ -19,6 +19,7 @@ import { completionStatistics } from './completion-statistics.mjs';
 import { projectPlanStatistics } from './project-plan-statistics.mjs';
 import { addProjectReportingProfession, grantProjectReportingProfession, listProjectReportingGrants } from './project-reporting-professions.mjs';
 import { listReportScopes } from './report-scopes.mjs';
+import { createWeeklyCollaboration } from './weekly-collaboration.mjs';
 import { managementRead, withManagementRead } from './management-read.mjs';
 import { loadSchemePreview } from './scheme-protection.mjs';
 import { uploadReportAttachment, listReportAttachments, loadReportAttachment, discardReportAttachment, discardInaccessibleReportDrafts } from './report-attachments.mjs';
@@ -78,6 +79,7 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
     res.json({ data: { status: 'ok' }, error: null });
   }));
   const auth = createAuth({ pool, config });
+  const weeklyCollaboration = createWeeklyCollaboration(pool);
   app.use('/api/auth', auth.router);
   for (const [route, handler] of [['load', loadPlanningAIMemory], ['conversation', savePlanningAIConversation], ['preference', savePlanningAIPreference]]) {
     app.post('/api/planning-ai/memory/' + route, auth.requireUser, express.json({limit:'256kb'}), asyncRoute(async(req,res)=>{
@@ -109,6 +111,36 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   }));
   app.post('/api/report-scopes/list', auth.requireUser, express.json({limit:'16kb'}), asyncRoute(async(req,res)=>{
     res.json({data:await listReportScopes(pool,req.user,req.body || {}),error:null});
+  }));
+  for (const route of ['open', 'change', 'publish', 'settings']) {
+    app.post('/api/weekly-collaboration/' + route, auth.requireUser, express.json({ limit: route === 'change' ? '256kb' : '16kb' }), asyncRoute(async (req, res) => {
+      const data = await weeklyCollaboration[route](req.user, req.body ?? {});
+      res.json({ data, error: null });
+    }));
+  }
+  app.post('/api/weekly-collaboration/poll', auth.requireUser, express.json({ limit: '16kb' }), asyncRoute(async (req, res) => {
+    if (res.destroyed) return;
+    const { user, sessionTokenHash } = req;
+    const controller = new AbortController();
+    const disconnect = () => controller.abort();
+    res.once('close', disconnect);
+    try {
+      const data = await weeklyCollaboration.poll(user, req.body ?? {}, controller.signal);
+      if (controller.signal.aborted) return;
+      // Authentication can be revoked while the request waits for a change.
+      delete req._zhSessionPromise;
+      const session = await auth.getSession(req);
+      if (controller.signal.aborted) return;
+      if (!session || req.user.id !== user.id || req.sessionTokenHash !== sessionTokenHash)
+        throw new HttpError(401, '会话已失效，请重新登录。', 'UNAUTHENTICATED');
+      if (req.user.must_change_password)
+        throw new HttpError(403, '首次登录请先修改初始密码', 'PASSWORD_CHANGE_REQUIRED');
+      res.json({ data, error: null });
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      res.off('close', disconnect);
+    }
   }));
   app.post('/api/management-read', auth.requireUser, express.json({ limit: '16kb' }), asyncRoute(async (req, res) => {
     res.json({ data: await managementRead(pool, req.user, req.body ?? {}, { uploadDir }), error: null });
@@ -343,7 +375,8 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   app.use((req, res) => res.status(404).send('Not found'));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
-    const result = publicError(error);
+    const result = publicError(error.code === 'P3801'
+      ? new HttpError(409, '该周弘坊设计部已启用协同填报，请从协同填报页面提交。', 'P3801') : error);
     if (result.status >= 500) console.error('[request failed]', { code: error.code || error.name, route: req.path,
       ...(error.code==='attachment_cleanup_failed'?{phase:error.cleanupPhase || 'upload-file',attachmentId:error.attachmentId || null,
         cleanupCode:error.cleanupCause?.code || error.cause?.code || null,cleanupFailures:error.cleanupFailures || []}:{}) });

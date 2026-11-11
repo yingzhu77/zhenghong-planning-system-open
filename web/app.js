@@ -409,7 +409,7 @@
     if (S.profile && S.profile.role === 'pm' && (S.view === 'form' || S.view === 'center')) S.pmRenderedScope = pmDraftScope();
   }
   async function changePMScope(update, prepare, force) {
-    if (attachmentBusy()) return;
+    if (attachmentBusy() || !canLeaveWeeklyCollaboration()) return;
     snapDraft();
     if ((S.view === 'form' || S.view === 'center') && canCapturePMDraft() && !saveDraft(S.view === 'center')) return;
     clearTimeout(draftAutosaveTimer);
@@ -864,6 +864,10 @@
     var y = keepScroll ? (window.pageYOffset || (document.documentElement && document.documentElement.scrollTop) || 0) : 0;
     rootEl.innerHTML = html;
     if (window.ZHRichEditor) window.ZHRichEditor.mount(rootEl,richBinding);
+    if (window.WeeklyCollaboration && rootEl.querySelector) {
+      var collaboration = rootEl.querySelector('[data-weekly-collaboration]');
+      window.WeeklyCollaboration.mount(collaboration, collaboration && weeklyCollaborationContext());
+    }
     if (window.PlanningAI) window.PlanningAI.refresh();
     if (window.ReportReference) window.ReportReference.refresh();
     if (window.MeetingController) window.MeetingController.refresh();
@@ -1405,6 +1409,10 @@
       var stored=scope && window.ReportScopes?window.ReportScopes.findReport(S.reports,scope,S.pmPeriod || currentPeriod(),null,line,S.uid):null;
       return Object.assign({project_id:scope?scope.anchor_project_id:pid,period:stored?stored.period:S.pmPeriod || currentPeriod(),line:line},scope?{report_scope_id:scope.id}:{});
     }
+    if(S.view==='professionalOverview'){
+      var selected=professionalOverviewReport();
+      return {report_ids:selected?[String(selected.id)]:[]};
+    }
     if(isManagerOverview())return {report_ids:overviewReports(S.view!=='pres').map(function(r){return String(r.id);}).sort()};
     var reports=(S.reports || []).filter(function(r){
       return S.view==='detail'?(window.ReportScopes?window.ReportScopes.matchesProject(r,S.detailPid):r.project_id===S.detailPid) && reportInPeriod(r,S.detailPeriod || currentPeriod()):pmHistoryReports().indexOf(r)>=0;
@@ -1466,6 +1474,7 @@
     clearTimeout(draftAutosaveTimer);
     S.briefDrafts = {}; S.reviewRichDrafts = {}; S.formRich = {}; S.lineEdits = {};
     S.overviewUI = { project: '', line: '', discipline: '', open: {} };
+    S.professionalOverview=null;
     S.reportingProfessionProject='';S.projectReportingGrants=[];
     S.followupRows = []; S.monthlyUnmatchedItems=[];S.meetingDraft = null; S.mlineDraft = {}; S.reporterArchiveTab = 'knowledge'; S.submittingReport = null;
     S.attachmentIds = []; S.completionQuery = null; S.completionMeta = {}; S.completionQueueIds = [];
@@ -1488,6 +1497,7 @@
       coordination: ['pms','reports','projectPeople','coordinationTasks','completions'],
       library: ['pms'],
       mline: ['pms', 'milestones', 'completions'], history: ['reports', 'coordinationTasks', 'monthlyPlans', 'completions', 'reportAttachments'],
+      professionalOverview: ['reports', 'reportAttachments'],
       completion: ['completions'],
       meetings: ['reporterTasks'],
       board: ['members', 'pms', 'milestones', 'reports', 'reviews'],
@@ -1605,8 +1615,9 @@
     return !keys.some(function (key) { return dataState[key] && dataState[key].error; });
   }
   function loadPageData(force) {
+    var keys = S.view==='weeklyCollaboration' ? pageDataKeys() : null;
     if (force && !isManagementReadView(S.view) && !(S.profile && S.profile.role==='viewer')) invalidateData(Object.keys(dataState));
-    return loadData(pageDataKeys());
+    return loadData(keys || pageDataKeys());
   }
   async function showPage(prepare, force, transition) {
     var navigation = ++pageNavigation, epoch = dataEpoch;
@@ -1621,6 +1632,8 @@
           ? window.PlanningBoot.ensureAdmin() : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureOverview && isManagerOverview()
           ? window.PlanningBoot.ensureOverview() : Promise.resolve(),
+        window.PlanningBoot && window.PlanningBoot.ensureMonthlySummaries && S.profile && S.profile.role==='pm' && ['form','professionalOverview'].includes(S.view)
+          ? window.PlanningBoot.ensureMonthlySummaries() : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureStatistics && S.view==='completionStats'
           ? window.PlanningBoot.ensureStatistics() : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureProjectPlanStatistics && S.view==='projectPlanStats'
@@ -1632,6 +1645,8 @@
         window.PlanningBoot && window.PlanningBoot.ensureAdminPlans && S.profile && S.profile.role==='ops' && S.view==='adminPlans'
           ? window.PlanningBoot.ensureAdminPlans() : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureProjectLibrary && (S.view==='library' || S.view==='managementLibrary') ? window.PlanningBoot.ensureProjectLibrary() : Promise.resolve(),
+        window.PlanningBoot && window.PlanningBoot.ensureWeeklyCollaboration && ['weeklyCollaboration','weeklyCollaborationSettings'].includes(S.view)
+          ? window.PlanningBoot.ensureWeeklyCollaboration(S.view==='weeklyCollaboration') : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureManagementReader && isManagementReadView(S.view) ? window.PlanningBoot.ensureManagementReader() : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureReporter && S.view==='managementArchive' ? window.PlanningBoot.ensureReporter('master') : Promise.resolve()]);
     } catch(error) { toast('页面组件加载失败，请刷新重试。','err'); return; }
@@ -1906,6 +1921,29 @@
     return opts.join('');
   }
 
+  function weeklyCollaborationScope() {
+    return S.profile && S.profile.role==='pm' && S.profile.status==='approved' && S.pmProject==='hf'
+      && S.pmLine==='设计部' && myProjects().some(function(project){return project.id==='hf' && project.project_type==='com' && project.active!==false;})
+      && S.pms.some(function(member){return member.user_id===S.uid && member.project_id==='hf' && member.role_in_project==='pm';})
+      && canReportBizLine(S.pmLine,S.pmProject);
+  }
+  function weeklyCollaborationContext() {
+    var settings=S.view==='weeklyCollaborationSettings' && S.profile && S.profile.role==='ops' && S.profile.status==='approved';
+    if (!settings && (S.view!=='weeklyCollaboration' || !weeklyCollaborationScope())) return null;
+    var period=settings?currentPeriod():S.pmPeriod || currentPeriod();
+    return {mode:settings?'settings':'editor',uid:S.uid,period:period,
+      week:window.PlanningWindows.periodStart(period),
+      attachmentIds:function(){return window.ReportAttachments ? window.ReportAttachments.ids() : [];},
+      notify:toast,onPublished:function(report){
+        return App.openProfessionalOverview(report.id,report.updated_at || report.submitted_at,{report:report});
+      }};
+  }
+  function canLeaveWeeklyCollaboration() {
+    if (!window.WeeklyCollaboration || window.WeeklyCollaboration.canLeave()) return true;
+    toast('当前协同内容还未保存，请保持页面打开。','warn');
+    return false;
+  }
+
   /* 填报页只调整布局；字段、提交动作和项目/模块授权沿用原逻辑。 */
   function planFormContext(pid, cur, moduleHtml, commercial) {
     var projects = reportingProjects();
@@ -1937,6 +1975,28 @@
 
   function viewPMForm() {
     return viewPMFormBiz();
+  }
+
+  function planEntryWidths(items) {
+    return window.MonthlySummaries && window.MonthlySummaries.columnWidths(items,{balanceProgress:true,editableProgress:true});
+  }
+  function planEntrySizing(items) {
+    var widths=planEntryWidths(items);
+    return widths?['module','content','date','progress'].map(function(column,index){
+      return '--entry-col-'+column+':'+widths[index];
+    }).join(';'):'';
+  }
+  function sizeEditedPlanTable(table) {
+    if(!table.isConnected || !window.MonthlySummaries)return;
+    function field(row,index) {
+      var cell=row.cells[index], input=cell.querySelector('textarea[data-rich],input');
+      return input?input.value:cell.textContent;
+    }
+    var items=Array.from(table.querySelectorAll('tr[data-row]'),function(row){
+      return {mod:field(row,0),name:field(row,1),due:field(row,2),progress:field(row,3)};
+    });
+    var sizing=planEntrySizing(items);
+    if(sizing && sizing!==table.getAttribute('style'))table.setAttribute('style',sizing);
   }
 
   /* 商业项目保留本月节点、当月计划与协调事项三块原有口径。 */
@@ -1977,6 +2037,9 @@
         + '<textarea rows="1" data-grow data-rich id="co_what_' + i + '" oninput="App.grow(this)" placeholder="需要对方做什么">' + esc(r.what || '') + '</textarea>'
         + '<input type="date" aria-label="协调最晚时间" id="co_by_' + i + '" value="' + esc(dstr(r.by)) + '"></div>';
     }).join('');
+    var itemSizing=planEntrySizing((S.bizItems || []).map(function(item){
+      return {mod:item.mod,name:item.name,due:item.due,progress:item.prog,blocker:item.blocker};
+    }));
     var dueList = [];
     (S.bizNodes || []).forEach(function (r) {
       if (!(r.name || '').trim() || !r.plan) return;
@@ -2023,6 +2086,7 @@
 
     return (commercial ? '' : dlNodes) + dlMods + '<div class="workgrid onecol plan-form report3-compact-form" data-shared-rich-editor><div class="colmain">'
       + planFormContext(pid, cur, moduleHtml, commercial)
+      + (weeklyCollaborationScope()?'<div class="notice"><button type="button" class="btn ghost" data-open-weekly-collaboration onclick="App.openWeeklyCollaboration()">协同填报</button> 弘坊设计部成员可共同填写当周进展和卡点，提交负责人由管理员按周指定。</div>':'')
       + '<div class="planning-ai-entry"><button type="button" class="btn primary" onclick="App.openPlanningAI()">AI 填报助手</button></div>'
       + legacyScopeDraftsHtml()
       + '<details class="plan-help"><summary>项目快览</summary><div class="plan-help-content">'
@@ -2039,7 +2103,8 @@
       + (window.MonthlyPlans?window.MonthlyPlans.toolbarHtml():'')
       + (window.MonthlyPlans && S.pmReportScope?window.MonthlyPlans.plannerHtml():'')
       + (S.pmReportScope?'<h4 class="subh">'+(professionalPMScope()?'本周专业进展 · '+esc(S.pmLine):'本周综合进展 · 保留原统一填报')+'</h4>':'')
-      + '<div class="tablewrap"><table class="plan-form-table report3-monthly-table"><thead><tr><th>模块</th><th>事项</th><th>完成时间</th><th>当周进展</th></tr></thead><tbody>' + itemRows + '</tbody></table></div>'
+      + '<div class="tablewrap report3-monthly-wrap"><table class="plan-form-table report3-monthly-table"'+(itemSizing?' style="'+esc(itemSizing)+'"':'')
+      +'><thead><tr><th>模块</th><th>事项</th><th>完成时间</th><th>当周进展</th></tr></thead><tbody>' + itemRows + '</tbody></table></div>'
       + (!monthLocked?'<div class="plan-row-actions"><button type="button" class="btn ghost sm" onclick="App.addBizItem()">＋ 增加事项</button></div>':'')+'</section>'
       + (window.MonthlyPlans && !S.pmReportScope?window.MonthlyPlans.plannerHtml():'')
       + '<section class="card plan-form-section"><div class="cardhd plan-section-head"><h3>三、需要协调事项</h3></div>' + coordHtml
@@ -2613,12 +2678,12 @@
   function reportHistoryHtml(r) {
     var versions = (Array.isArray(r.history) ? r.history : []).filter(function (entry) { return entry && entry.data; });
     var html = '<p class="hint">每次重新提交会保存修改前的版本；下方按最新到最早排列。已保存的历史版本只读。</p>'
-      + '<details class="revision" open><summary>当前版本</summary>' + reportSnapshotHtml(r) + '</details>';
+      + '<details class="revision" open><summary>当前版本</summary>' + professionalOverviewButton(r,r) + reportSnapshotHtml(r) + '</details>';
     for (var i = versions.length - 1; i >= 0; i--) {
       var version = versions[i], author = S.members.filter(function (member) { return member.user_id === version.by; })[0];
       html += '<details class="revision"><summary>历史版本 ' + (i + 1) + (i === 0 ? ' · 最早留存内容' : '') + '</summary>'
         + '<div class="hint">替换时间：' + esc(fmtTime(version.at)) + ' · 修改人：' + esc(author ? author.name : version.by || '—') + '</div>'
-        + reportSnapshotHtml(version.data) + '</details>';
+        + professionalOverviewButton(r,version.data) + reportSnapshotHtml(version.data) + '</details>';
     }
     return html;
   }
@@ -2635,7 +2700,7 @@
       var crows = mine.map(function (r) {
         var st = itemStat(r), nd = nodesOf(r), hd = handoverOf(r);
         var co = (r.coord_items || []).filter(function (x) { return x.who || x.what; });
-        return '<tr><td><b>' + esc(r.period) + '</b>' + reportHistoryButton(r) + '</td>'
+        return '<tr><td><b>' + esc(r.period) + '</b>' + professionalOverviewButton(r,r) + reportHistoryButton(r) + '</td>'
           + '<td>' + esc(r.line || LINE_ALL) + '<div class="muted" style="margin-top:3px">' + esc(r.author_name || '') + '</div></td>'
           + '<td>' + badge(r.status) + '</td>'
           + '<td>' + (nd.length ? nd.map(function (x) { return '· ' + richItem(x, 'name') + (x.plan ? '（' + esc(sd(x.plan)) + '）' : ''); }).join('<br>') : '<span class="muted">—</span>') + '</td>'
@@ -2661,7 +2726,7 @@
           var sp = (r.speed_items || []).filter(function (x) { return x.act; });
           var ef = (r.effect_items || []).filter(function (x) { return x.act; });
           var co = (r.coord_items || []).filter(function (x) { return x.who || x.what; });
-          return '<tr><td><b>' + esc(r.period) + '</b>' + reportHistoryButton(r) + '</td>'
+          return '<tr><td><b>' + esc(r.period) + '</b>' + professionalOverviewButton(r,r) + reportHistoryButton(r) + '</td>'
             + '<td>' + badge(r.status) + '</td>'
             + '<td>' + speedPill(r.self_speed) + '<br>' + effectPill(r.self_effect) + '</td>'
             + '<td>' + richItem(r, 'change_text', r.change_text || '—') + '</td>'
@@ -3229,7 +3294,7 @@
       unassignedOnly:commercial && line===null || selected && discipline==='__unassigned__',includeUnassigned:!!projectIds && !selected,period:overviewPeriod(),window:reportWindow(overviewPeriod(),null,'month')});
   }
   function overviewActualSource(report,item) {
-    var pid=item && item.project_id || (!report.report_scope_id?report.project_id:'');
+    var pid=reportItemProjectId(report,item);
     if(!pid)return '<span class="overview-source-project">统一范围 · 未明确子项目</span>';
     return '<span class="overview-source-project">'+esc(projName(pid))+'</span>';
   }
@@ -3241,17 +3306,21 @@
         scope_id:selectedScope && selectedScope.scope_id,line:selectedScope?selectedScope.line:commercial?_line:S.overviewUI.discipline,month:start && start.slice(0,7),includeUnsubmitted:!overviewHistorical()});
     }
     if(selectedScope && !selectedScope.scope_id)reports.sort(function(a,b){return selectedScope.projectIds.indexOf(a.project_id)-selectedScope.projectIds.indexOf(b.project_id);});
+    return overviewSavedPlanHtml(reports,commercial);
+  }
+  function overviewSavedPlanHtml(reports,commercial) {
     var withSource=commercial===false;
     var rows=[],layoutItems=[],modules=[],sources=[];
     reports.forEach(function(r,reportIndex){itemsOf(r).filter(function(item){return item && typeof item==='object' && !Array.isArray(item);}).forEach(function(item){
       var module=richItem(item,'mod',r.line || LINE_ALL);
       modules.push(module);
-      sources.push(JSON.stringify([reportIndex,item.project_id || (r.report_scope_id?'':r.project_id)]));
-      layoutItems.push({source:item.project_id?projName(item.project_id):projName(r.project_id),mod:item.mod || r.line || LINE_ALL,name:item.name || '',due:sd(item.due),progress:(item.prog || '')+(item.blocker?' '+item.blocker:'')});
+      var actualProject=reportItemProjectId(r,item);
+      sources.push(JSON.stringify([reportIndex,actualProject]));
+      layoutItems.push({source:actualProject?projName(actualProject):'统一范围',mod:item.mod || r.line || LINE_ALL,name:item.name || '',due:sd(item.due),progress:item.prog,blocker:item.blocker});
       rows.push((withSource?[overviewActualSource(r,item)]:[]).concat([String(rows.length+1),module,richItem(item,'name','未命名计划事项')+overviewRowSource(r,reports.length>1),
         esc(sd(item.due)),(item.prog?richItem(item,'prog'):r._monthly_preview?'<span class="overview-empty" title="月计划已确认，本周尚未提交">本周未提交</span>':overviewEmpty('未填写'))+(item.blocker?'<div class="plan-blocker"><b>遇到卡点：</b>'+richItem(item,'blocker')+'</div>':'')]));
     });});
-    var widths=window.MonthlySummaries && window.MonthlySummaries.columnWidths?window.MonthlySummaries.columnWidths(layoutItems,{sequence:true,source:withSource}):null;
+    var widths=window.MonthlySummaries && window.MonthlySummaries.columnWidths?window.MonthlySummaries.columnWidths(layoutItems,{sequence:true,source:withSource,balanceProgress:true}):null;
     if(widths && withSource)widths=[widths[1],widths[0]].concat(widths.slice(2));
     return overviewTable('plans',(withSource?[['实际项目／分期','source']]:[]).concat([['序号','seq'],['模块或类别','module'],['事项内容','content'],['完成时间','date'],['完成情况及本周计划','progress']]),
       rows,'暂无当月计划',widths,window.MonthlySummaries && window.MonthlySummaries.moduleRowSpans(modules,sources));
@@ -3277,7 +3346,7 @@
         esc(sd(row.due))+(row.effective_due && row.effective_due!==row.due?'<span class="overview-meta">执行期限 '+esc(sd(row.effective_due))+'</span>':''),
         (row.progress?richItem(row,'progress'):overviewEmpty('未填写'))+'<span class="overview-meta">'+esc({open:'待处理',in_progress:'推进中',completed:'本人反馈完成（以运营审核为准）'}[row.status] || '状态未记录')+'</span>']));
     });});
-    return overviewTable('other',(withSource?[['实际项目／分期','source']]:[]).concat([['序号','seq'],['事项类别','module'],['其他事项','content'],['填报人','module'],['原计划时间','date'],['汇报进展及反馈状态','progress']]),rows,'暂无其他事项');
+    return overviewTable('other',(withSource?[['实际项目／分期','source']]:[]).concat([['序号','seq'],['事项类别','module'],['其他事项','content'],['填报人','person'],['原计划时间','date'],['汇报进展及反馈状态','progress']]),rows,'暂无其他事项');
   }
   function overviewLegacyHtml(r) {
     if(isCom(r.project_id) || ![r.change_text,r.dev_text,r.projection,r.impact].some(Boolean)
@@ -3293,6 +3362,93 @@
     var refs=r.biz && r.biz.attachments;
     if(!refs || Array.isArray(refs) && !refs.length)return overviewEmpty('暂无附件资料');
     return window.ReportAttachments?window.ReportAttachments.snapshotHtml(r):'<span class="overview-empty">附件组件尚未就绪，请刷新重试。</span>';
+  }
+  function professionalOverviewAllowed(report,projectIds) {
+    if(!S.profile || S.profile.role!=='pm' || S.profile.status!=='approved' || !report || !report.submitted_at)return false;
+    if(['reports','projects','pms'].some(function(key){return dataState[key] && dataState[key].error;}))return false;
+    projectIds=projectIds || new Set(myProjects().map(function(project){return project.id;}));
+    if(!projectIds.has(report.project_id))return false;
+    if(report.report_scope_id && (!Array.isArray(report.scope_project_ids) || !report.scope_project_ids.includes(report.project_id)
+      || !report.scope_project_ids.every(function(pid){return projectIds.has(pid);})))return false;
+    return report.author_id===S.uid || report.project_id==='hf' && report.line==='设计部'
+      && !!bizOf(report).weekly_collaboration && canReportBizLine(report.line,report.project_id);
+  }
+  function professionalOverviewButton(report,snapshot) {
+    if(!professionalOverviewAllowed(report))return '';
+    return '<div class="professional-overview-link"><button type="button" class="btn ghost sm" data-report-id="'+esc(report.id)+'" data-saved-at="'+esc(snapshot.updated_at || snapshot.submitted_at || '')
+      +'" onclick="App.openProfessionalOverview(this.dataset.reportId,this.dataset.savedAt)">本专业总览</button></div>';
+  }
+  function professionalOverviewReports() {
+    var projectIds=new Set(myProjects().map(function(project){return project.id;}));
+    return S.reports.filter(function(report){return professionalOverviewAllowed(report,projectIds);});
+  }
+  function professionalOverviewReport(reports) {
+    reports=reports || professionalOverviewReports();
+    var selected=S.professionalOverview;
+    return selected && selected.id?reports.find(function(row){return String(row.id)===selected.id;}):reports[0];
+  }
+  function professionalOverviewVersions(report) {
+    var history=Array.isArray(report.history)?report.history:[];
+    return history.map(function(entry,index){return {number:index+1,data:entry && entry.data};}).filter(function(version){
+      var row=version.data;
+      return row && String(row.id)===String(report.id) && row.author_id===report.author_id && row.project_id===report.project_id
+        && row.report_scope_id===report.report_scope_id && row.period===report.period && row.line===report.line;
+    }).concat([{number:history.length+1,data:report}]).reverse();
+  }
+  function professionalOverviewNodes(report,commercial) {
+    var rows=nodesOf(report), legacy=!rows.length && !commercial;
+    if(legacy)rows=pickedNodes(report);
+    var columns=(commercial?[]:[['实际项目／分期','source']]).concat([['节点','content'],['计划完成时间','date'],[legacy?'预计完成及偏差说明':'进展','progress']]);
+    return overviewTable('nodes',columns,rows.map(function(node){
+      return (commercial?[]:[overviewActualSource(report,node)]).concat([richItem(node,'name','未命名节点'),esc(sd(node.plan)),legacy
+        ? esc(sd(node.forecast))+' · '+esc(devText(node.d))+(node.reason?'<div>'+richItem(node,'reason')+'</div>':'')
+        : richItem(node,'prog','未填写')]);
+    }),'本版本暂无节点填报');
+  }
+  function professionalOverviewHandover(report,commercial) {
+    var rows=handoverOf(report);
+    if(!rows.length)return '';
+    return '<section><h4>工作面移交</h4>'+overviewTable('handover',(commercial?[]:[['实际项目／分期','source']]).concat([
+      ['移交事项','content'],['接收对象','module'],['完成时间','date']]),rows.map(function(item){
+      return (commercial?[]:[overviewActualSource(report,item)]).concat([richItem(item,'what'),esc(item.to || '未指定'),esc(sd(item.due))]);
+    }),'暂无工作面移交')+'</section>';
+  }
+  function viewProfessionalOverview() {
+    var reports=professionalOverviewReports(), selected=S.professionalOverview || {};
+    var report=professionalOverviewReport(reports);
+    var versions=report?professionalOverviewVersions(report):[], version=versions[0];
+    if(selected.revision)version=versions.find(function(entry){return entry.number===selected.revision;});
+    else if(selected.savedAt)version=versions.find(function(entry){
+      var stamp=entry.data.updated_at || entry.data.submitted_at;
+      return stamp===selected.savedAt || Date.parse(stamp)===Date.parse(selected.savedAt);
+    });
+    var controls='<div class="professional-overview-controls no-print"><button type="button" class="btn ghost" onclick="App.view(\'history\')">返回历史记录</button>'
+      +(reports.length?'<label for="professionalOverviewReport">已提交报告</label><select id="professionalOverviewReport" onchange="App.openProfessionalOverview(this.value)">'
+        +(!report?'<option value="" selected disabled>请选择报告</option>':'')+reports.map(function(row){
+          return '<option value="'+esc(row.id)+'"'+(row===report?' selected':'')+'>'+esc(reportScopeTitle(row)+' · '+(row.line || LINE_ALL)+' · '+row.period
+            +(bizOf(row).weekly_collaboration?' · 协同周报':''))+'</option>';
+        }).join('')+'</select>':'')
+      +(versions.length>1?'<label for="professionalOverviewVersion">保存版本</label><select id="professionalOverviewVersion" onchange="App.professionalOverviewVersion(this.value)">'
+        +(!version?'<option value="" selected disabled>请选择版本</option>':'')+versions.map(function(entry,index){
+          return '<option value="'+entry.number+'"'+(entry===version?' selected':'')+'>'+esc('版本 '+entry.number+(index===0?'（当前）':'')+' · '
+            +fmtTime(entry.data.updated_at || entry.data.submitted_at))+'</option>';
+        }).join('')+'</select>':'')+'</div>';
+    var row=version && version.data;
+    var heading='<div class="cardhd"><h2>本专业总览</h2><span class="chip">已提交 · 只读</span></div>';
+    if(!row)return '<article class="card professional-overview">'+heading+controls+'<p class="notice" role="status">'
+      +(selected.id?'当前账号无法读取该报告的所选版本。':'暂无已提交的专业报告。')+'</p></article>';
+    if(window.ZHRichText)window.ZHRichText.attach(row);
+    var commercial=isCom(row.project_id);
+    return '<article class="card professional-overview" data-report-id="'+esc(report.id)+'" data-report-version="'+version.number+'">'+heading
+      +'<p class="professional-overview-context">'+esc(reportScopeTitle(row)+' · '+(row.line || LINE_ALL)+' · '+row.period)+'</p>'
+      +'<p class="hint">'+esc((row.author_name || '填报人未记录')+' · 版本 '+version.number+' · '+fmtTime(row.updated_at || row.submitted_at))+'</p>'
+      +controls+'<div class="overview-report-grid overview-report-sections">'
+      +'<section><h4>一、核心节点计划</h4>'+professionalOverviewNodes(row,commercial)+'</section>'
+      +'<section><h4>二、当月计划填报</h4>'+overviewSavedPlanHtml([row],commercial)+'</section>'
+      +'<section><h4>三、需要协调</h4>'+overviewCoordHtml([row],row.project_id,row.line,commercial)+'</section>'
+      +'<section><h4>四、其他事项</h4>'+overviewOtherHtml([row],row.project_id,row.line,commercial)+'</section>'
+      +professionalOverviewHandover(row,commercial)+overviewLegacyHtml(row)
+      +'<section><h4>填报附件</h4>'+overviewAttachmentHtml(row)+'</section></div></article>';
   }
   function overviewReportHtml(value,pid,line,commercial,knownLines,skipMeetings) {
     var reports=Array.isArray(value)?value:[value];
@@ -4260,7 +4416,8 @@
       {k:'coordination',v:'coordination',label:'协调申请',group:'work'},
       {k:'form',v:'form',label:'本期填报',group:'form'},
       {k:'master',v:'master',label:'项目档案',group:'projects'},
-      {k:'history',v:'history',label:'历史记录',group:'history'}];
+      {k:'history',v:'history',label:'历史记录',group:'history'},
+      {k:'professionalOverview',v:'professionalOverview',label:'本专业总览',group:'history'}];
     if(isPlanningManager()){
       var analysisIndex=items.findIndex(function(item){return item.group==='analysis';});
       items.splice(analysisIndex<0?items.length:analysisIndex,0,{k:'projectPlanStats',v:'projectPlanStats',label:'项目计划统计',title:'项目计划统计',group:'analysis'});
@@ -4268,7 +4425,9 @@
     if(role==='ops'){
       items.splice(items.findIndex(function(item){return item.k==='presCom';})+1,0,{k:'adminPlans',v:'adminPlans',label:'批量导入计划',title:'代填与批量导入计划',group:'overview'});
       items.push({k:'reportingProfessions',v:'reportingProfessions',label:'汇报专业设置',group:'settings'});
+      items.push({k:'weeklyCollaborationSettings',v:'weeklyCollaborationSettings',label:'周报协同设置',group:'settings'});
     }
+    if(weeklyCollaborationScope())items.push({k:'weeklyCollaboration',v:'weeklyCollaboration',label:'协同填报',group:'form'});
     items.push({k:'library',v:'library',label:'资料共享',group:'projects'});
     if(role==='pm' && canReadManagement())items=items.concat(managementNavItems());
     return items;
@@ -4355,6 +4514,7 @@
     var body='', view=current && current.v, managementRead=isManagementReadView(S.view);
     if(S.profile.role==='viewer' && !managementRead)body='<div class="card empty">没有管理查看权限，请联系管理员。</div>';
     else if(managementRead)body=window.ManagementReader?window.ManagementReader.html(S.view):'<div class="card empty">正在加载只读资料…</div>';
+    else if(weeklyCollaborationContext())body='<div data-weekly-collaboration></div>';
     else if(S.view==='detail')body=viewProjectDetail();
     else if(view==='presPzo')body=viewPresPzo();
     else if(rev){
@@ -4369,6 +4529,7 @@
       else if(view==='lineAdm')body=viewLineAdmin();else if(view==='library')body=viewProjectLibrary();else if(view==='master')body=viewMaster();else body=viewMembers();
     }else{
       if(view==='center')body=viewPMCenter();else if(view==='coordination')body=viewCoordinationPage();else if(view==='history')body=viewPMHistory()+(window.CompletionReview?window.CompletionReview.renderQueue({project_id:S.pmProject}):'');
+      else if(view==='professionalOverview')body=viewProfessionalOverview();
       else if(view==='mline')body=viewMyLine();else if(view==='library')body=viewProjectLibrary();else if(view==='master')body=viewMaster();else body=viewPMForm();
     }
     if(S.loadErrors && S.loadErrors.length)body='<div class="notice err">部分数据加载失败：'+esc(S.loadErrors.join('；'))+'。请刷新数据重试。</div>'+body;
@@ -4380,7 +4541,7 @@
     var context=S.view==='form'?'':S.view==='detail'?esc(projName(S.detailPid)):rev?esc(currentPeriod()):esc(reportScopeName(S.pmProject));
     var detailOptions=detailProjects();
     var right=(rev?(isManagerOverview()?overviewFilterHtml(S.ptype==='com'):'<select class="planning-project-jump" aria-label="打开项目详情" onchange="if(this.value)App.openProjectDetail(this.value)"><option value="">查看项目详情</option>'+detailOptions.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.name)+'</option>';}).join('')+'</select>'):'')
-      +(!rev && !managementRead && S.view!=='detail'?'<div class="tb-field"><label for="pmPeriod">报告周期</label><select id="pmPeriod" onchange="App.period(this.value)">'+periodOptionsHtml()+'</select></div>':'')
+      +(!rev && !managementRead && S.view!=='detail' && S.view!=='professionalOverview'?'<div class="tb-field"><label for="pmPeriod">报告周期</label><select id="pmPeriod" onchange="App.period(this.value)">'+periodOptionsHtml()+'</select></div>':'')
       +(isManagerOverview()?'<button type="button" class="btn primary sm" onclick="App.startMeeting()">开启会议投影</button>':'')
       +'<button class="btn ghost sm" onclick="App.printPage()">打印 / PDF</button><button class="btn ghost sm" onclick="App.reload()">刷新数据</button>';
     markPMRenderedScope();
@@ -4412,6 +4573,9 @@
       var parent=button.parentElement,open=!parent.classList.contains('is-open');
       document.querySelectorAll('.planning-nav-group.is-open').forEach(function(el){el.classList.remove('is-open');var trigger=el.querySelector('.planning-primary-trigger');if(trigger)trigger.setAttribute('aria-expanded','false');});
       parent.classList.toggle('is-open',open);button.setAttribute('aria-expanded',String(open));
+    },
+    openWeeklyCollaboration:function(){
+      if(weeklyCollaborationScope())return App.view('weeklyCollaboration');
     },
     overviewToggle:function(key,open){
       if(!isManagerOverview() || !Object.prototype.hasOwnProperty.call(S.overviewUI.open,key))return;
@@ -4512,6 +4676,24 @@
       renderModal(reportScopeTitle(report) + ' · ' + report.period + ' · 版本记录', reportHistoryHtml(report), function (wrap) {
         wrap.querySelector('.modalbox').style.maxWidth = '900px';
       });
+    },
+    openProfessionalOverview: async function (id,savedAt,context) {
+      if(!S.profile || S.profile.role!=='pm' || S.profile.status!=='approved' || !id)return;
+      var committed=context && context.report;
+      if(committed)invalidateData(['reports','pms','businessModuleGrants','projectReportingGrants','reportAttachments']);
+      closeModal();
+      return changePMScope(function(){
+        S.professionalOverview={id:String(id),savedAt:String(savedAt || ''),revision:committed && String(committed.id)===String(id)
+          && Array.isArray(committed.history)?committed.history.length+1:null};
+        S.view='professionalOverview';
+      },false);
+    },
+    professionalOverviewVersion: function (number) {
+      if(S.view!=='professionalOverview')return;
+      var report=professionalOverviewReport(), version=report && professionalOverviewVersions(report).find(function(entry){return entry.number===Number(number);});
+      if(!version)return;
+      S.professionalOverview={id:String(report.id),revision:version.number};
+      renderShell(true);
     },
     grow: function (t) { growOne(t); if(t && /^bi_(pg|blocker)_/.test(t.id || '') && window.MonthlyPlans)window.MonthlyPlans.refreshCore(); },
     libraryProject: function (pid) {
@@ -4710,7 +4892,7 @@
     },
 
     logout: async function () {
-      if (attachmentBusy()) return;
+      if (attachmentBusy() || !canLeaveWeeklyCollaboration()) return;
       if(window.PasswordChange)window.PasswordChange.close();
       resetPageData();
       try { await cloud.auth.signOut(); } catch (e) {}
@@ -5402,7 +5584,9 @@
         invalidateData(['reporterTasks','completions','reportAttachments']);
         await loadData(['reports','reporterTasks','completions','reportAttachments'],true);
         if(!sameSession() || S.pmProject!==pid || S.pmPeriod!==savePeriod || S.pmLine!==saveLine || pageNavigation!==saveNavigation)return;
-        await preparePM();S.view='history';await showPage();
+        var saved=result.data[0];
+        S.professionalOverview={id:String(saved.id),savedAt:saved.updated_at || saved.submitted_at || '',revision:Array.isArray(saved.history)?saved.history.length+1:null};
+        S.view='professionalOverview';await showPage(false);
       } finally { if(S.submittingReport===saveToken)S.submittingReport=null; }
     },
 
@@ -5522,6 +5706,7 @@
   /* ================= 草稿自动保存 ================= */
 
   function bindDraftAutosave() {
+    var planSizingTimer;
     function schedule(ms) {
       if (S.view !== 'form' || isReviewer() || !S.uid || !canCapturePMDraft()) return;
       clearTimeout(draftAutosaveTimer);
@@ -5531,8 +5716,17 @@
         snapDraft();saveDraft();
       }, ms);
     }
-    document.addEventListener('input', function (event) { if(event.target.closest && event.target.closest('.planning-ai-dialog'))return;schedule(1400); }, true);
-    document.addEventListener('change', function (event) { if(event.target.closest && event.target.closest('.planning-ai-dialog'))return;schedule(700); }, true);
+    function onChange(event,delay) {
+      if(event.target.closest && event.target.closest('.planning-ai-dialog'))return;
+      var table=S.view==='form' && event.target.closest && event.target.closest('.report3-monthly-table');
+      if(table && /^bi_(mod|nm|due|pg)_/.test(event.target.id || '')){
+        clearTimeout(planSizingTimer);
+        planSizingTimer=setTimeout(function(){sizeEditedPlanTable(table);},220);
+      }
+      schedule(delay);
+    }
+    document.addEventListener('input', function(event){onChange(event,1400);}, true);
+    document.addEventListener('change', function(event){onChange(event,700);}, true);
     window.addEventListener('beforeunload', function (event) {
       if (S.view === 'form' && !isReviewer()) { snapDraft(); saveDraft(); }
       if(window.ReportAttachments && window.ReportAttachments.isUploading()){event.preventDefault();event.returnValue='';}
