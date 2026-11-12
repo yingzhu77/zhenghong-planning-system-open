@@ -7,7 +7,7 @@ import {HttpError} from '../server/errors.mjs';
 // The reviewed roster stays outside source control. This job uses the existing
 // operator and project/profession checks, and never replaces a configured week.
 export async function enableWeeklyCollaboration(pool, config, {
-  today = new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date())
+  today = new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date()), deferExistingReports = true
 } = {}) {
   if (config?.kind !== 'role-derived-weekly-collaboration-bindings'
     || typeof config.operator_id !== 'string' || !config.operator_id
@@ -38,7 +38,7 @@ export async function enableWeeklyCollaboration(pool, config, {
           throw new HttpError(403,'负责人当前没有该项目专业权限，未自动替换人员');
         if((await client.query(`SELECT 1 FROM public.reports WHERE project_id=$1 AND line=$2
           AND app_private.weekly_collaboration_existing_report_week(period,submitted_at)=$3::date AND author_id=$4`,[...values,binding.submitter_id])).rows.length)
-          throw new HttpError(409,'负责人本周已有个人周报，保留原记录');
+          throw new HttpError(409,'负责人本周已有个人周报，保留原记录','weekly_personal_report_exists');
         await client.query(`INSERT INTO app_private.weekly_collaboration_drafts(project_id,line,week,report_scope_id,submitter_id,configured_by)
           VALUES($1,$2,$3::date,$4,$5,$6)`,[...values,scope.report_scope_id,binding.submitter_id,user.id]);
         const profile=await getProfile(client,user.id);
@@ -51,6 +51,13 @@ export async function enableWeeklyCollaboration(pool, config, {
       const after=await service.settings(user,scope);
       records.push({...scope,result,submitter_id:after.submitter_id,status:after.status});
     } catch (error) {
+      if(deferExistingReports && error.code==='weekly_personal_report_exists'){
+        const next=new Date(week+'T00:00:00Z');next.setUTCDate(next.getUTCDate()+7);
+        const deferred=await enableWeeklyCollaboration(pool,{...config,bindings:[binding]},
+          {today:next.toISOString().slice(0,10),deferExistingReports:false});
+        records.push(...deferred.records.map(row=>({...row,deferred_from_week:week,reason:'本周已有个人周报，原记录保留，下一周启用协同'})));
+        continue;
+      }
       // An unavailable owner or existing personal report must remain visible as
       // a conflict, not silently choose someone else or rewrite their report.
       records.push({...scope,result:'blocked',status:error.status??500,code:error.code??'weekly_enable_failed',message:error.message});
