@@ -331,3 +331,6 @@
 
 !/db/040-materials-only-viewers.sql
 !/tests/materials-only-viewers.test.mjs
+
+!/scripts/enable-weekly-collaboration.mjs
+!/tests/automatic-weekly-collaboration.test.mjs
