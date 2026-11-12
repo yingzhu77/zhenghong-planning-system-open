@@ -2114,7 +2114,7 @@
 
     return (commercial ? '' : dlNodes) + dlMods + '<div class="workgrid onecol plan-form report3-compact-form" data-shared-rich-editor><div class="colmain">'
       + planFormContext(pid, cur, moduleHtml, commercial)
-      + (weeklyCollaborationScope()?'<div class="notice"><button type="button" class="btn ghost" data-open-weekly-collaboration onclick="App.openWeeklyCollaboration()">协同填报</button> 管理员按周启用后，本项目本专业成员可共同填写当周进展和卡点。</div>':'')
+      + (weeklyCollaborationScope()?'<div class="notice"><button type="button" class="btn ghost" data-open-weekly-collaboration onclick="App.openWeeklyCollaboration()">协同填报</button> 进入本项目本专业已启用的协同周，共同填写当周进展和卡点。</div>':'')
       + '<div class="planning-ai-entry"><button type="button" class="btn primary" onclick="App.openPlanningAI()">AI 填报助手</button></div>'
       + legacyScopeDraftsHtml()
       + '<details class="plan-help"><summary>项目快览</summary><div class="plan-help-content">'
