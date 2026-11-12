@@ -1053,7 +1053,7 @@
       if(!projectsReady)return renderFail('负责项目读取失败，请刷新重试。');
       if(!myProjects().length)return renderFail('当前尚未分配负责项目，请联系管理员。');
     }
-    S.view = S.profile.role === 'viewer' ? (S.profile.viewer_scope==='projects'?'managementPlans':'managementCoord') : S.profile.role === 'pm' ? 'form' : isPzo() && myProjects().some(function(p){return isCom(p.id);}) ? 'presCom' : 'pres';
+    S.view = S.profile.role === 'viewer' ? (S.profile.viewer_access==='materials'?'managementArchive':S.profile.viewer_scope==='projects'?'managementPlans':'managementCoord') : S.profile.role === 'pm' ? 'form' : isPzo() && myProjects().some(function(p){return isCom(p.id);}) ? 'presCom' : 'pres';
     if(S.profile.role==='viewer')return showPage();
     if (window.PlanningBoot) {
       try { await Promise.all([loadPageData(), window.PlanningBoot.ensureEditor(), S.profile.role === 'pm' && window.PlanningBoot.ensureReporter ? window.PlanningBoot.ensureReporter() : Promise.resolve(),
@@ -4358,7 +4358,7 @@
         + '<td>' + (m.role === 'pm' || m.role==='viewer' && m.viewer_scope==='projects' ? (chips || '<span class="muted">未分配</span>') + addSel : m.role==='viewer'?'<span class="muted">全部项目（只读）</span>':'<span class="muted">全部项目（汇总端）</span>') + '</td>'
         + '<td>' + discCell + '</td>'
         + '<td>' + lineCell + '</td>'
-        + '<td>' + (m.role==='pm'?'<label><input type="checkbox" '+(m.management_viewer?'checked ':'')+'onchange="App.memberSet(\''+esc(m.user_id)+'\',\'management_viewer\',this.checked)">全项目只读</label>':m.role==='viewer'?'<select aria-label="查看人项目范围" onchange="App.memberSet(\''+esc(m.user_id)+'\',\'viewer_scope\',this.value)"><option value="all"'+(m.viewer_scope!=='projects'?' selected':'')+'>全部项目只读</option><option value="projects"'+(m.viewer_scope==='projects'?' selected':'')+'>已分配项目只读</option></select>':'<span class="muted">—</span>') + '</td>'
+        + '<td>' + (m.role==='pm'?'<label><input type="checkbox" '+(m.management_viewer?'checked ':'')+'onchange="App.memberSet(\''+esc(m.user_id)+'\',\'management_viewer\',this.checked)">全项目只读</label>':m.role==='viewer'?'<select aria-label="查看人项目范围" onchange="App.memberSet(\''+esc(m.user_id)+'\',\'viewer_scope\',this.value)"><option value="all"'+(m.viewer_scope!=='projects'?' selected':'')+'>全部项目只读</option><option value="projects"'+(m.viewer_scope==='projects'?' selected':'')+'>已分配项目只读</option></select><select aria-label="查看人内容范围" onchange="App.memberSet(\''+esc(m.user_id)+'\',\'viewer_access\',this.value)"><option value="full"'+(m.viewer_access!=='materials'?' selected':'')+'>计划及项目资料</option><option value="materials"'+(m.viewer_access==='materials'?' selected':'')+'>仅项目资料</option></select>':'<span class="muted">—</span>') + '</td>'
         + '<td><select onchange="App.memberSet(\'' + esc(m.user_id) + '\',\'status\',this.value)">'
         + ['pending', 'approved'].map(function (s) { return '<option value="' + s + '" ' + (m.status === s ? 'selected' : '') + '>' + (s === 'approved' ? '已通过' : '待审核') + '</option>'; }).join('')
         + '</select></td>'
@@ -4468,7 +4468,7 @@
     {k:'managementCompletion',v:'managementCompletion',label:'完成与延期记录',group:'collaboration'},
     {k:'managementMeetings',v:'managementMeetings',label:'会议事项（只读）',group:'collaboration'},
     {k:'managementArchive',v:'managementArchive',label:'项目档案（只读）',group:'projects'},
-    {k:'managementLibrary',v:'managementLibrary',label:'资料共享（只读）',group:'projects'}]; }
+    {k:'managementLibrary',v:'managementLibrary',label:'资料共享（只读）',group:'projects'}].filter(function(item){return !(S.profile.role==='viewer' && S.profile.viewer_access==='materials') || item.group==='projects';}); }
   function isManagementReadView(view) { return canReadManagement() && managementNavItems().some(function(item){return item.k===view;}); }
   function isPlanningManager() { return isReviewer() || isPzo(); }
   function planningGroups(items) {
@@ -5635,6 +5635,7 @@
       /* 函数级权限拦截：总裁为只读浏览，成员管理仅限运营管理员 */
       if (!S.profile || S.profile.role !== 'ops') return toast('无权限：成员管理仅限管理员', 'err');
       if(field==='management_viewer' && typeof value!=='boolean')return;
+      if(field==='viewer_access' && !['full','materials'].includes(value))return;
       if(field==='viewer_scope' && !['all','projects'].includes(value))return;
       var memberActor=S.uid,memberSession=S.session;
       function sameMemberSession(){return S.uid===memberActor && S.session===memberSession && S.profile && S.profile.role==='ops';}

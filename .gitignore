@@ -328,3 +328,6 @@
 !/docs/previews/
 !/docs/previews/project-knowledge-desktop.png
 !/docs/previews/project-knowledge-mobile.png
+
+!/db/040-materials-only-viewers.sql
+!/tests/materials-only-viewers.test.mjs

@@ -12,6 +12,8 @@ export async function createUser(pool, options) {
   if (!['pm', 'ops', 'president', 'pzo', 'viewer'].includes(role)) throw new Error('--role 仅支持 pm、ops、president、pzo、viewer');
   if (options.managementViewer !== undefined && typeof options.managementViewer !== 'boolean') throw new Error('managementViewer 仅支持明确的布尔值');
   const managementViewer = options.managementViewer ?? (role === 'viewer');
+  const viewerAccess = options.viewerAccess ?? 'full';
+  if (!['full','materials'].includes(viewerAccess) || viewerAccess==='materials' && role!=='viewer') throw new Error('viewerAccess 仅支持查看人的 full 或 materials 内容范围');
   const viewerScope = options.viewerScope ?? 'all';
   if (!['all','projects'].includes(viewerScope) || viewerScope==='projects' && role!=='viewer') throw new Error('viewerScope 仅支持查看人的 all 或 projects 范围');
   const userId = options.userId || randomUUID();
@@ -28,11 +30,11 @@ export async function createUser(pool, options) {
     if (oldProfile.rows.length && !options.userId) throw new Error('身份已存在，请明确指定 --user-id');
     await client.query('INSERT INTO app_private.auth_users(user_id,email,password_hash) VALUES($1,$2,$3)', [userId, email, passwordHash]);
     if (!oldProfile.rows.length) {
-      await client.query(`INSERT INTO public.profiles(user_id,name,role,status,project_id,biz_line,discipline,management_viewer,viewer_scope)
-        VALUES($1,$2,$3,'approved',$4,$5,$6,$7,$8)`, [userId, name, role, projects[0] || null, options.line || null, options.discipline || null, managementViewer,viewerScope]);
+      await client.query(`INSERT INTO public.profiles(user_id,name,role,status,project_id,biz_line,discipline,management_viewer,viewer_scope,viewer_access)
+        VALUES($1,$2,$3,'approved',$4,$5,$6,$7,$8,$9)`, [userId, name, role, projects[0] || null, options.line || null, options.discipline || null, managementViewer,viewerScope,viewerAccess]);
       for (const projectId of projects) await client.query(`INSERT INTO public.project_members(user_id,project_id,role_in_project)
         VALUES($1,$2,$3) ON CONFLICT(user_id,project_id) DO NOTHING`, [userId, projectId, role]);
-    } else if (projects.length || options.line || options.discipline || options.managementViewer !== undefined || options.viewerScope !== undefined) {
+    } else if (projects.length || options.line || options.discipline || options.managementViewer !== undefined || options.viewerScope !== undefined || options.viewerAccess !== undefined) {
       throw new Error('--user-id 绑定已有档案时保留原角色与项目，请勿同时传入项目、模块、条线或管理查看修改参数');
     }
     await client.query('COMMIT');
@@ -48,10 +50,11 @@ async function main() {
     project: { type: 'string', multiple: true }, line: { type: 'string' }, discipline: { type: 'string' },
     'management-viewer': { type: 'boolean' },
     'viewer-scope': { type: 'string' },
+    'viewer-access': { type: 'string' },
     'user-id': { type: 'string' }, help: { type: 'boolean' }
   } });
   if (values.help) {
-    console.log('BOOTSTRAP_PASSWORD=<密码> ADMIN_DATABASE_URL=<管理员连接串> node scripts/create-user.mjs --email user@company.com --name 姓名 --role pm|ops|president|pzo|viewer [--management-viewer] [--viewer-scope all|projects] [--project 项目ID] [--line 商业模块] [--discipline 专业条线] [--user-id 经人工确认的历史UID]');
+    console.log('BOOTSTRAP_PASSWORD=<密码> ADMIN_DATABASE_URL=<管理员连接串> node scripts/create-user.mjs --email user@company.com --name 姓名 --role pm|ops|president|pzo|viewer [--management-viewer] [--viewer-scope all|projects] [--viewer-access full|materials] [--project 项目ID] [--line 商业模块] [--discipline 专业条线] [--user-id 经人工确认的历史UID]');
     return;
   }
   const connectionString = process.env.ADMIN_DATABASE_URL || process.env.DATABASE_URL;
@@ -60,7 +63,7 @@ async function main() {
   const { default: pg } = await import('pg');
   const pool = new pg.Pool({ connectionString });
   try {
-    const result = await createUser(pool, { ...values, viewerScope:values['viewer-scope'],managementViewer: values['management-viewer'], userId: values['user-id'], projects: values.project || [], password: process.env.BOOTSTRAP_PASSWORD });
+    const result = await createUser(pool, { ...values, viewerAccess:values['viewer-access'], viewerScope:values['viewer-scope'],managementViewer: values['management-viewer'], userId: values['user-id'], projects: values.project || [], password: process.env.BOOTSTRAP_PASSWORD });
     console.log(JSON.stringify(result, null, 2));
   } finally { await pool.end(); }
 }

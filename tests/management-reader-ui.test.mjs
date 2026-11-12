@@ -68,7 +68,7 @@ async function fixture(role='viewer',cap=false){
   await page.addScriptTag({content:source.slice(0,boundary)+'\nwindow.managementAudit={S,App,afterLogin,showPage,renderShell,configureReporter,planningNavItems,planningGroups,pageDataKeys,myProjects,isPlanningManager,isReviewer,canReadManagement,getDataState:()=>dataState};\n})();'});
   await page.evaluate(({role,cap,projects})=>{
     const S=window.managementAudit.S,profile={user_id:'anonymous',name:'匿名查看用户',role,status:'approved',management_viewer:cap};
-    Object.assign(S,{uid:'anonymous',session:{user:{id:'anonymous',profile}},profile,view:'managementCoord',pmProject:'own',pmPeriod:'2026-10-19',pmLine:'综合',reporterArchiveTab:'planning',projects:[projects[0]],pms:[{user_id:'anonymous',project_id:'own'}],reportScopes:[{id:'personal-scope'}],reports:[{id:'personal-report'}],reporterTasks:[{id:'personal-meeting'}],coordinationTasks:[{id:'personal-coord'}],completions:[{id:'personal-completion'}]});
+    Object.assign(S,{uid:'anonymous',session:{user:{id:'anonymous',profile}},profile,view:'managementCoord',pmProject:'own',pmPeriod:'2026-10-19',pmLine:'综合',reporterArchiveTab:'planning',projects:[projects[0]],pms:[{user_id:'anonymous',project_id:'own'}],reportScopes:[{id:'personal-scope',project_ids:['own'],anchor_project_id:'own',reporting_mode:'legacy'}],reports:[{id:'personal-report'}],reporterTasks:[{id:'personal-meeting'}],coordinationTasks:[{id:'personal-coord'}],completions:[{id:'personal-completion'}]});
     window.testDb={projects:[projects[0]],project_members:S.pms};
   },{role,cap,projects});
   return {browser,page,calls,errors,behavior};
@@ -105,7 +105,7 @@ test('PM capability keeps personal arrays, reporting scope and own library while
   const h=await fixture('pm',true);const {page}=h;
   try{
     const before=await page.evaluate(()=>{const h=window.managementAudit,S=h.S;window.personalSnapshot=JSON.stringify([S.projects,S.pms,S.reports,S.reportScopes,S.reporterTasks,S.coordinationTasks,S.completions,S.pmProject,S.pmPeriod,S.pmLine]);return {keys:h.planningNavItems().map(x=>x.k),my:h.myProjects(),manager:h.isPlanningManager()};});
-    assert.deepEqual(before.keys.slice(0,7),['center','mline','coordination','form','master','history','library']);assert.equal(before.my.length,1);assert.equal(before.manager,false);
+    assert.deepEqual(before.keys.slice(0,8),['center','mline','coordination','form','master','history','professionalOverview','library']);assert.equal(before.my.length,1);assert.equal(before.manager,false);
     await page.evaluate(()=>window.managementAudit.showPage());
     await goto(h,'managementCompletion');await expect(page.locator('.management-reader')).toContainText('申报时快照与已保存审核记录');
     await expect(page.locator('.rt-red strong')).toHaveText('申报时原文');await expect(page.locator('.management-reader')).toContainText('原审核说明');
@@ -174,7 +174,10 @@ test('member administration labels viewers and changes only the management-read 
     await page.getByLabel('全项目只读',{exact:true}).check();
     await expect.poll(()=>page.evaluate(()=>window.dbWrites.length)).toBe(1);
     assert.deepEqual(await page.evaluate(()=>window.dbWrites[0]),{table:'profiles',payload:{management_viewer:true}});
+    await page.getByLabel('查看人内容范围',{exact:true}).selectOption('materials');
+    await expect.poll(()=>page.evaluate(()=>window.dbWrites.length)).toBe(2);
+    assert.deepEqual(await page.evaluate(()=>window.dbWrites[1]),{table:'profiles',payload:{viewer_access:'materials'}});
     const current=await page.evaluate(()=>{const h=window.managementAudit;h.S.profile={role:'viewer',status:'approved'};return h.App.memberSet('anonymous-pm','management_viewer',false).then(()=>window.dbWrites.length);});
-    assert.equal(current,1);assert.deepEqual(h.errors,[]);
+    assert.equal(current,2);assert.deepEqual(h.errors,[]);
   }finally{await h.browser.close();}
 });

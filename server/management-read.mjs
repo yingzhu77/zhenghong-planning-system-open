@@ -10,12 +10,16 @@ export function hasManagementRead(profile) {
   return profile?.status === 'approved' && (profile.role === 'viewer' || profile.role === 'pm' && profile.management_viewer === true);
 }
 
+export function materialsOnly(profile) {
+  return profile?.role === 'viewer' && profile.viewer_access === 'materials';
+}
+
 // Internal server helper only. Neither the GUC name nor its value comes from a
 // request, and SET LOCAL is automatically removed when withIdentity completes.
 export function withManagementRead(pool, user, callback, { required = false } = {}) {
   return withIdentity(pool, user.id, async client => {
     const profile = await getProfile(client, user.id);
-    if (hasManagementRead(profile)) await client.query("SELECT set_config('app.management_read','on',true)");
+    if (hasManagementRead(profile)) await client.query('SELECT set_config($1,\'on\',true)', [materialsOnly(profile) ? 'app.material_read' : 'app.management_read']);
     else if (required) forbidden();
     return callback(client, profile);
   });
@@ -116,14 +120,14 @@ const plansSql = `SELECT p.confirmed_at AS created_at,p.id::text AS sort_key,p.p
         AND (r.biz->>'monthly_plan_id'=p.id::text OR COALESCE(r.biz->'monthly_plan_ids','[]'::jsonb) ? p.id::text))) AS data
   FROM public.monthly_plans p WHERE p.plan_month=($2::text||'-01')::date`;
 
-async function archive(client, projectId, options) {
+async function archive(client, projectId, options, restricted) {
   if (!projectId) return { project_master: [], project_phases: [], project_drawings: [], milestones: [] };
   const master = (await client.query('SELECT project_id,fields,note,updated_at FROM public.project_master WHERE project_id=$1', [projectId])).rows;
   const phases = (await client.query(`SELECT id,project_id,name,area,gfa,units_total,units_launched,units_sold,
     avg_price,value,plan_handover,sort_order FROM public.project_phases WHERE project_id=$1 ORDER BY sort_order,id`, [projectId])).rows;
   const drawings = (await client.query(`SELECT id,project_id,kind,name,path,url,uploaded_by,sort_order,created_at
     FROM public.project_drawings WHERE project_id=$1 ORDER BY sort_order,id`, [projectId])).rows;
-  const milestones = (await client.query(`SELECT id::text AS id,project_id,name,line,level,is_key,plan_date,
+  const milestones = restricted ? [] : (await client.query(`SELECT id::text AS id,project_id,name,line,level,is_key,plan_date,
     forecast_date,done,note,rich_text,discipline,biz_line FROM public.milestones WHERE project_id=$1 ORDER BY sort_order,id`, [projectId])).rows;
   return { project_master: await sanitizeSchemeRows(client, 'project_master', master, options), project_phases: phases,
     project_drawings: await sanitizeSchemeRows(client, 'project_drawings', drawings, options), milestones };
@@ -132,6 +136,7 @@ async function archive(client, projectId, options) {
 export async function managementRead(pool, user, request = {}, options = {}) {
   const filters = readRequest(request);
   return withManagementRead(pool, user, async (client,profile) => {
+    if (materialsOnly(profile) && !['projects','archive'].includes(filters.view)) forbidden();
     const projects = (await client.query(`SELECT id,name,COALESCE(project_type,'res') AS project_type,
       COALESCE(display_group,name) AS display_group FROM public.projects ORDER BY sort_order,id`)).rows;
     if (filters.project_id && !projects.some(project => project.id === filters.project_id)) forbidden();
@@ -141,7 +146,7 @@ export async function managementRead(pool, user, request = {}, options = {}) {
     if (filters.view === 'projects') return result;
     if (filters.view === 'archive') {
       result.project_id = filters.project_id || projects[0]?.id || '';
-      result.archive = await archive(client, result.project_id, options);
+      result.archive = await archive(client, result.project_id, options, materialsOnly(profile));
       return result;
     }
     const source = { coordination: coordinationSql, completions: completionSql, meetings: meetingsSql,plans:plansSql }[filters.view];
