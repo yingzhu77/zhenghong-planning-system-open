@@ -236,3 +236,29 @@ test('real merged professional month switching preserves new drafts and every ol
   const keys=await page.evaluate(()=>Object.keys(localStorage));assert.ok(keys.some(key=>key.includes(encodeURIComponent('工程'))&&key.includes(zh.id)),'new professional draft identity includes its line and merged scope');
   assert.deepEqual(h.writes,[]);assert.deepEqual(h.errors,[]);
 });
+
+test('merged residential current month uses one commercial-style table through confirmation, withdrawal, refresh and next-month preparation',async t=>{
+  const f=await browserRuntime(t),h=await browser(t,f),page=await h.login();await open(page,zh,'2026-10-19');
+  await expect(page.locator('.monthly-next-plan')).toHaveCount(0);
+  await expect(page.locator('.report3-monthly-table')).toHaveCount(1);
+  await expect(page.locator('.report3-monthly-table th')).toHaveText(['模块','事项','完成时间','当周进展']);
+  await editor(page,'bi_mod_0').fill('工程');await strong(editor(page,'bi_nm_0'),'住宅单表本月计划验收');await page.locator('#bi_due_0').fill('2026-10-25');await strong(editor(page,'bi_pg_0'),'确认月计划之前填写的本周进展');
+  await page.getByRole('button',{name:'保存本机草稿',exact:true}).click();
+  await page.getByRole('button',{name:'准备下月 2026-11',exact:true}).click();await editor(page,'monthly_next_name_0').fill('独立下月事项');
+  await page.getByRole('button',{name:'本月 2026-10',exact:true}).click();await expect(editor(page,'bi_pg_0').locator('strong')).toHaveText('确认月计划之前填写的本周进展');
+  const artifacts=process.env.MERGED_PROFESSIONAL_ARTIFACT_DIR||path.join(os.tmpdir(),'planning-merged-professional');await mkdir(artifacts,{recursive:true});
+  await page.locator('.plan-form-section').filter({has:page.getByRole('heading',{name:'二、当月计划填报',exact:true})}).screenshot({path:path.join(artifacts,'residential-one-table-unconfirmed.png')});
+  await page.getByRole('button',{name:'确认本月计划',exact:true}).click();
+  await expect.poll(async()=>(await f.admin.query("SELECT count(*)::int n FROM public.monthly_plans WHERE report_scope_id=$1 AND line='工程' AND plan_month='2026-10-01'",[zh.id])).rows[0].n).toBe(1);
+  await expect(page.locator('[data-rich-editor-for="bi_nm_0"]')).toHaveCount(0);await expect(progressEditor(page,'住宅单表本月计划验收').locator('strong')).toHaveText('确认月计划之前填写的本周进展');
+  await page.getByRole('button',{name:'保存本机草稿',exact:true}).click();await page.reload();await open(page,zh,'2026-10-19');
+  await expect(progressEditor(page,'住宅单表本月计划验收').locator('strong')).toHaveText('确认月计划之前填写的本周进展');
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'撤回确认并修改',exact:true}).click();
+  await expect(editor(page,'bi_nm_0').locator('strong')).toHaveText('住宅单表本月计划验收');await expect(editor(page,'bi_pg_0').locator('strong')).toHaveText('确认月计划之前填写的本周进展');
+  await page.getByRole('button',{name:'确认本月计划',exact:true}).click();await expect(progressEditor(page,'住宅单表本月计划验收')).toContainText('确认月计划之前填写的本周进展');
+  await page.getByRole('button',{name:'准备下月 2026-11',exact:true}).click();await expect(editor(page,'monthly_next_name_0')).toHaveText('独立下月事项');await page.getByRole('button',{name:'本月 2026-10',exact:true}).click();
+  await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await page.screenshot({path:path.join(artifacts,'residential-one-table-mobile.png'),fullPage:true});
+  const current=(await f.admin.query("SELECT * FROM public.monthly_plans WHERE report_scope_id=$1 AND line='工程' AND plan_month='2026-10-01'",[zh.id])).rows[0];
+  assert.equal(current.items[0].name,'住宅单表本月计划验收');assert.equal(current.rich_text.fields['items.0.name'].ops[0].attributes.bold,true);assert.deepEqual(h.writes,[]);assert.deepEqual(h.errors,[]);
+});

@@ -2048,9 +2048,10 @@
     }).join('');
     if (!nodeRows) nodeRows = '<tr><td colspan="4" class="empty">添加本月最关键的 2–3 个节点，填写计划完成时间与当前进展。</td></tr>';
     var monthLocked=window.MonthlyPlans && window.MonthlyPlans.locked();
+    var separateMonthEditor=!!S.pmReportScope && !(window.MonthlyPlans && window.MonthlyPlans.inlineCurrent());
     var itemRows = (S.bizItems || []).map(function (r, i) {
       mergePlanProgress(r);
-      return '<tr data-row><td data-label="模块">'+(monthLocked?richItem(r,'mod'):'<input data-rich id="bi_mod_'+i+'" value="'+esc(r.mod || '')+'" placeholder="模块或工作类别">')+'</td>'
+      return '<tr data-row><td data-label="模块">'+(monthLocked?richItem(r,'mod'):'<input data-rich id="bi_mod_'+i+'" value="'+esc(r.mod || '')+'" placeholder="工作类别">')+'</td>'
         +'<td data-label="事项">'+(monthLocked?richItem(r,'name'):'<textarea rows="2" data-grow data-rich id="bi_nm_'+i+'" oninput="App.grow(this)" placeholder="事项：可交付的结果">'+esc(r.name || '')+'</textarea>')+'</td>'
         +'<td data-label="完成时间">'+(monthLocked?esc(sd(r.due)):'<input type="date" aria-label="事项完成时间" id="bi_due_'+i+'" value="'+esc(dstr(r.due))+'">')+'</td>'
         +'<td data-label="当周进展"><textarea rows="2" data-grow data-rich id="bi_pg_'+i+'" oninput="App.grow(this)" placeholder="填写本周进展、结果或遇到的问题">'+esc(r.prog || '')+'</textarea>'
@@ -2128,12 +2129,12 @@
       + coreSection + '</section>'
       + '<section class="card plan-form-section"><div class="cardhd plan-section-head"><h3>二、当月计划填报</h3><button type="button" class="btn ghost sm" onclick="App.openReportReference()">查看其他专业填报</button></div>'
       + (window.MonthlyPlans?window.MonthlyPlans.toolbarHtml():'')
-      + (window.MonthlyPlans && S.pmReportScope?window.MonthlyPlans.plannerHtml():'')
-      + (S.pmReportScope?'<h4 class="subh">'+(professionalPMScope()?'本周专业进展 · '+esc(S.pmLine):'本周综合进展 · 保留原统一填报')+'</h4>':'')
+      + (window.MonthlyPlans && separateMonthEditor?window.MonthlyPlans.plannerHtml():'')
+      + (separateMonthEditor?'<h4 class="subh">'+(professionalPMScope()?'本周专业进展 · '+esc(S.pmLine):'本周综合进展 · 保留原统一填报')+'</h4>':'')
       + '<div class="tablewrap report3-monthly-wrap"><table class="plan-form-table report3-monthly-table"'+(itemSizing?' style="'+esc(itemSizing)+'"':'')
       +'><thead><tr><th>模块</th><th>事项</th><th>完成时间</th><th>当周进展</th></tr></thead><tbody>' + itemRows + '</tbody></table></div>'
       + (!monthLocked?'<div class="plan-row-actions"><button type="button" class="btn ghost sm" onclick="App.addBizItem()">＋ 增加事项</button></div>':'')+'</section>'
-      + (window.MonthlyPlans && !S.pmReportScope?window.MonthlyPlans.plannerHtml():'')
+      + (window.MonthlyPlans && !separateMonthEditor?window.MonthlyPlans.plannerHtml():'')
       + '<section class="card plan-form-section"><div class="cardhd plan-section-head"><h3>三、需要协调事项</h3></div>' + coordHtml
       + '<div class="plan-row-actions"><button type="button" class="btn ghost sm" onclick="App.addCoord()">＋ 增加一行</button></div></section>'
       + (window.ReporterTasks ? window.ReporterTasks.formHtml() : '')
