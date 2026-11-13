@@ -2183,6 +2183,10 @@
         + (myNodes.length ? '<details><summary>原手填节点与草稿（保留，不参与自动汇总）</summary><div class="tablewrap"><table class="plan-form-table"><thead><tr><th>节点</th><th>计划完成时间</th><th>原记录进展</th></tr></thead><tbody>'
           + myNodes.map(function(n){return '<tr><td>'+richItem(n,'name')+'</td><td>'+esc(sd(n.plan))+'</td><td>'+richItem(n,'prog')+'</td></tr>';}).join('')+'</tbody></table></div></details>' : '')
       : '<p class="notice err" role="alert">项目基准节点组件读取失败，请刷新重试。</p>';
+    var coreWindow = reportWindow(S.pmPeriod,cur && (cur.submitted_at || cur.created_at),'week');
+    var corePlanHtml = '<section class="card plan-form-section"><div class="cardhd plan-section-head"><h3>一、本周核心节点计划</h3>'
+      + '<span class="plan-section-note">'+esc(coreWindow ? coreWindow.start+' 至 '+coreWindow.end : '所选报告周')+'</span></div>'
+      + coreSection + '</section>';
     var odNum = myItems.filter(itemOverdue).length;
     var myItem = itemStat(cur);
     var projectLines=myBizLines(S.pmProject);
@@ -2213,9 +2217,9 @@
     var collaboration=inlineCollaborationMode() || (futureReportWeek(S.pmPeriod)?'futureUnavailable':null);
     if(collaboration && collaboration!=='unconfigured')return '<div class="workgrid onecol plan-form report3-compact-form"><div class="colmain">'
       +planFormContext(pid,cur,moduleHtml,commercial)
-      +(collaboration==='member'?'<section class="card plan-form-section"><div class="cardhd"><h3>一、本周核心节点计划</h3></div>'+coreSection+'</section>'
+      +(collaboration==='member'?corePlanHtml
         +'<div data-weekly-collaboration data-inline-key="'+esc(inlineCollaborationKey())+'"></div>'
-        +(window.ReportAttachments?window.ReportAttachments.formHtml():'')
+        +(window.ReportAttachments?window.ReportAttachments.formHtml('三'):'')
         :'<p class="notice" role="status">'+(collaboration==='futureUnavailable'?'该项目专业尚未开放这周的协同填报，请切换项目、专业或报告周期。'
           :collaboration==='excluded'?'本周由管理员指定的协同人员填报。':'本周填报权限读取失败，请刷新重试。')+'</p>')
       +'</div></div>';
@@ -2232,8 +2236,7 @@
       + (!commercial && cur && (cur.dev_text || cur.next_items && cur.next_items.length) ? '<details><summary>既有住宅补充记录</summary><div class="revision-content">'+riskCell(cur)+nextCell(cur)+'</div></details>' : '')
       + (commercial && sameWeekOther.length ? '<p class="muted">本期其它模块已报：' + sameWeekOther.map(function (r) { return esc(r.line || '综合'); }).join('、') + '</p>' : '') + '</div></details>'
 
-      + '<section class="card plan-form-section"><div class="cardhd plan-section-head"><h3>一、本周核心节点计划</h3><span class="plan-section-note">'+esc((function(){var w=reportWindow(S.pmPeriod,cur && (cur.submitted_at || cur.created_at),'week');return w?w.start+' 至 '+w.end:'所选报告周';})())+'</span></div>'
-      + coreSection + '</section>'
+      + corePlanHtml
       + '<section class="card plan-form-section"><div class="cardhd plan-section-head"><h3>二、当月计划填报</h3><button type="button" class="btn ghost sm" onclick="App.openReportReference()">查看其他专业填报</button></div>'
       + (window.MonthlyPlans?window.MonthlyPlans.toolbarHtml():'')
       + (window.MonthlyPlans && separateMonthEditor?window.MonthlyPlans.plannerHtml():'')

@@ -76,6 +76,15 @@ async function openWorkspace(page, projectId = 'hf') {
   await expect(page.locator('[data-weekly-collaboration]')).toBeVisible();
 }
 
+async function expectSharedReportLayout(page) {
+  const form = page.locator('.report3-compact-form');
+  await expect(form.locator('.plan-section-head h3')).toHaveText([
+    '一、本周核心节点计划', '二、当月计划填报', '三、附件资料'
+  ]);
+  await expect(form.locator('.report-attachment-upload')).toBeVisible();
+  await expect(form.locator('#report-attachment-upload')).toBeEnabled();
+}
+
 test('弘坊设计部两个实名会话合并同一单元格的中文改动并统一提交', { timeout: 120000 }, async t => {
   const fixture = await createFixture(t);
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
@@ -131,6 +140,7 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
   const editorCell = cell(editor, 'pilot-source-one:prog');
   await expect(leadCell).toBeEditable();
   await expect(editorCell).toBeEditable();
+  await expectSharedReportLayout(lead);
   await expect(lead.locator('[data-collaboration-presence]')).toContainText('匿名设计协作者', { timeout: 18000 });
   await expect(editor.locator('[data-collaboration-publish]')).not.toBeVisible();
 
@@ -275,7 +285,7 @@ test('独立住宅保留同周旧综合报告，仍可选择本人专业协同�
   const workspace = housing.locator('[data-weekly-collaboration]');
   await expect(housing.locator('.planning-mainnav')).not.toContainText('协同填报');
   await expect(housing.locator('[aria-label="本期填报信息"]')).toBeVisible();
-  await expect(workspace.getByRole('heading',{name:'二、当月计划填报'})).toBeVisible();
+  await expectSharedReportLayout(housing);
   await expect(workspace.getByRole('columnheader')).toHaveText(['模块','事项','完成时间','当周进展']);
   await workspace.getByRole('button',{name:'＋ 增加事项'}).click();
   await workspace.getByLabel('模块',{exact:true}).fill('住宅工程');

@@ -95,13 +95,13 @@
       + (!readOnly ? '<label class="report-attachment-select"><input type="checkbox" aria-label="将' + esc(name) + '选入本期填报" onchange="ReportAttachments.toggle(\'' + id + '\',this.checked)"'
         + (selected ? ' checked' : '') + (isUploading() ? ' disabled' : '') + '><span>' + (selected ? '已选入' : '选入本期') + '</span></label>' : '') + '</article>';
   }
-  function formHtml() {
+  function formHtml(sectionNumber = '五') {
     var list = ids(), found = metadataById(), selected = {}, available;
     list.forEach(function (id) { selected[id] = true; });
     available = library().filter(function (row) { return !selected[row.id]; });
     var issue = isUploading() ? '' : validationError();
-    return '<section class="card report-attachments" id="report-attachments"><div class="cardhd"><h3>五、附件资料</h3>'
-      + '<span class="hint">当前选入 ' + list.length + ' / 20 件 · ' + sizeText(selectedSize(list, found)) + ' / 40 MiB</span></div>'
+    return '<section class="card plan-form-section report-attachments" id="report-attachments"><div class="cardhd plan-section-head"><h3>' + esc(sectionNumber) + '、附件资料</h3>'
+      + '<span class="plan-section-note">当前选入 ' + list.length + ' / 20 件 · ' + sizeText(selectedSize(list, found)) + ' / 40 MiB</span></div>'
       + '<p class="muted">支持图片（JPG、PNG、GIF、WebP）、PDF、Word、Excel；单件不超过 8 MiB。附件随本期填报提交，上传后仍需提交报告；移除选入不会删除已经提交的历史附件。</p>'
       + (editable() ? '<label class="btn ghost report-attachment-upload' + (isUploading() ? ' is-disabled' : '') + '"><input type="file" id="report-attachment-upload" multiple accept="' + ACCEPT + '" onchange="ReportAttachments.upload(this)"'
         + (isUploading() ? ' disabled' : '') + '><span>' + (isUploading() ? '附件处理中…' : '选择文件上传') + '</span></label>' : '')
