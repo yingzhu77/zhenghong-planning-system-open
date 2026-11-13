@@ -146,7 +146,7 @@
         refreshButton();
         const name = next.submitter_name ? '本周负责人为' + next.submitter_name + '。' : '';
         show('saved', (submitterId ? '已保存。' : '') + name + (statusMessages[next.status] || '')
-          + (!next.can_configure && next.status === 'ready' ? '已有协同进展，负责人已锁定。' : ''));
+          + (!next.can_configure && next.status === 'ready' ? '已有月计划或协同进展，负责人已锁定。' : ''));
       } catch (error) {
         if (closed || version !== serial) return;
         show(error.status ? 'error' : 'offline', error.status ? error.message : '连接中断，请重新读取该周。');

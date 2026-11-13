@@ -358,6 +358,46 @@ test('共同编制的月计划跨周共享，确认前可提交，确认后保�
   await assert.rejects(service.withdrawMonth(engineering,{...third,month,revision:reconfirmed.plan.revision,operation_id:randomUUID()}),conflict);
 });
 
+test('本月或下月的已保存共享稿锁定负责人，仍可调整成员',async t=>{
+  const f=await fixture(t), service=f.service;
+  const first=inWeek(merged), second=inWeek(merged,'2026-11-16');
+  const owner=scope=>service.settings(operator,{...scope,submitter_id:engineering.id,member_ids:[engineeringPeer.id]});
+  const replace=scope=>service.settings(operator,{...scope,submitter_id:engineeringPeer.id,member_ids:[]});
+  await owner(first);
+  await owner(second);
+  assert.equal((await service.settings(operator,first)).can_configure,true);
+  assert.equal((await replace(first)).submitter_id,engineeringPeer.id);
+  await owner(first);
+  const next='2026-12', nextItem=randomUUID();
+  const added=await service.monthItems(engineeringPeer,{...first,month:next,action:'add',revision:0,
+    operation_id:nextItem,item:item('下月共享事项','zhx2')});
+  for (const scope of [first,second]) {
+    assert.equal((await service.settings(operator,scope)).can_configure,false);
+    await assert.rejects(replace(scope),conflict);
+  }
+  const emptied=await service.monthItems(engineeringPeer,{...first,month:next,action:'delete',source_id:nextItem,
+    revision:added.month_plans.next.revision,operation_id:randomUUID()});
+  assert.deepEqual(emptied.month_plans.next.items,[]);
+  assert.equal((await service.settings(operator,first)).can_configure,false);
+  await assert.rejects(replace(first),conflict);
+  assert.equal((await service.open(engineering,second)).month_plans.next.id,emptied.month_plans.next.id);
+
+  const currentFirst=inWeek(independent), currentSecond=inWeek(independent,'2026-11-16');
+  await owner(currentFirst);
+  await owner(currentSecond);
+  await service.monthItems(engineeringPeer,{...currentSecond,month,action:'add',revision:0,
+    operation_id:randomUUID(),item:item('本月共享事项')});
+  for (const scope of [currentFirst,currentSecond]) {
+    assert.equal((await service.settings(operator,scope)).can_configure,false);
+    await assert.rejects(replace(scope),conflict);
+  }
+  const updated=await service.settings(operator,{...currentSecond,submitter_id:engineering.id,member_ids:[]});
+  assert.equal(updated.can_configure,false);
+  assert.deepEqual(updated.member_ids,[]);
+  await assert.rejects(service.open(engineeringPeer,currentSecond),denied);
+  assert.equal((await service.open(engineering,currentFirst)).plan.items[0].name,'本月共享事项');
+});
+
 test('后来报告周的名单不能借共享月计划访问未授权的原月稿',async t=>{
   const f=await fixture(t), service=f.service, first=inWeek(merged), second=inWeek(merged,'2026-11-16');
   await service.settings(operator,{...first,submitter_id:engineering.id,member_ids:[]});

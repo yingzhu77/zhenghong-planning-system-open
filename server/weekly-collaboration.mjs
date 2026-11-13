@@ -124,6 +124,17 @@ async function lockSharedMonth(client,scope,owner,month) {
     [...scope.eligibility,owner,month]);
 }
 
+async function ownerIsLocked(client,scope,draft) {
+  if (!draft) return false;
+  if (draft.plan_id || draft.shared_monthly_plan_id || draft.unplanned_items?.length || draft.published_report_id) return true;
+  const months=Object.values(monthsOf(scope)).map(month=>month+'-01');
+  // An emptied draft retains its identity and still uses the original week's roster.
+  return (await client.query(`SELECT EXISTS(SELECT 1 FROM app_private.collaboration_monthly_drafts
+    WHERE project_id=$1 AND line=$2 AND report_scope_id IS NOT DISTINCT FROM $3::text
+      AND owner_id=$4 AND plan_month=ANY($5::date[])) AS locked`,
+    [...scope.eligibility,draft.submitter_id,months])).rows[0].locked;
+}
+
 async function existingReport(client, scope, submitter) {
   return (await client.query(`SELECT EXISTS(SELECT 1 FROM public.reports WHERE project_id=$1 AND line=$2
     AND app_private.weekly_collaboration_existing_report_week(period,submitted_at)=$3::date AND author_id=$4) AS found`,
@@ -257,7 +268,7 @@ export function createWeeklyCollaboration(pool) {
       ]),online]),
       submitter_id:draft?.submitter_id || null, submitter_name:submitter?.name || report?.author_name || '',
       can_edit:!settings && status === 'ready', can_publish:!settings && status === 'ready' && submitter.user_id === user.id && (!plan.unplanned || plan.items.length>0),
-      can_configure:settings && !draft?.plan_id && !draft?.shared_monthly_plan_id && !draft?.unplanned_items?.length && !draft?.published_report_id,
+      can_configure:settings && !(await ownerIsLocked(client,scope,draft)),
       eligible:settings ? eligible : [], member_ids:settings ? draft?.member_ids ?? null : undefined, plan:settings || status !== 'ready' ? null : plan,
       month_plans:settings ? undefined : monthPlans,
       cells:!settings && status === 'ready' ? draft.cells : {}, report, last_change:last || null, presence:online
@@ -323,8 +334,12 @@ export function createWeeklyCollaboration(pool) {
       if (draft && draft.report_scope_id!==scope.scopeId) fail(409,'该周的合并填报范围已变化，请核对原协同稿。');
       const members=requestedMembers===undefined?draft?.member_ids ?? null:[...new Set(requestedMembers.filter(id=>id!==submitter))].sort();
       if (draft?.submitter_id===submitter && JSON.stringify(draft.member_ids ?? null)===JSON.stringify(members)) return state(client,user,scope,true);
-      if (draft?.published_report_id || draft?.submitter_id!==submitter && (draft?.plan_id || draft?.shared_monthly_plan_id || draft?.unplanned_items?.length))
-        fail(409,'该周已经开始编制或已提交，不能更改负责人。');
+      if (draft?.published_report_id) fail(409,'该周已提交，不能修改协同设置。');
+      if (draft && draft.submitter_id!==submitter) {
+        // Other weeks can create or edit these drafts under the same monthly locks.
+        for (const month of Object.values(monthsOf(scope))) await lockSharedMonth(client,scope,draft.submitter_id,month);
+        if (await ownerIsLocked(client,scope,draft)) fail(409,'本周已有月计划或协同进展，不能更改负责人。');
+      }
       if (members?.length) {
         const eligible=(await client.query('SELECT * FROM app_private.weekly_collaboration_participants($1,$2,$3)',scope.eligibility)).rows;
         if (!members.every(id=>eligible.some(person=>person.user_id===id))) fail(403,'协同人员须有该项目专业的填报权限。');
