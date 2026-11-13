@@ -541,7 +541,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     let html = root.innerHTML;
     ok(identityRole(html) === '提报人' && DB.profiles[0].role === 'pm', '住宅场景账号应使用统一提报人身份和原 pm 角色');
     const n = nav(html);
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料', '历史记录']), 'PM 主导航应为四个整合入口');
+    ok(navLabels(html, ['工作台', '本期填报', '项目资料']), 'PM 主导航应为三个整合入口');
     ok(!has(nav(html), '批量导入计划') && !has(main(html), 'App.openAdminPlans'), '住宅提报人不能看到管理员代填导入入口');
     ok(!has(n, '节点基线'), 'PM 导航仍残留独立「节点基线」页签');
     ok(!has(n, '成员权限') && !has(n, '项目分析'), 'PM 主导航混入管理入口');
@@ -618,7 +618,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     await App.view('cams'); html = root.innerHTML;
     noCameraUi(html, '住宅 PM 访问已撤销的监控页');
     ok(has(main(html), '我的工作台') && has(main(html), '住宅项目') && has(main(html), '幕墙分包进场'), '住宅 PM 访问已撤销的监控页应回落本人的个人概览');
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料', '历史记录']), '撤销监控入口影响了住宅 PM 四项主导航');
+    ok(navLabels(html, ['工作台', '本期填报', '项目资料']), '撤销监控入口影响了住宅 PM 三项主导航');
     console.log('PM render OK');
   }
 
@@ -639,7 +639,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     let html = root.innerHTML;
     ok(identityRole(html) === '提报人' && DB.profiles[0].role === 'pm', '商业场景账号应使用统一提报人身份和原 pm 角色');
     const formHtml = html;   /* 商业填报页快照（供 DUMP 用） */
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料', '历史记录']), '商业 PM 主导航应保留四个整合入口');
+    ok(navLabels(html, ['工作台', '本期填报', '项目资料']), '商业 PM 主导航应保留三个整合入口');
     ok(!has(nav(html), '批量导入计划') && !has(main(html), 'App.openAdminPlans'), '商业提报人不能看到管理员代填导入入口');
     noCameraUi(html, '商业 PM 填报页');
     noReporterPageHeading(html, '商业填报');
@@ -731,7 +731,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     await App.view('cams'); html = root.innerHTML;
     noCameraUi(html, '商业 PM 访问已撤销的监控页');
     ok(has(main(html), '我的工作台') && has(main(html), '示例土建负责人') && has(main(html), '实名会议重点') && !has(main(html), '西地块总包清单编制'), '商业 PM 访问已撤销的监控页应回落本人的个人概览，保留本人关键事项且不混入他人台账');
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料', '历史记录']), '撤销监控入口影响了商业 PM 四项主导航');
+    ok(navLabels(html, ['工作台', '本期填报', '项目资料']), '撤销监控入口影响了商业 PM 三项主导航');
     await App.openProjectDetail('p3'); await App.detailTab('history'); html = root.innerHTML;
     ok(has(main(html), '幕墙材料封样') && has(main(html), '景观-西地块定标配合') && has(main(html), '示例供应商调整铝型材合同，卡在招采'), '工作台收敛后月度计划正文和进展仍应完整保留在项目历史');
     ok(has(main(html), '<span class="mk-red">屋面临近完成</span>'), '旧手填节点的标红反馈仍应完整保留在原报告历史');

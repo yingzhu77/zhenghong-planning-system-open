@@ -4,6 +4,7 @@ import * as Y from 'yjs';
 import { getProfile, lockWeeklyCollaborationWrite, reportDelay, reportStatus, reportWeekStart, withIdentity } from './database.mjs';
 import { businessModulesForProject } from './commercial-modules.mjs';
 import { HttpError } from './errors.mjs';
+import { normalizeMonthlyPlanItems } from './monthly-plans.mjs';
 import { validateReportAttachmentReferences } from './report-attachments.mjs';
 import { residentialDisciplinesForProject } from './report-lines.mjs';
 import { configuredReportScopes, resolveReportScope } from './report-scopes.mjs';
@@ -114,7 +115,7 @@ function reportFields(draft, plan, scoped) {
   const fields = {};
   for (const [key, delta] of Object.entries(plan.rich_text?.fields || {})) fields['biz.' + key] = delta;
   const items = plan.items.map((item, index) => {
-    const result = { ...item, ...(scoped ? {monthly_plan_id:plan.id} : {}) };
+    const result = { ...item, ...(scoped && plan.id ? {monthly_plan_id:plan.id} : {}) };
     for (const field of ['prog','blocker']) {
       const ops = readCell(draft.cells[item.source_id + ':' + field]);
       result[field] = ops.map(op => op.insert).join('');
@@ -164,9 +165,19 @@ export function createWeeklyCollaboration(pool) {
   }
 
   async function access(client, user, scope, settings) {
-    const sql = settings ? 'app_private.weekly_collaboration_operator()' : 'app_private.weekly_collaboration_eligible($1,$2,$3,$4)';
-    const {allowed} = (await client.query('SELECT '+sql+' AS allowed',settings?[]:[user.id,...scope.eligibility])).rows[0];
+    const allowed=settings?(await client.query('SELECT app_private.weekly_collaboration_operator() AS allowed')).rows[0].allowed
+      : ['member','unconfigured'].includes(await roomAccess(client,user,scope));
     if (!allowed) fail(403,settings?'只有管理员可指定提交负责人。':'当前账号没有该项目专业的协同权限。');
+  }
+
+  async function roomAccess(client,user,scope) {
+    return (await client.query('SELECT app_private.weekly_collaboration_room_access($1,$2,$3,$4,$5::date) AS mode',
+      [user.id,...scope.eligibility,scope.week])).rows[0].mode;
+  }
+
+  function mode(user,body) {
+    const scope=scopeOf(body);
+    return withIdentity(pool,user.id,async client=>({mode:await roomAccess(client,user,scope)}));
   }
 
   async function state(client, user, scope, settings, presenceInput) {
@@ -183,16 +194,22 @@ export function createWeeklyCollaboration(pool) {
       status = 'published';
     } else if (draft && !submitter) status = 'submitter_unavailable';
     else if (draft) {
-      plan = await confirmedPlan(client,scope,submitter.user_id) || null;
+      plan = draft.unplanned_items == null ? await confirmedPlan(client,scope,submitter.user_id) || null : null;
       if (!draft.plan_id && await existingReport(client,scope,submitter.user_id)) status = 'legacy_report';
       else if (draft.plan_id && draft.plan_id !== plan?.id) status = 'plan_changed';
-      else status = plan ? 'ready' : 'missing_plan';
+      else {
+        if (!plan || !draft.plan_id && !plan.items.length) {
+          const project = (await client.query('SELECT project_type FROM public.projects WHERE id=$1',[scope.projectId])).rows[0];
+          plan = {id:null,unplanned:true,items:draft.unplanned_items ?? [],project_type:project.project_type,month:scope.week.slice(0,7)};
+        }
+        status = 'ready';
+      }
     }
     if (!settings && draft && presenceInput) {
       const {tab,activeCell}=presenceInput;
       touch(user,scope,tab,validCell(plan,activeCell)?activeCell:null);
     }
-    const online=people(scope,eligible);
+    const online=people(scope,draft?.member_ids==null?eligible:eligible.filter(person=>person.user_id===draft.submitter_id || draft.member_ids.includes(person.user_id)));
     const last = !settings && draft && (await client.query(`SELECT actor_name,recorded_at AS at,cell
       FROM app_private.weekly_collaboration_operations WHERE ${weekFilter} AND kind='edit' ORDER BY revision DESC LIMIT 1`,scope.weekValues)).rows[0];
     const revision = draft?.revision || 0;
@@ -200,9 +217,9 @@ export function createWeeklyCollaboration(pool) {
       week:scope.week, project_id:scope.projectId,line:scope.line,report_scope_id:scope.scopeId,status,revision,
       cursor:digest([revision,status,plan?.id,online]),
       submitter_id:draft?.submitter_id || null, submitter_name:submitter?.name || report?.author_name || '',
-      can_edit:!settings && status === 'ready', can_publish:!settings && status === 'ready' && submitter.user_id === user.id,
-      can_configure:settings && !draft?.plan_id && !draft?.published_report_id,
-      eligible:settings ? eligible : [], plan:settings || status !== 'ready' ? null : plan,
+      can_edit:!settings && status === 'ready', can_publish:!settings && status === 'ready' && submitter.user_id === user.id && (!plan.unplanned || plan.items.length>0),
+      can_configure:settings && !draft?.plan_id && !draft?.unplanned_items?.length && !draft?.published_report_id,
+      eligible:settings ? eligible : [], member_ids:settings ? draft?.member_ids ?? null : undefined, plan:settings || status !== 'ready' ? null : plan,
       cells:!settings && status === 'ready' ? draft.cells : {}, report, last_change:last || null, presence:online
     };
   }
@@ -256,20 +273,29 @@ export function createWeeklyCollaboration(pool) {
       if (!Object.hasOwn(body,'submitter_id')) return state(client,user,scope,true);
       const submitter = body.submitter_id;
       if (typeof submitter !== 'string' || !submitter || submitter.length > 128) fail(400,'请选择一位提交负责人。');
+      const requestedMembers=body.member_ids;
+      if (requestedMembers!==undefined && (!Array.isArray(requestedMembers) || requestedMembers.length>500
+        || requestedMembers.some(id=>typeof id!=='string' || !id || id.length>128))) fail(400,'协同人员名单不正确。');
       const {allowed}=(await client.query('SELECT app_private.weekly_collaboration_eligible($1,$2,$3,$4) AS allowed',[submitter,...scope.eligibility])).rows[0];
       if (!allowed) fail(403,'提交负责人须有该项目专业的填报权限。');
       await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
       const draft=await readWeek(client,scope);
       if (draft && draft.report_scope_id!==scope.scopeId) fail(409,'该周的合并填报范围已变化，请核对原协同稿。');
-      if (draft?.submitter_id === submitter) return state(client,user,scope,true);
-      if (draft?.plan_id || draft?.published_report_id) fail(409,'该周已经开始编制，负责人已锁定。');
-      if (await existingReport(client,scope,submitter)) fail(409,'该负责人本周已有个人周报，请选择其他报告周或核对历史记录。');
+      const members=requestedMembers===undefined?draft?.member_ids ?? null:[...new Set(requestedMembers.filter(id=>id!==submitter))].sort();
+      if (draft?.submitter_id===submitter && JSON.stringify(draft.member_ids ?? null)===JSON.stringify(members)) return state(client,user,scope,true);
+      if (draft?.published_report_id || draft?.submitter_id!==submitter && (draft?.plan_id || draft?.unplanned_items?.length))
+        fail(409,'该周已经开始编制或已提交，不能更改负责人。');
+      if (members?.length) {
+        const eligible=(await client.query('SELECT * FROM app_private.weekly_collaboration_participants($1,$2,$3)',scope.eligibility)).rows;
+        if (!members.every(id=>eligible.some(person=>person.user_id===id))) fail(403,'协同人员须有该项目专业的填报权限。');
+      }
+      if (draft?.submitter_id!==submitter && await existingReport(client,scope,submitter)) fail(409,'该负责人本周已有个人周报，请选择其他报告周或核对历史记录。');
       const revision = draft ? draft.revision + 1 : 1;
-      await client.query(`INSERT INTO app_private.weekly_collaboration_drafts(project_id,line,week,report_scope_id,submitter_id,configured_by,revision)
-        VALUES($1,$2,$3::date,$4,$5,$6,$7) ON CONFLICT(project_id,line,week) DO UPDATE
-        SET submitter_id=excluded.submitter_id,configured_by=excluded.configured_by,revision=excluded.revision`,
-        [...scope.weekValues,scope.scopeId,submitter,user.id,revision]);
-      await appendOperation(client,user,scope,randomUUID(),'designate',revision,null,digest([submitter]));
+      await client.query(`INSERT INTO app_private.weekly_collaboration_drafts(project_id,line,week,report_scope_id,submitter_id,configured_by,revision,member_ids)
+        VALUES($1,$2,$3::date,$4,$5,$6,$7,$8) ON CONFLICT(project_id,line,week) DO UPDATE
+        SET submitter_id=excluded.submitter_id,configured_by=excluded.configured_by,revision=excluded.revision,member_ids=excluded.member_ids`,
+        [...scope.weekValues,scope.scopeId,submitter,user.id,revision,members]);
+      await appendOperation(client,user,scope,randomUUID(),'designate',revision,null,digest([submitter,members]));
       return state(client,user,scope,true);
     });
     if (Object.hasOwn(body,'submitter_id')) notify(scope);
@@ -306,6 +332,44 @@ export function createWeeklyCollaboration(pool) {
     });
   }
 
+  async function items(user,body) {
+    const scope=scopeOf(body), operation=operationOf(body), {action,revision}=body;
+    if (!['add','update'].includes(action) || !Number.isSafeInteger(revision) || revision<0) fail(400,'事项操作不正确。');
+    const id=action==='add'?operation:body.source_id;
+    if (typeof id!=='string' || !uuid.test(id)) fail(400,'事项标识不正确。');
+    const item=normalizeMonthlyPlanItems([{...body.item,source_id:id}],scope.scopeId)[0];
+    const fingerprint=digest(['items',action,id,item,revision]);
+    const result=await withIdentity(pool,user.id,async client=>{
+      await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
+      await access(client,user,scope,false);
+      if (await replay(client,user,scope,operation,fingerprint)) return state(client,user,scope,false);
+      const current=await state(client,user,scope,false);
+      if (!current.can_edit || !current.plan.unplanned) fail(409,'当前周报不允许调整事项。');
+      if (action!=='add' && revision!==current.revision) fail(409,'协同稿已更新，请核对事项后重试。');
+      const rows=current.plan.items.slice();
+      if (scope.scopeId) {
+        const range=(await client.query('SELECT project_ids FROM app_private.report_scopes WHERE id=$1',[scope.scopeId])).rows[0];
+        if (!range.project_ids.includes(item.project_id)) fail(400,'请选择本项目范围内的实际分期。');
+      }
+      if (action==='add') {
+        if (rows.length>=500) fail(400,'本周协同事项最多 500 项。');
+        rows.push(item);
+      } else {
+        const index=rows.findIndex(row=>row.source_id===id);
+        if (index<0) fail(409,'事项已变化，请刷新后核对。');
+        rows[index]=item;
+      }
+      if (Buffer.byteLength(JSON.stringify(rows))>maxDraftBytes) fail(400,'本周事项累计内容已达上限。');
+      const nextRevision=current.revision+1;
+      await client.query(`UPDATE app_private.weekly_collaboration_drafts SET unplanned_items=$4::jsonb,revision=$5
+        WHERE ${weekFilter}`,[...scope.weekValues,JSON.stringify(rows),nextRevision]);
+      await appendOperation(client,user,scope,operation,'items',nextRevision,null,fingerprint);
+      return state(client,user,scope,false);
+    });
+    notify(scope);
+    return result;
+  }
+
   async function change(user,body) {
     const scope=scopeOf(body);
     const operation = operationOf(body);
@@ -314,16 +378,16 @@ export function createWeeklyCollaboration(pool) {
     const bytes = Buffer.from(encoded,'base64');
     if (!bytes.length || bytes.length > maxCellBytes || bytes.toString('base64') !== encoded) fail(400,'协同单元格更新格式不正确。');
     const planId = body.plan_id;
-    if (typeof planId !== 'string' || !uuid.test(planId)) fail(400,'确认月计划标识不正确。');
+    if (planId!==null && (typeof planId !== 'string' || !uuid.test(planId))) fail(400,'协同事项来源不正确。');
     const fingerprint = digest(['edit',planId,body.cell,encoded]);
     const result = await withIdentity(pool,user.id,async client => {
-      await access(client,user,scope,false);
       await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
+      await access(client,user,scope,false);
       if (await replay(client,user,scope,operation,fingerprint)) return state(client,user,scope,false);
       const current=await state(client,user,scope,false);
       if (!current.can_edit) fail(409,'该周协同稿当前无法编辑，请刷新后核对。');
-      if (current.plan.id !== planId) fail(409,'确认月计划已变化，原输入保留在当前浏览器。');
-      if (!validCell(current.plan,body.cell)) fail(400,'协同单元格不属于当前确认计划。');
+      if (current.plan.id !== planId) fail(409,'协同事项来源已变化，原输入保留在当前浏览器。');
+      if (!validCell(current.plan,body.cell)) fail(400,'协同单元格不属于当前事项。');
       const next = readCell(current.cells[body.cell],bytes);
       const cells = {...current.cells,[body.cell]:next};
       if (Buffer.byteLength(JSON.stringify(cells)) > maxDraftBytes) fail(400,'该周协同稿累计改动已达上限。');
@@ -342,7 +406,7 @@ export function createWeeklyCollaboration(pool) {
     const operation = operationOf(body);
     if (!Number.isSafeInteger(body.revision) || body.revision < 0) fail(400,'协同稿版本不正确。');
     const planId = body.plan_id;
-    if (typeof planId !== 'string' || !uuid.test(planId)) fail(400,'确认月计划标识不正确。');
+    if (planId!==null && (typeof planId !== 'string' || !uuid.test(planId))) fail(400,'协同事项来源不正确。');
     const period = body.period ?? week;
     if (typeof period !== 'string' || period.length > 100 || reportWeekStart(period) !== week)
       fail(400,'附件周期与本周协同稿不一致。');
@@ -351,8 +415,8 @@ export function createWeeklyCollaboration(pool) {
       fail(400,'本周附件引用不正确。');
     const fingerprint = digest(['publish',body.revision,planId,period,attachments]);
     const result = await withIdentity(pool,user.id,async client => {
-      await access(client,user,scope,false);
       await lockWeeklyCollaborationWrite(client,projectId,line,week);
+      await access(client,user,scope,false);
       const current=await state(client,user,scope,false);
       if (current.submitter_id !== user.id) fail(403,'仅本周指定负责人可以正式提交。');
       if (await replay(client,user,scope,operation,fingerprint)) return current;
@@ -363,8 +427,9 @@ export function createWeeklyCollaboration(pool) {
       const {items,fields}=reportFields(current,current.plan,Boolean(scopeId));
       const profile = await getProfile(client,user.id);
       const row = {project_id:projectId,period,line,...(scopeId?{report_scope_id:scopeId}:{}),biz:{
-        ...(scopeId?{monthly_plan_ids:[current.plan.id]}:{monthly_plan_id:current.plan.id}),
-        monthly_plan_month:current.plan.month,items,attachments,
+        ...(current.plan.id?{...(scopeId?{monthly_plan_ids:[current.plan.id]}:{monthly_plan_id:current.plan.id}),
+          monthly_plan_month:current.plan.month}:{}),
+        items,attachments,
         weekly_collaboration:{week,revision:current.revision}
       }};
       await resolveReportScope(client,user,row,null,period,projectId);
@@ -389,5 +454,5 @@ export function createWeeklyCollaboration(pool) {
     return result;
   }
 
-  return {open,poll,catalog,settings,change,publish};
+  return {open,poll,mode,catalog,settings,items,change,publish};
 }

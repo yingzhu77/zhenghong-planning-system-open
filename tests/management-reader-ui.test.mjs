@@ -105,7 +105,7 @@ test('PM capability keeps personal arrays, reporting scope and own library while
   const h=await fixture('pm',true);const {page}=h;
   try{
     const before=await page.evaluate(()=>{const h=window.managementAudit,S=h.S;window.personalSnapshot=JSON.stringify([S.projects,S.pms,S.reports,S.reportScopes,S.reporterTasks,S.coordinationTasks,S.completions,S.pmProject,S.pmPeriod,S.pmLine]);return {keys:h.planningNavItems().map(x=>x.k),my:h.myProjects(),manager:h.isPlanningManager()};});
-    assert.deepEqual(before.keys.slice(0,8),['center','mline','coordination','form','master','history','professionalOverview','library']);assert.equal(before.my.length,1);assert.equal(before.manager,false);
+    assert.deepEqual(before.keys.slice(0,8),['center','mline','coordination','history','form','professionalOverview','master','library']);assert.equal(before.my.length,1);assert.equal(before.manager,false);
     await page.evaluate(()=>window.managementAudit.showPage());
     await goto(h,'managementCompletion');await expect(page.locator('.management-reader')).toContainText('申报时快照与已保存审核记录');
     await expect(page.locator('.rt-red strong')).toHaveText('申报时原文');await expect(page.locator('.management-reader')).toContainText('原审核说明');

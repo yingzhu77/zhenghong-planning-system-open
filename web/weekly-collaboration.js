@@ -7,7 +7,7 @@
   const statusMessages = {
     unconfigured: '本周还未指定提交负责人，请联系管理员。',
     submitter_unavailable: '本周负责人当前没有填报权限，请联系管理员核对。',
-    missing_plan: '请由本周负责人先在本期填报确认当月计划。',
+    missing_plan: '本周暂无可用事项，请刷新后重试。',
     legacy_report: '本周已有个人周报，请在历史记录查看。',
     plan_changed: '确认月计划已变化，协同编制已暂停，请联系管理员核对。',
     published: '本周专业周报已提交。'
@@ -74,18 +74,21 @@
 
   function settings(root, config) {
     root.innerHTML = '<section class="card collaboration-panel">'
-      + '<header><h2>周报协同设置</h2><p>按项目、专业和报告周指定一位提交负责人，即可启用该周的协同填报。</p></header>'
+      + '<header><h2>周报协同设置</h2><p>按项目、专业和报告周选择负责人及协同人员。负责人也可以参与填写。</p></header>'
       + '<form class="collaboration-settings"><label>报告周起始日（周一）<input type="date" data-weekly-collaboration-week></label>'
       + '<button type="button" class="btn ghost" data-collaboration-load>读取该周</button>'
       + '<label>项目<select data-weekly-collaboration-project></select></label>'
       + '<label>汇报专业<select data-weekly-collaboration-profession></select></label>'
       + '<label>提交负责人<select data-weekly-collaboration-submitter required></select></label>'
-      + '<button type="submit" class="btn primary" data-weekly-collaboration-designate>保存负责人</button></form>'
+      + '<fieldset data-collaboration-members><legend>协同人员</legend><div data-collaboration-member-list></div></fieldset>'
+      + '<button type="submit" class="btn primary" data-weekly-collaboration-designate>保存协同设置</button></form>'
       + '<p role="status" class="collaboration-status" data-collaboration-status></p></section>';
     const date = root.querySelector('input');
     const project = root.querySelector('[data-weekly-collaboration-project]');
     const profession = root.querySelector('[data-weekly-collaboration-profession]');
     const select = root.querySelector('[data-weekly-collaboration-submitter]');
+    const memberList = root.querySelector('[data-collaboration-member-list]');
+    const memberIds=()=>Array.from(memberList.querySelectorAll('input:checked')).map(input=>input.value).filter(id=>id!==select.value).sort();
     const submit = root.querySelector('[data-weekly-collaboration-designate]');
     const reload = root.querySelector('[data-collaboration-load]');
     const status = root.querySelector('[data-collaboration-status]');
@@ -107,12 +110,17 @@
     function resetReporter() {
       state = null;
       select.replaceChildren(new Option('请选择提交负责人', ''));
+      memberList.replaceChildren();
       select.disabled = submit.disabled = true;
     }
     function refreshButton() {
-      submit.disabled = !state || !state.can_configure || !select.value || select.value === state.submitter_id;
+      if(!state){submit.disabled=true;return;}
+      for(const input of memberList.querySelectorAll('input'))input.disabled=state.status==='published' || input.value===select.value;
+      const same=select.value===state.submitter_id && state.member_ids!==null
+        && JSON.stringify(memberIds())===JSON.stringify([...state.member_ids].sort());
+      submit.disabled = state.status==='published' || !select.value || same;
     }
-    async function loadSettings(submitterId) {
+    async function loadSettings(submitterId,members) {
       const version = ++serial;
       const target = selectedProject();
       resetReporter();
@@ -124,11 +132,19 @@
       show('loading', submitterId ? '正在保存负责人…' : '正在读取本周协同设置…');
       try {
         const body = {week:date.value, project_id:target.project_id, report_scope_id:target.report_scope_id ?? null, line:profession.value};
-        if (submitterId) body.submitter_id = submitterId;
+        if (submitterId) Object.assign(body,{submitter_id:submitterId,member_ids:members});
         const next = await request('settings', body, controller.signal);
         if (closed || version !== serial) return;
         state = next;
-        for (const person of next.eligible || []) select.append(new Option(person.name, person.user_id));
+        for (const person of next.eligible || []) {
+          select.append(new Option(person.name, person.user_id));
+          const label=document.createElement('label'),input=document.createElement('input');
+          input.type='checkbox';input.value=person.user_id;
+          input.checked=person.user_id===next.submitter_id || next.member_ids?.includes(person.user_id)
+            || next.member_ids===null && !!next.submitter_id;
+          label.append(input,document.createTextNode(' '+person.name));
+          memberList.append(label);
+        }
         select.value = next.submitter_id || '';
         select.disabled = !next.can_configure;
         refreshButton();
@@ -180,10 +196,11 @@
     project.addEventListener('change', () => loadProfessions());
     profession.addEventListener('change', () => loadSettings());
     select.addEventListener('change', refreshButton);
+    memberList.addEventListener('change', refreshButton);
     reload.addEventListener('click', loadCatalog);
     root.querySelector('form').addEventListener('submit', event => {
       event.preventDefault();
-      if (!submit.disabled) loadSettings(select.value);
+      if (!submit.disabled) loadSettings(select.value,memberIds());
     });
     loadCatalog();
     return {root, close() { closed = true; controller.abort(); }, canLeave() { return true; }};
@@ -220,10 +237,8 @@
     }
 
     markup() {
-      const scope = this.config.scope;
       this.root.innerHTML = '<section class="card collaboration-panel" aria-labelledby="collaboration-title">'
-        + '<header class="collaboration-header"><div><h2 id="collaboration-title">' + esc(scope.project_name + ' · ' + scope.line) + '协同填报</h2><p>' + esc(period(this.config.week)) + ' · 共同填写当周进展和卡点</p></div>'
-        + '<button type="button" class="btn ghost" onclick="App.view(\'form\')">返回本期填报</button></header>'
+        + '<header class="collaboration-header"><div><h2 id="collaboration-title">二、本周计划进展</h2><p>' + esc(period(this.config.week)) + '</p></div></header>'
         + '<div class="collaboration-meta"><span data-collaboration-owner></span><span data-collaboration-presence></span></div>'
         + '<div class="collaboration-statusbar"><p class="collaboration-status" role="status" data-collaboration-status></p>'
         + '<button type="button" class="btn ghost sm" data-collaboration-retry hidden>重试连接</button>'
@@ -231,7 +246,7 @@
         + '<div class="collaboration-toolbar" aria-label="当前单元格文字格式" hidden><button type="button" data-collaboration-format="bold">加粗</button>'
         + '<button type="button" data-collaboration-format="red">标红</button><button type="button" data-collaboration-format="clear">清除格式</button></div>'
         + '<p role="status" class="collaboration-status" data-collaboration-notice hidden></p>'
-        + '<div data-collaboration-table></div><p class="collaboration-attachments" data-collaboration-attachments hidden></p><footer class="collaboration-footer" hidden>'
+        + '<div data-collaboration-items hidden></div><div data-collaboration-table></div><p class="collaboration-attachments" data-collaboration-attachments hidden></p><footer class="collaboration-footer" hidden>'
         + '<p data-collaboration-saved-info></p><button type="button" class="btn ghost" data-collaboration-result hidden>查看提交结果</button>'
         + '<button type="button" class="btn primary" data-collaboration-publish hidden>提交专业周报</button></footer></section>';
       const find = selector => this.root.querySelector(selector);
@@ -239,6 +254,23 @@
       this.noticeElement = find('[data-collaboration-notice]');
       this.attachments = find('[data-collaboration-attachments]');
       this.table = find('[data-collaboration-table]');
+      this.itemForm = find('[data-collaboration-items]');
+      const names=this.config.scope.projectNames || {};
+      this.itemForm.innerHTML='<form><div class="f2">'
+        + (this.target.report_scope_id?'<label>实际项目／分期<select name="project_id" required>'
+          +Object.entries(names).map(([id,name])=>'<option value="'+esc(id)+'">'+esc(name)+'</option>').join('')+'</select></label>':'')
+        + '<label>模块<input name="mod" maxlength="200"></label><label>事项<input name="name" maxlength="1000" required></label>'
+        + '<label>完成时间<input name="due" type="date"></label></div>'
+        + '<button class="btn ghost sm" type="submit">添加事项</button> <button class="btn ghost sm" type="button" data-cancel-item hidden>取消修改</button>'
+        + '<p role="status" data-item-status></p></form>';
+      this.itemForm.querySelector('form').addEventListener('submit',event=>{
+        event.preventDefault();this.saveItem();
+      });
+      this.itemForm.querySelector('[data-cancel-item]').addEventListener('click',()=>this.resetItemForm());
+      this.table.addEventListener('click',event=>{
+        const button=event.target.closest('[data-edit-item]');
+        if(button)this.editItem(button.dataset.editItem);
+      });
       this.footer = find('.collaboration-footer');
       this.toolbar = find('.collaboration-toolbar');
       this.publishButton = find('[data-collaboration-publish]');
@@ -259,7 +291,7 @@
 
     isComposing() { return Array.from(this.editors.values()).some(editor => editor.composing); }
 
-    canLeave() { return !this.publishing && !this.isComposing() && (!this.queue.length || this.persisted); }
+    canLeave() { return !this.publishing && !this.savingItem && !this.isComposing() && (!this.queue.length || this.persisted); }
 
     canEdit() { return Boolean(this.state?.can_edit && this.state?.plan?.id === this.planId && !this.publishing && !this.revoked); }
 
@@ -344,9 +376,9 @@
       if (!next.plan && !this.queue.length && this.editors.size) {
         this.destroyEditors();
         this.table.replaceChildren();
-        this.planId = null;
+        this.planId = undefined;
       }
-      if (next.plan && next.plan.id !== this.planId && !this.queue.length) this.createEditors(next.plan, next.cells || {});
+      this.syncEditors();
       for (const [cell, editor] of this.editors) {
         if (next.plan?.id === this.planId && next.cells && next.cells[cell] && editor.serverState !== next.cells[cell]) {
           editor.serverState = next.cells[cell];
@@ -354,6 +386,59 @@
         }
       }
       this.paint();
+    }
+
+    syncEditors() {
+      const plan=this.state?.plan;
+      if (!plan || this.queue.length || this.isComposing() || this.sending && !this.state?.can_edit) return;
+      const itemKey=JSON.stringify(plan.items);
+      if(plan.id!==this.planId || itemKey!==this.itemKey) {
+        this.createEditors(plan,this.state.cells || {});
+        this.itemKey=itemKey;
+      }
+    }
+
+    resetItemForm() {
+      this.editingItem=null;
+      const form=this.itemForm.querySelector('form');
+      form.reset();
+      form.querySelector('[type=submit]').textContent='添加事项';
+      form.querySelector('[data-cancel-item]').hidden=true;
+    }
+
+    editItem(sourceId) {
+      if(!this.canEdit() || this.savingItem) return;
+      const item=this.state.plan.items.find(row=>row.source_id===sourceId);
+      if(!item)return;
+      this.editingItem={id:sourceId,revision:this.state.revision};
+      const form=this.itemForm.querySelector('form');
+      for(const field of ['mod','name','due','project_id'])if(form.elements[field])form.elements[field].value=item[field] || '';
+      form.querySelector('[type=submit]').textContent='保存事项';
+      form.querySelector('[data-cancel-item]').hidden=false;
+      form.elements.name.focus();
+    }
+
+    async saveItem() {
+      if(!this.canEdit() || !this.state.plan.unplanned || !this.online || this.savingItem || this.queue.length || this.sending || this.isComposing())return;
+      const form=this.itemForm.querySelector('form'), status=form.querySelector('[data-item-status]');
+      const item=Object.fromEntries(new FormData(form));
+      const editing=this.editingItem;
+      const payload={action:editing?'update':'add',revision:editing?.revision ?? this.state.revision,item,...(editing?{source_id:editing.id}:{})};
+      const key=JSON.stringify([payload.action,payload.source_id,item]);
+      if(this.itemAttempt?.key!==key)this.itemAttempt={key,body:{...payload,operation_id:uuid()}};
+      this.savingItem=true;status.textContent='正在保存事项…';this.paint();
+      try {
+        const number=++this.requestNumber;
+        const next=await this.request('items',this.itemAttempt.body,this.controller.signal);
+        if(this.closed)return;
+        this.itemAttempt=null;this.accept(next,number);this.resetItemForm();status.textContent='事项已保存。';
+      } catch(error) {
+        if(this.closed)return;
+        if(error.status===401 || error.status===403)this.failed(error);
+        else status.textContent=error.message || '事项保存未确认，请重试。';
+        if(error.status && error.status<500 && error.status!==429)this.itemAttempt=null;
+        if(error.status===409 && editing)status.textContent+=' 请重新选择该事项后修改。';
+      } finally {this.savingItem=false;if(!this.closed)this.paint();}
     }
 
     applyServerUpdate(editor) {
@@ -380,7 +465,8 @@
         + '<thead><tr>' + (report_scope_id ? '<th scope="col">实际项目／分期</th>' : '') + '<th scope="col">模块</th><th scope="col">事项</th><th scope="col">完成时间</th><th scope="col">当周进展</th><th scope="col">卡点</th></tr></thead><tbody>'
         + items.map((item,index) => '<tr>' + (report_scope_id ? '<td data-label="实际项目／分期"><div>' + esc(projectNames[item.project_id] || '未明确') + '</div></td>' : '')
           + '<td data-label="模块"><div>' + planField(plan, 'mod', item, index) + '</div></td><td data-label="事项"><div>' + planField(plan,'name',item,index)
-          + '</div></td><td data-label="完成时间"><div>' + esc(item.due || '—') + '</div></td>'
+          + '</div>'+(plan.unplanned?'<button type="button" class="btn ghost sm" data-edit-item="'+esc(item.source_id)+'">修改事项</button>':'')
+          + '</td><td data-label="完成时间"><div>' + esc(item.due || '—') + '</div></td>'
           + [['prog','当周进展'],['blocker','卡点']].map(([field,label]) => '<td data-label="' + label + '"><div class="collaboration-cell" data-collaboration-cell="'
             + esc(item.source_id + ':' + field) + '" data-editor-label="' + esc(item.name + ' · ' + label) + '"><div data-collaboration-editor></div><small data-collaboration-cell-presence></small></div></td>').join('') + '</tr>').join('')
         + '</tbody></table></div>';
@@ -411,6 +497,7 @@
             quill.update('user');
             editor.composing = false;
             this.applyServerUpdate(editor);
+            this.syncEditors();
             this.paint();
           });
         });
@@ -516,7 +603,7 @@
     }
 
     async publish() {
-      if (this.publishButton.disabled || this.closed || !this.state?.can_publish || this.queue.length || this.sending || this.isComposing()) return;
+      if (this.publishButton.disabled || this.closed || !this.state?.can_publish || this.queue.length || this.sending || this.savingItem || this.isComposing()) return;
       this.publishing = true;
       this.error = '';
       this.notice = '';
@@ -600,13 +687,17 @@
       this.retryButton.hidden = !(message || !this.online) || Boolean(this.revoked);
       this.copyButton.hidden = !pending || !this.editors.size;
       this.toolbar.hidden = !editable || !this.editors.size;
+      this.itemForm.hidden = !next?.plan?.unplanned;
+      const itemForm=this.itemForm.querySelector('form');
+      for(const field of itemForm.elements)field.disabled=!editable || this.savingItem;
+      itemForm.querySelector('[type=submit]').disabled=!editable || !this.online || this.savingItem || Boolean(pending || this.sending || this.isComposing());
       this.footer.hidden = !(next?.plan || next?.report);
       this.publishButton.hidden = !next?.can_publish;
-      this.publishButton.disabled = !editable || !this.online || Boolean(pending || message || this.sending || this.isComposing());
+      this.publishButton.disabled = !editable || !this.online || Boolean(pending || message || this.sending || this.savingItem || this.isComposing());
       this.attachments.hidden = !next?.can_publish;
       if (next?.can_publish) {
         const count = this.config.attachmentIds?.().length || 0;
-        const label = count ? '随专业周报提交 ' + count + ' 件已选附件。可返回本期填报调整。' : '如需随周报提交附件，请返回本期填报上传并选入。';
+        const label = count ? '随专业周报提交 ' + count + ' 件已选附件。' : '可在本页上传并选入周报附件。';
         if (this.attachments.textContent !== label) this.attachments.textContent = label;
       }
       this.resultButton.hidden = !next?.report;

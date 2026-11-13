@@ -31,7 +31,7 @@ const denied = error => error.status === 403;
 const conflict = error => error.status === 409;
 const collaborationGuard = error => error.code === 'P3801' || error.status === 409;
 
-async function fixture(t, through = 39) {
+async function fixture(t, through = 41) {
   const database = await initializedDatabase({through:38});
   t.after(() => database.close());
   const admin = testPool(database, null);
@@ -66,8 +66,13 @@ async function fixture(t, through = 39) {
     await database.exec('RESET ROLE');
     await database.exec(await readFile(new URL('../db/039-weekly-collaboration-scopes.sql',import.meta.url),'utf8'));
   };
-  if (through === 39) await upgrade();
-  return { database, admin, pool, upgrade, service:createWeeklyCollaboration(pool) };
+  if (through >= 39) await upgrade();
+  const upgradeItems = async () => {
+    await database.exec('RESET ROLE');
+    await database.exec(await readFile(new URL('../db/041-weekly-collaboration-items.sql',import.meta.url),'utf8'));
+  };
+  if (through >= 41) await upgradeItems();
+  return { database, admin, pool, upgrade, upgradeItems, service:createWeeklyCollaboration(pool) };
 }
 
 function item(label, projectId) {
@@ -228,7 +233,9 @@ test('038 的活动草稿、操作历史及已发布周报经过 039 重复迁�
   const oldOperations=(await f.admin.query('SELECT to_jsonb(o) row FROM app_private.hongfang_weekly_operations o ORDER BY week')).rows;
   await f.upgrade();
   await f.upgrade();
-  assert.deepEqual((await f.admin.query(`SELECT to_jsonb(d)-'project_id'-'line'-'report_scope_id' row
+  await f.upgradeItems();
+  await f.upgradeItems();
+  assert.deepEqual((await f.admin.query(`SELECT to_jsonb(d)-'project_id'-'line'-'report_scope_id'-'unplanned_items'-'member_ids' row
     FROM app_private.weekly_collaboration_drafts d WHERE project_id='hf' AND line='设计部' ORDER BY week`)).rows,oldDrafts);
   assert.deepEqual((await f.admin.query(`SELECT to_jsonb(o)-'project_id'-'line' row
     FROM app_private.weekly_collaboration_operations o WHERE project_id='hf' AND line='设计部' ORDER BY week`)).rows,oldOperations);
@@ -248,6 +255,33 @@ test('038 的活动草稿、操作历史及已发布周报经过 039 重复迁�
   const restored=await f.service.open(pilot,{week:editableWeek});
   assert.equal(restored.revision,more.revision);
   assert.equal(contents(restored.cells[blockerCell]),'升级后的新记录');
+});
+
+test('管理员名单控制合并住宅协同，组员可直接登记和编辑，只有负责人能提交',async t=>{
+  const f=await fixture(t), service=f.service, scope=inWeek(merged);
+  await assert.rejects(service.settings(operator,{...scope,submitter_id:engineering.id,member_ids:[incomplete.id]}),denied);
+  await service.settings(operator,{...scope,submitter_id:engineering.id,member_ids:[]});
+  assert.equal((await service.mode(engineeringPeer,scope)).mode,'excluded');
+  await assert.rejects(service.open(engineeringPeer,scope),denied);
+  const configured=await service.settings(operator,{...scope,submitter_id:engineering.id,member_ids:[engineeringPeer.id]});
+  const before=await service.open(engineeringPeer,scope);
+  assert.equal(before.can_edit,true);
+  assert.deepEqual(before.plan.items,[]);
+  const itemId=randomUUID(), addition={...scope,action:'add',operation_id:itemId,revision:configured.revision,
+    item:{mod:'工程',name:'直接登记的事项',due:month+'-24',project_id:'zhx2'}};
+  await assert.rejects(service.items(engineeringPeer,{...addition,item:{...addition.item,project_id:'outside'}}),e=>e.status===400);
+  const added=await service.items(engineeringPeer,addition);
+  assert.equal((await service.items(engineeringPeer,addition)).revision,added.revision);
+  const request={...scope,plan_id:null,cell:itemId+':prog',update:edit('组员已填写进展'),operation_id:randomUUID()};
+  const edited=await service.change(engineeringPeer,request);
+  assert.equal(contents((await service.open(engineering,scope)).cells[request.cell]),'组员已填写进展');
+  await assert.rejects(service.publish(engineeringPeer,{...scope,plan_id:null,operation_id:randomUUID(),revision:edited.revision}),denied);
+  await confirm(f,engineering,merged,item('稍后另行确认的月计划','zhx1'));
+  const saved=await service.publish(engineering,{...scope,plan_id:null,operation_id:randomUUID(),revision:edited.revision});
+  assert.equal(saved.report.author_id,engineering.id);
+  assert.equal(saved.report.biz.items[0].project_id,'zhx2');
+  assert.equal(saved.report.biz.items[0].prog,'组员已填写进展');
+  assert.equal(saved.report.biz.monthly_plan_ids,undefined);
 });
 
 test('同一账号两个标签页保持不同焦点时，空闲长轮询不会连续自唤醒',async t=>{

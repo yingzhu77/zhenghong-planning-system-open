@@ -19,7 +19,7 @@ test('current Shanghai week enables once, repeated runs keep receipts, and the n
  const f=await fixture(t);
  let result=await enableWeeklyCollaboration(f.pool,config,{today:'2026-11-12'});
  assert.equal(result.week,'2026-11-09');assert.equal(result.enabled,1,JSON.stringify(result));assert.equal(result.blocked,0);
- assert.equal(result.records[0].status,'missing_plan');
+ assert.equal(result.records[0].status,'ready');
  result=await enableWeeklyCollaboration(f.pool,config,{today:'2026-11-15'});assert.equal(result.preserved,1);assert.equal(result.enabled,0);
  assert.equal((await f.admin.query('SELECT count(*)::int AS n FROM app_private.weekly_collaboration_operations')).rows[0].n,1);
  result=await enableWeeklyCollaboration(f.pool,config,{today:'2026-11-16'});assert.equal(result.week,'2026-11-16');assert.equal(result.enabled,1);
@@ -28,10 +28,14 @@ test('current Shanghai week enables once, repeated runs keep receipts, and the n
 test('a manually designated week and existing edit history are never reassigned by the recurring job',async t=>{
  const f=await fixture(t),peer={id:'anonymous-peer'};
  await createUser(f.admin,{userId:peer.id,name:'匿名协作者',email:'peer@example.invalid',password:'anonymous-password',role:'pm',projects:['demo-com'],line:scope.line});
- await f.service.settings(ops,{...scope,week:'2026-11-09',submitter_id:peer.id});
+ await f.service.settings(ops,{...scope,week:'2026-11-09',submitter_id:peer.id,member_ids:[lead.id]});
  const before=(await f.admin.query('SELECT to_jsonb(d) AS row FROM app_private.weekly_collaboration_drafts d')).rows;
  const result=await enableWeeklyCollaboration(f.pool,config,{today:'2026-11-12'});assert.equal(result.preserved,1);assert.equal(result.records[0].submitter_id,peer.id);
  assert.deepEqual((await f.admin.query('SELECT to_jsonb(d) AS row FROM app_private.weekly_collaboration_drafts d')).rows,before);
+ const next=await enableWeeklyCollaboration(f.pool,config,{today:'2026-11-16'});
+ assert.equal(next.records[0].submitter_id,peer.id);
+ const carried=await f.service.settings(ops,{...scope,week:'2026-11-16'});
+ assert.deepEqual(carried.member_ids,[lead.id]);
 });
 test('revoked owner, wrong project and unauthorized operator cannot create a room or widen permissions',async t=>{
  const f=await fixture(t);

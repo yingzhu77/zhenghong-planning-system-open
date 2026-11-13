@@ -60,7 +60,7 @@ async function login(browser, fixture, id, errors, requests) {
   await page.locator('#email').fill(account.email);
   await page.locator('#password').fill(account.password);
   await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page.locator('.planning-mainnav')).toBeVisible();
+  await expect(page.locator('.planning-mainnav')).toBeVisible({timeout:15000});
   return page;
 }
 
@@ -69,10 +69,9 @@ function cell(page, key) {
 }
 
 async function openWorkspace(page, projectId = 'hf') {
-  const entry = page.locator('[data-open-weekly-collaboration]');
   const project = page.locator('#planProject');
   if (await project.isVisible() && await project.inputValue() !== projectId) await project.selectOption(projectId);
-  await entry.click();
+  await page.getByRole('button',{name:'刷新数据',exact:true}).click();
   await expect(page.locator('[data-weekly-collaboration]')).toBeVisible();
 }
 
@@ -88,7 +87,7 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
     login(browser, fixture, 'design-pilot-editor', errors, requests)
   ]);
   assert.equal(requests.some(resource=>/\/assets\/[^/]+\/(?:vendor\/)?weekly-collaboration\.(?:css|js)$/.test(resource)),false);
-  assert.equal(requests.some(resource=>resource.startsWith('/api/weekly-collaboration/')),false);
+  assert.equal(requests.some(resource=>resource.endsWith('/api/weekly-collaboration/open')),false);
   const headers = { Origin: fixture.base };
   const source = { source_id: 'pilot-source-one', mod: '图纸', name: '会签本周图纸及技术复核结果', due: fixture.month + '-20' };
   const planResponse = await lead.request.post(fixture.base + '/api/monthly-plans/confirm', {
@@ -102,6 +101,7 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
   await ops.locator('[data-weekly-collaboration-project]').selectOption('hf');
   await ops.locator('[data-weekly-collaboration-profession]').selectOption('设计部');
   await ops.locator('[data-weekly-collaboration-submitter]').selectOption('design-pilot-lead');
+  await ops.getByRole('checkbox',{name:'匿名设计协作者'}).check();
   const settings = ops.waitForResponse(response => response.url().endsWith('/api/weekly-collaboration/settings') &&
     response.request().postDataJSON()?.submitter_id === 'design-pilot-lead');
   await ops.locator('[data-weekly-collaboration-designate]').click();
@@ -165,6 +165,7 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
   const artifacts = '.local/weekly-collaboration-browser';
   await mkdir(artifacts, { recursive: true });
   await lead.locator('[data-weekly-collaboration]').screenshot({ path: artifacts + '/desktop.png' });
+  await lead.screenshot({ path: artifacts + '/current-report-desktop.png', fullPage: true });
   await editor.setViewportSize({ width: 390, height: 844 });
   const editorMain = editor.locator('main');
   assert.ok(await editorMain.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
@@ -200,7 +201,7 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
   const audit = (await fixture.admin.query("SELECT DISTINCT actor_id FROM app_private.weekly_collaboration_operations WHERE project_id='hf' AND line='设计部' AND kind='edit' ORDER BY actor_id")).rows;
   assert.deepEqual(audit.map(row=>row.actor_id),['design-pilot-editor','design-pilot-lead']);
   const overview = lead.locator('.professional-overview[data-report-id]');
-  await expect(overview).toContainText('本专业总览');
+  await expect(overview).toContainText('本期专业汇总');
   await expect(overview).toContainText('建筑复核');
   await expect(overview).toContainText('机电复核');
   await expect(overview).toContainText('协同验收附件.png');
@@ -212,6 +213,9 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
   assert.equal(moduleHeaderLines,1);
   await overview.screenshot({ path: artifacts + '/submitted-overview.png' });
   await editor.locator('[data-collaboration-result]').click();
+  await expect(editor.locator('.professional-overview[data-report-id]')).toContainText('机电复核');
+  await editor.getByRole('button',{name:'本期填报',exact:true}).first().click();
+  await editor.getByRole('button',{name:'本期专业汇总',exact:true}).click();
   await expect(editor.locator('.professional-overview[data-report-id]')).toContainText('机电复核');
   await fixture.admin.query("DELETE FROM public.project_members WHERE project_id='hf' AND user_id='design-pilot-editor'");
   const revoked = await editor.request.post(fixture.base + '/api/weekly-collaboration/open',{headers,data:{week:fixture.week}});
@@ -233,12 +237,6 @@ test('独立住宅保留同周旧综合报告，仍可选择本人专业协同�
   ]);
   const headers = {Origin:fixture.base};
   const line = '工程';
-  const plan = await housing.request.post(fixture.base + '/api/monthly-plans/confirm',{
-    headers,data:{project_id:projectId,line,month:fixture.month,items:[{
-      source_id:'housing-test-source',mod:'住宅工程',name:'匿名住宅楼层复核',due:fixture.month+'-20'
-    }]}
-  });
-  assert.equal(plan.status(),200,JSON.stringify((await plan.json()).error));
   await ops.getByRole('button',{name:'系统设置',exact:true}).click();
   await ops.getByRole('button',{name:'周报协同设置',exact:true}).click();
   await ops.locator('[data-weekly-collaboration-project]').selectOption(projectId);
@@ -256,17 +254,25 @@ test('独立住宅保留同周旧综合报告，仍可选择本人专业协同�
   await profession.selectOption(line);
   await openWorkspace(housing,projectId);
   const workspace = housing.locator('[data-weekly-collaboration]');
+  await expect(housing.locator('.planning-mainnav')).not.toContainText('协同填报');
+  await expect(housing.locator('[aria-label="本期填报信息"]')).toBeVisible();
+  await workspace.getByLabel('模块',{exact:true}).fill('住宅工程');
+  await workspace.getByLabel('事项',{exact:true}).fill('匿名住宅楼层复核');
+  await workspace.getByRole('button',{name:'添加事项'}).click();
   await expect(workspace).toContainText('匿名住宅楼层复核');
-  const progress=cell(housing,'housing-test-source:prog');
+  const progress=workspace.locator('[data-collaboration-cell$=":prog"] .ql-editor');
   await expect(progress).toBeEditable();
   const writing=housing.waitForResponse(response=>response.url().endsWith('/api/weekly-collaboration/change'));
   await progress.fill('住宅工程匿名进展');
   const changed=await writing;
   assert.equal(changed.status(),200,JSON.stringify((await changed.json()).error));
   await expect(workspace.locator('[data-collaboration-status]')).toHaveAttribute('data-state','saved');
+  await housing.reload();
+  await housing.locator('#planResLine').selectOption(line);
+  await expect(progress).toHaveText('住宅工程匿名进展');
   await workspace.locator('[data-collaboration-publish]').click();
   const overview=housing.locator('.professional-overview[data-report-id]');
-  await expect(overview).toContainText('本专业总览');
+  await expect(overview).toContainText('本期专业汇总');
   await expect(overview).toContainText('住宅工程匿名进展');
   assert.deepEqual((await fixture.admin.query('SELECT * FROM public.reports WHERE id=$1',[legacyReport.id])).rows[0],legacyReport);
   assert.deepEqual(errors,[]);

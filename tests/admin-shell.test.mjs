@@ -79,7 +79,7 @@ test('operations navigation follows the five confirmed groups and keeps employee
  assert.deepEqual(items.filter(item=>item.group==='analysis').map(item=>item.k),['projectPlanStats','completionStats']);
  assert.deepEqual(items.filter(item=>item.group==='collaboration').map(item=>item.k),['coord','completion','meetings']);
  assert.deepEqual(items.filter(item=>item.group==='projects').map(item=>item.k),['master','library']);
- assert.deepEqual(items.filter(item=>item.group==='settings').map(item=>item.k),['lineAdm','members','reportingProfessions']);
+ assert.deepEqual(items.filter(item=>item.group==='settings').map(item=>item.k),['lineAdm','members','reportingProfessions','weeklyCollaborationSettings']);
  assert.ok(!items.some(item=>['board','boardCom','presPzo','dual','nodes','nodesCom'].includes(item.k)));
 });
 
@@ -105,7 +105,7 @@ test('president and project chief gain read-only analysis while existing mainten
 
 test('reporter navigation preserves the existing personal work, reporting, files and history routes',()=>{
  const {api}=harness('pm'),items=plain(api.planningNavItems());
- assert.deepEqual(plain(api.planningGroups(items)).map(group=>group.label),['工作台','本期填报','项目资料','历史记录']);
- assert.deepEqual(items.map(item=>item.k),['center','mline','coordination','form','master','history','library']);
+ assert.deepEqual(plain(api.planningGroups(items)).map(group=>group.label),['工作台','本期填报','项目资料']);
+ assert.deepEqual(items.map(item=>item.k),['center','mline','coordination','history','form','professionalOverview','master','library']);
  assert.ok(!items.some(item=>['projectPlanStats','nodes','nodesCom','completionStats','members','lineAdm'].includes(item.k)));
 });

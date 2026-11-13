@@ -33,19 +33,23 @@ export async function enableWeeklyCollaboration(pool, config, {
         const values=[scope.project_id,scope.line,week];
         const before=(await client.query('SELECT submitter_id FROM app_private.weekly_collaboration_drafts WHERE project_id=$1 AND line=$2 AND week=$3::date',values)).rows[0];
         if(before)return 'preserved';
+        const previous=(await client.query(`SELECT submitter_id,member_ids FROM app_private.weekly_collaboration_drafts
+          WHERE project_id=$1 AND line=$2 AND week<$3::date AND report_scope_id IS NOT DISTINCT FROM $4::text
+            AND member_ids IS NOT NULL ORDER BY week DESC LIMIT 1`,[...values,scope.report_scope_id])).rows[0];
+        const submitter=previous?.submitter_id ?? binding.submitter_id;
         if(!(await client.query('SELECT app_private.weekly_collaboration_eligible($1,$2,$3,$4) AS allowed',
-          [binding.submitter_id,scope.project_id,scope.line,scope.report_scope_id])).rows[0].allowed)
+          [submitter,scope.project_id,scope.line,scope.report_scope_id])).rows[0].allowed)
           throw new HttpError(403,'负责人当前没有该项目专业权限，未自动替换人员');
         if((await client.query(`SELECT 1 FROM public.reports WHERE project_id=$1 AND line=$2
-          AND app_private.weekly_collaboration_existing_report_week(period,submitted_at)=$3::date AND author_id=$4`,[...values,binding.submitter_id])).rows.length)
+          AND app_private.weekly_collaboration_existing_report_week(period,submitted_at)=$3::date AND author_id=$4`,[...values,submitter])).rows.length)
           throw new HttpError(409,'负责人本周已有个人周报，保留原记录','weekly_personal_report_exists');
-        await client.query(`INSERT INTO app_private.weekly_collaboration_drafts(project_id,line,week,report_scope_id,submitter_id,configured_by)
-          VALUES($1,$2,$3::date,$4,$5,$6)`,[...values,scope.report_scope_id,binding.submitter_id,user.id]);
+        await client.query(`INSERT INTO app_private.weekly_collaboration_drafts(project_id,line,week,report_scope_id,submitter_id,configured_by,member_ids)
+          VALUES($1,$2,$3::date,$4,$5,$6,$7)`,[...values,scope.report_scope_id,submitter,user.id,previous?.member_ids ?? null]);
         const profile=await getProfile(client,user.id);
         await client.query(`INSERT INTO app_private.weekly_collaboration_operations
           (project_id,line,week,operation_id,actor_id,actor_name,kind,revision,payload_hash)
           VALUES($1,$2,$3::date,$4,$5,$6,'designate',1,$7)`,[...values,randomUUID(),user.id,profile.name,
-          createHash('sha256').update(JSON.stringify([binding.submitter_id])).digest('hex')]);
+          createHash('sha256').update(JSON.stringify([submitter,previous?.member_ids ?? null])).digest('hex')]);
         return 'enabled';
       });
       const after=await service.settings(user,scope);

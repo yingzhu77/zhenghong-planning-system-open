@@ -558,9 +558,9 @@
         + '</div><div>卡点：' + itemName(row, 'blocker', row.blocker || '未填写') + '</div></article>';
     }).join('') + '</aside>' : '';
   }
-  function plannerHtml() {
+  function plannerHtml(nextOnly) {
     if (!enabled()) return '';
-    var target = selectedMonth(), next = target === nextMonth();
+    var target = nextOnly ? nextMonth() : selectedMonth(), next = target === nextMonth();
     var ownPlan = planFor(target), savedIds = S.pmReport && S.pmReport.biz && S.pmReport.biz.monthly_plan_ids;
     var visibleInReport = ownPlan && (!S.pmReport || Array.isArray(savedIds) && savedIds.includes(ownPlan.id));
     if (!next && (inlineCurrentPlan() || visibleInReport)) return '';

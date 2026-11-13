@@ -112,7 +112,7 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   app.post('/api/report-scopes/list', auth.requireUser, express.json({limit:'16kb'}), asyncRoute(async(req,res)=>{
     res.json({data:await listReportScopes(pool,req.user,req.body || {}),error:null});
   }));
-  for (const route of ['open', 'change', 'publish', 'settings', 'catalog']) {
+  for (const route of ['open', 'mode', 'items', 'change', 'publish', 'settings', 'catalog']) {
     app.post('/api/weekly-collaboration/' + route, auth.requireUser, express.json({ limit: route === 'change' ? '256kb' : '16kb' }), asyncRoute(async (req, res) => {
       const data = await weeklyCollaboration[route](req.user, req.body ?? {});
       res.json({ data, error: null });

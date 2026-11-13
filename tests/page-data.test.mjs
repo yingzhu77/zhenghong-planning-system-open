@@ -666,7 +666,7 @@ test('native changes with a delayed new scope cannot autosave old DOM after 700m
           const projects = [{id: 'p1', name: '匿名项目甲', project_type: residential ? 'res' : 'com'}, {id: 'p2', name: '匿名项目乙', project_type: 'res'}];
           const initialLine = residential ? '综合' : '土建工程（东地块）';
           const make = (id, pid, line, period, name) => ({id, project_id: pid, line, period, author_id: 'anonymous', author_name: '匿名填报人',
-            updated_at: '2020-01-01T00:00:00Z', node_items: [], coord_items: [], biz: {form_version: 2, nodes: [], items: [{name, prog: ''}], attachments: [], followups: []}});
+            submitted_at: '2020-01-01T00:00:00Z', updated_at: '2020-01-01T00:00:00Z', node_items: [], coord_items: [], biz: {form_version: 2, nodes: [], items: [{name, prog: ''}], attachments: [], followups: []}});
           window.fixtureTables.projects = projects;
           window.fixtureTables.project_members = projects.map(p => ({project_id: p.id, user_id: 'anonymous'}));
           window.fixtureTables.reports = [make(1, 'p1', initialLine, period, '旧范围计划'), make(2, 'p1', '机电工程', period, '新范围计划'),
@@ -682,8 +682,8 @@ test('native changes with a delayed new scope cannot autosave old DOM after 700m
         else if (entry === 'period') await page.locator('#pmPeriod').selectOption('第42周');
         else if (entry === 'project') await page.locator('#planProject').selectOption('p2');
         else {
-          await page.locator('.planning-mainnav .planning-primary-trigger').filter({hasText:'历史记录'}).click();
-          await page.locator('.planning-dropdown[aria-label="历史记录子菜单"]').getByRole('button', {name: '历史记录', exact: true}).click();
+          await page.locator('.planning-mainnav .planning-primary-trigger').filter({hasText:'本期填报'}).click();
+          await page.locator('.planning-dropdown[aria-label="本期填报子菜单"]').getByRole('button', {name: '本期专业汇总', exact: true}).click();
         }
         await page.waitForFunction(() => window.waitingForAttachmentRead === true);
         await browserExpect(page.locator('[role="status"]')).toContainText('正在加载填报页面');
