@@ -17,6 +17,36 @@
     });
     return spans;
   }
+  function groupPlanRowsByModule(rows){
+    function label(value){return typeof value==='string'?value.trim().replace(/\s+/g,' '):'';}
+    var sources=new Map();
+    rows.forEach(function(row){
+      if(!sources.has(row.source))sources.set(row.source,[]);
+      sources.get(row.source).push(row);
+    });
+    return Array.from(sources.values()).flatMap(function(sourceRows){
+      var modules=new Map(),unclassified=[];
+      sourceRows.forEach(function(row){
+        var module=label(row.item.mod);
+        if(module && !modules.has(module))modules.set(module,[]);
+      });
+      sourceRows.forEach(function(row){
+        var module=label(row.item.mod),inferred=false;
+        if(!module){
+          // Infer only from an exact item heading and an existing module in
+          // the same report and actual project. Similar names remain separate.
+          var title=String(row.item.name || '').trim().split(/\r?\n/,1)[0];
+          var heading=/^【([^】]+)】|^([^：:]+)[：:]/.exec(title);
+          var candidate=label(heading?(heading[1] || heading[2]):title);
+          if(modules.has(candidate)){module=candidate;inferred=true;}
+        }
+        var grouped=Object.assign({},row,{module:module,inferredModule:inferred});
+        if(module)modules.get(module).push(grouped);
+        else unclassified.push(grouped);
+      });
+      return Array.from(modules.values()).flat().concat(unclassified);
+    });
+  }
   function plainLines(value){return String(value).split('\n').map(function(line){return line.trim().replace(/ +/g,' ');}).filter(Boolean).map(esc).join('<br>');}
   // Workbook spaces are layout, not table columns. Recognize explicit list
   // markers only outside parentheses; dates, decimals and building numbers
@@ -110,5 +140,5 @@
       }).join('')+'</tbody></table></div>';
     }).join('')+'</div>';
   }
-  global.MonthlySummaries={select:select,html:html,narrative:narrative,columnWidths:columnWidths,contentColumns:contentColumns,moduleRowSpans:moduleRowSpans,attention:attention,attentionHtml:attentionHtml};
+  global.MonthlySummaries={select:select,html:html,narrative:narrative,columnWidths:columnWidths,contentColumns:contentColumns,moduleRowSpans:moduleRowSpans,groupPlanRowsByModule:groupPlanRowsByModule,attention:attention,attentionHtml:attentionHtml};
 })(window);

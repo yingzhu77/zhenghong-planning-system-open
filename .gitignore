@@ -331,6 +331,7 @@
 
 !/db/040-materials-only-viewers.sql
 !/db/041-weekly-collaboration-items.sql
+!/db/042-shared-monthly-plans.sql
 !/tests/materials-only-viewers.test.mjs
 
 !/scripts/enable-weekly-collaboration.mjs

@@ -1966,7 +1966,8 @@
     try {
       var result=await reporterRequest('/api/weekly-collaboration/mode',{week:week,project_id:scope.project_id,line:scope.line,report_scope_id:scope.report_scope_id});
       if(!result.error && ['member','unconfigured','excluded'].includes(result.data && result.data.mode))mode=result.data.mode;
-      if(mode==='member')await window.PlanningBoot.ensureWeeklyCollaboration(true);
+      if(mode==='member')await Promise.all([window.PlanningBoot.ensureWeeklyCollaboration(true),
+        window.PlanningBoot.ensureMonthlySummaries?window.PlanningBoot.ensureMonthlySummaries():Promise.resolve()]);
     } catch(error) { mode='error'; }
     if(epoch===dataEpoch && navigation===pageNavigation && S.view==='form' && key===inlineCollaborationKey())S.inlineCollaboration={key:key,mode:mode};
   }
@@ -1978,6 +1979,25 @@
     return {mode:settings?'settings':'editor',scope:scope,uid:S.uid,period:period,
       week:window.PlanningWindows.periodStart(period),
       attachmentIds:function(){return window.ReportAttachments ? window.ReportAttachments.ids() : [];},
+      openReference:function(){return App.openReportReference();},
+      planWidths:function(items,hasSource){
+        return window.MonthlySummaries && window.MonthlySummaries.columnWidths(samplePlanRows(items),
+          {source:hasSource,balanceProgress:true,editableProgress:true});
+      },
+      formatTime:fmtTime,
+      itemAction:function(item,plan,state){
+        if(!window.CompletionReview || !item.source_id)return '';
+        if(state.report){
+          var report=state.report, owner=report.author_id;
+          var key=planSourceKey(report,'items',item);
+          return key?window.CompletionReview.actionHtml(key,{owner_id:owner,readOnly:owner!==S.uid}):'';
+        }
+        if(plan.id && !plan.unplanned){
+          return window.CompletionReview.actionHtml('monthly:'+scope.project_id+':'+(plan.confirmed_id || plan.id)+':'+item.source_id,
+            {owner_id:state.submitter_id,readOnly:state.submitter_id!==S.uid});
+        }
+        return '<span class="muted">提交本期填报后可申报完成或延期。</span>';
+      },
       notify:toast,onPublished:function(report){
         return App.openProfessionalOverview(report.id,report.updated_at || report.submitted_at,{report:report});
       }};
@@ -2140,7 +2160,7 @@
       +planFormContext(pid,cur,moduleHtml,commercial)
       +(collaboration==='member'?'<section class="card plan-form-section"><div class="cardhd"><h3>一、本周核心节点计划</h3></div>'+coreSection+'</section>'
         +'<div data-weekly-collaboration data-inline-key="'+esc(inlineCollaborationKey())+'"></div>'
-        +(window.MonthlyPlans?window.MonthlyPlans.plannerHtml(true):'')+(window.ReportAttachments?window.ReportAttachments.formHtml():'')
+        +(window.ReportAttachments?window.ReportAttachments.formHtml():'')
         :'<p class="notice" role="status">'+(collaboration==='excluded'?'本周由管理员指定的协同人员填报。':'本周填报权限读取失败，请刷新重试。')+'</p>')
       +'</div></div>';
 
@@ -3370,20 +3390,27 @@
   }
   function overviewSavedPlanHtml(reports,commercial) {
     var withSource=commercial===false;
-    var rows=[],layoutItems=[],modules=[],sources=[];
+    var entries=[];
     reports.forEach(function(r,reportIndex){itemsOf(r).filter(function(item){return item && typeof item==='object' && !Array.isArray(item);}).forEach(function(item){
-      var module=richItem(item,'mod',r.line || LINE_ALL);
-      modules.push(module);
       var actualProject=reportItemProjectId(r,item);
-      sources.push(JSON.stringify([reportIndex,actualProject]));
-      layoutItems.push({source:actualProject?projName(actualProject):'统一范围',mod:item.mod || r.line || LINE_ALL,name:item.name || '',due:sd(item.due),progress:item.prog,blocker:item.blocker});
+      entries.push({report:r,item:item,actualProject:actualProject,source:JSON.stringify([reportIndex,actualProject]),module:String(item.mod || '').trim()});
+    });});
+    var summaries=window.MonthlySummaries;
+    if(summaries && summaries.groupPlanRowsByModule)entries=summaries.groupPlanRowsByModule(entries);
+    var rows=[],layoutItems=[],modules=[],sources=[];
+    entries.forEach(function(entry){
+      var r=entry.report,item=entry.item,actualProject=entry.actualProject;
+      var module=entry.inferredModule?esc(entry.module):entry.module?richItem(item,'mod'):overviewEmpty('未分类');
+      modules.push(module);
+      sources.push(entry.source);
+      layoutItems.push({source:actualProject?projName(actualProject):'统一范围',mod:entry.module || '未分类',name:item.name || '',due:sd(item.due),progress:item.prog,blocker:item.blocker});
       rows.push((withSource?[overviewActualSource(r,item)]:[]).concat([String(rows.length+1),module,richItem(item,'name','未命名计划事项')+overviewRowSource(r,reports.length>1),
         esc(sd(item.due)),(item.prog?richItem(item,'prog'):r._monthly_preview?'<span class="overview-empty" title="月计划已确认，本周尚未提交">本周未提交</span>':overviewEmpty('未填写'))+(item.blocker?'<div class="plan-blocker"><b>遇到卡点：</b>'+richItem(item,'blocker')+'</div>':'')]));
-    });});
-    var widths=window.MonthlySummaries && window.MonthlySummaries.columnWidths?window.MonthlySummaries.columnWidths(layoutItems,{sequence:true,source:withSource,balanceProgress:true}):null;
+    });
+    var widths=summaries && summaries.columnWidths?summaries.columnWidths(layoutItems,{sequence:true,source:withSource,balanceProgress:true}):null;
     if(widths && withSource)widths=[widths[1],widths[0]].concat(widths.slice(2));
     return overviewTable('plans',(withSource?[['实际项目／分期','source']]:[]).concat([['序号','seq'],['模块或类别','module'],['事项内容','content'],['完成时间','date'],['完成情况及本周计划','progress']]),
-      rows,'暂无当月计划',widths,window.MonthlySummaries && window.MonthlySummaries.moduleRowSpans(modules,sources));
+      rows,'暂无当月计划',widths,summaries && summaries.moduleRowSpans(modules,sources));
   }
   function overviewCoordHtml(reports,_pid,_line,commercial) {
     var withSource=commercial===false;

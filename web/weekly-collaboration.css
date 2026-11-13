@@ -85,12 +85,15 @@
 .collaboration-table .collaboration-module { width: 12%; }
 .collaboration-table .collaboration-task { width: 30%; }
 .collaboration-table .collaboration-date { width: 12ch; }
-.collaboration-table th {
-  color: white;
-  background: #234e7b;
+[data-next-month-table] .collaboration-task { width: auto; }
+.planning-shell .collaboration-entry .collaboration-table > thead > tr > th {
+  color: #365170;
+  background: #f3f6fa;
   text-align: center;
+  padding: 12px 10px;
 }
-.collaboration-table td {
+.planning-shell .collaboration-entry .collaboration-table > tbody > tr > td {
+  padding: 10px;
   vertical-align: middle;
   overflow-wrap: anywhere;
 }
@@ -115,10 +118,11 @@
   border-color: transparent;
 }
 .collaboration-cell .ql-editor {
-  min-height: 40px;
+  min-height: 54px;
   height: auto;
-  padding: 8px;
+  padding: 8px 10px;
   font: inherit;
+  line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -133,6 +137,58 @@
 .collaboration-footer {
   justify-content: flex-end;
   margin-top: 12px;
+}
+.collaboration-entry .collaboration-footer {
+  z-index: 3;
+}
+.collaboration-entry .monthly-plan-toolbar {
+  margin-bottom: 8px;
+}
+.collaboration-month-note {
+  margin: 8px 0 0;
+}
+.collaboration-empty-row td {
+  color: #596e89;
+  text-align: center;
+}
+.collaboration-blocker {
+  margin-top: 6px;
+}
+.collaboration-blocker > summary {
+  width: fit-content;
+  color: #365170;
+  cursor: pointer;
+  padding: 5px 0;
+}
+.collaboration-saved-blocker {
+  color: #425971;
+  margin-top: 6px;
+}
+.collaboration-entry td[data-label="事项"] > div {
+  white-space: pre-wrap;
+  text-align: left;
+}
+.collaboration-edit-item,
+.collaboration-add-item {
+  margin-top: 8px;
+}
+[data-collaboration-items] {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f7f9fc;
+  border: 1px solid #d8e3f0;
+  border-radius: 8px;
+}
+[data-collaboration-items] .f2 {
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  margin-bottom: 12px;
+}
+[data-collaboration-items] .collaboration-item-name {
+  grid-column: 1 / -1;
+}
+[data-item-status]:empty,
+[data-month-plan-status]:empty {
+  display: none;
 }
 .collaboration-footer p {
   margin: 0 auto 0 0;
@@ -202,13 +258,32 @@
     border: 1px solid #cfdae7;
     border-radius: 6px;
   }
-  .collaboration-table tbody > tr > td {
+  .planning-shell .collaboration-entry .collaboration-table > tbody > tr > td {
     display: grid;
     grid-template-columns: 5.2em minmax(0, 1fr);
     gap: 4px;
     text-align: left;
     padding: 5px 0;
     border: 0;
+  }
+  .planning-shell .collaboration-entry .collaboration-table .collaboration-empty-row > td {
+    display: block;
+  }
+  [data-collaboration-items] .f2 {
+    grid-template-columns: minmax(0,1fr);
+  }
+  .collaboration-cell .ql-editor {
+    font-size: 16px;
+  }
+  .collaboration-table .collaboration-edit-item {
+    grid-column: 2;
+    justify-self: start;
+    white-space: nowrap;
+  }
+  .collaboration-table .collaboration-blocker,
+  .collaboration-table .collaboration-saved-blocker,
+  .collaboration-table .plan-item-actions {
+    grid-column: 2;
   }
   .collaboration-table td::before {
     content: attr(data-label);
@@ -221,7 +296,8 @@
   .collaboration-meta,
   .collaboration-statusbar,
   .collaboration-toolbar,
-  .collaboration-cell [data-collaboration-cell-presence] {
+  .collaboration-cell [data-collaboration-cell-presence],
+  [data-collaboration-items] {
     display: none !important;
   }
 }

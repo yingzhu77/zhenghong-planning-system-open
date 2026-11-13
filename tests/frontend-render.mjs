@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
+const RICH_TEXT = fs.readFileSync(path.join(__dirname, '..', 'web', 'rich-text.js'), 'utf8');
 const REPORTER_TASKS = fs.readFileSync(path.join(__dirname, '..', 'web', 'reporter-tasks.js'), 'utf8');
 const COMPLETION_REVIEW = fs.readFileSync(path.join(__dirname, '..', 'web', 'completion-review.js'), 'utf8');
 const REPORT_ATTACHMENTS = fs.readFileSync(path.join(__dirname, '..', 'web', 'report-attachments.js'), 'utf8');
@@ -284,6 +285,7 @@ function run(role, options = {}) {
   vm.runInContext(MONTHLY_SUMMARIES, sandbox, { filename: 'monthly-summaries.js' });
   vm.runInContext(PROJECT_PLAN_STATISTICS, sandbox, { filename: 'project-plan-statistics.js' });
   vm.runInContext(ADMIN_PLAN_OVERVIEW, sandbox, { filename: 'admin-plan-overview.js' });
+  if(options.richText)vm.runInContext(RICH_TEXT, sandbox, { filename: 'rich-text.js' });
   vm.runInContext(SRC, sandbox, { filename: 'app.js' });
   return new Promise((resolve, reject) => {
     setTimeout(() => {
@@ -893,14 +895,25 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
   {
     const originals = DB.reports;
     const scoped = {...originals[0], id:'r-scope-overview', line:'工程', report_scope_id:'example-unified', scope_project_ids:['p1','p2'],
-      biz:{form_version:2, items:[{project_id:'p1',mod:'同模块',name:'一期原事项'},{project_id:'p2',mod:'同模块',name:'二期原事项'}]}};
+      biz:{form_version:2, items:[
+        {project_id:'p1',mod:'粉刷',name:'一期原事项'},
+        {project_id:'p2',mod:'粉刷',name:'二期原事项'},
+        {project_id:'p1',mod:'回填',name:'一期另一模块'},
+        {project_id:'p1',mod:'粉刷',name:'一期同模块后录事项',prog:'保留该行格式'},
+        {project_id:'p1',mod:'',name:'无法判断模块的事项'}
+      ]},
+      rich_text:{v:1,fields:{'biz.items.3.prog':{ops:[{insert:'保留该行格式',attributes:{bold:true}}]}}}};
     DB.reports = [...originals, scoped];
     try {
-      const full = await run('pm',{pmDiscipline:'工程',extraProjectIds:['p2']});
+      const full = await run('pm',{pmDiscipline:'工程',extraProjectIds:['p2'],richText:true});
       await full.App.openProfessionalOverview(scoped.id);
       const html = main(full.root.innerHTML);
       ok(has(html,'实际项目／分期') && has(html,'示例住宅一号') && has(html,'示例住宅二号') && has(html,'一期原事项') && has(html,'二期原事项'), '统一住宅总览应保留两条事项的实际分期');
-      ok(!has(html,'rowspan="2"'), '相同模块跨实际分期不能合并');
+      ok((html.match(/rowspan="2"/g) || []).length===1 && (html.match(/class="overview-cell-module"[^>]*>粉刷<\/td>/g) || []).length===2,
+        '同一分期跨行模块应合并，相同模块跨实际分期仍分开');
+      ok(html.indexOf('一期原事项')<html.indexOf('一期同模块后录事项') && html.indexOf('一期同模块后录事项')<html.indexOf('一期另一模块'),
+        '模块按首次出现顺序归并，并保持组内输入次序');
+      ok(has(html,'<strong>保留该行格式</strong>') && has(html,'未分类'), '排序应保留原事项富文本，无法归类的事项应注明未分类');
       const partial = await run('pm',{pmDiscipline:'工程'});
       await partial.App.openProfessionalOverview(scoped.id);
       ok(!has(main(partial.root.innerHTML),'二期原事项') && has(main(partial.root.innerHTML),'当前账号无法读取该报告的所选版本'), '缺少住宅分期权限时不能读取完整统一范围快照');

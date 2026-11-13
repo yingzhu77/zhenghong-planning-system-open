@@ -162,6 +162,22 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
   await expect(status(lead)).toHaveAttribute('data-state', 'saved', { timeout: 20000 });
   await expect(status(editor)).toHaveAttribute('data-state', 'saved', { timeout: 20000 });
 
+  const leadPanel=lead.locator('[data-weekly-collaboration]'),editorPanel=editor.locator('[data-weekly-collaboration]');
+  await leadPanel.getByRole('button',{name:/准备下月/}).click();
+  await editorPanel.getByRole('button',{name:/准备下月/}).click();
+  await editorPanel.getByRole('button',{name:'＋ 增加事项'}).click();
+  await editorPanel.getByLabel('事项',{exact:true}).fill('组员准备下月图纸');
+  await editorPanel.getByRole('button',{name:'添加事项'}).click();
+  await expect(leadPanel.locator('[data-next-month-table]')).toContainText('组员准备下月图纸',{timeout:18000});
+  await expect(editorPanel.getByRole('button',{name:'确认下月计划',exact:true})).toHaveCount(0);
+  await leadPanel.getByRole('button',{name:/^本月 /}).click();
+  await editorPanel.getByRole('button',{name:/^本月 /}).click();
+  await expect(leadCell).toContainText('建筑复核');
+  await editorPanel.locator('.collaboration-blocker summary').click();
+  await cell(editor,'pilot-source-one:blocker').fill('待核对接口尺寸');
+  await expect(cell(lead,'pilot-source-one:blocker')).toHaveText('待核对接口尺寸',{timeout:18000});
+  await expect(status(editor)).toHaveAttribute('data-state','saved');
+
   const artifacts = '.local/weekly-collaboration-browser';
   await mkdir(artifacts, { recursive: true });
   await lead.locator('[data-weekly-collaboration]').screenshot({ path: artifacts + '/desktop.png' });
@@ -204,6 +220,8 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
   await expect(overview).toContainText('本期专业汇总');
   await expect(overview).toContainText('建筑复核');
   await expect(overview).toContainText('机电复核');
+  await expect(overview).toContainText('待核对接口尺寸');
+  await expect(overview).not.toContainText('组员准备下月图纸');
   await expect(overview).toContainText('协同验收附件.png');
   const moduleHeaderLines = await overview.getByRole('columnheader',{name:'模块或类别'}).evaluate(node => {
     const text = document.createRange();
@@ -256,6 +274,9 @@ test('独立住宅保留同周旧综合报告，仍可选择本人专业协同�
   const workspace = housing.locator('[data-weekly-collaboration]');
   await expect(housing.locator('.planning-mainnav')).not.toContainText('协同填报');
   await expect(housing.locator('[aria-label="本期填报信息"]')).toBeVisible();
+  await expect(workspace.getByRole('heading',{name:'二、当月计划填报'})).toBeVisible();
+  await expect(workspace.getByRole('columnheader')).toHaveText(['模块','事项','完成时间','当周进展']);
+  await workspace.getByRole('button',{name:'＋ 增加事项'}).click();
   await workspace.getByLabel('模块',{exact:true}).fill('住宅工程');
   await workspace.getByLabel('事项',{exact:true}).fill('匿名住宅楼层复核');
   await workspace.getByRole('button',{name:'添加事项'}).click();
@@ -270,10 +291,36 @@ test('独立住宅保留同周旧综合报告，仍可选择本人专业协同�
   await housing.reload();
   await housing.locator('#planResLine').selectOption(line);
   await expect(progress).toHaveText('住宅工程匿名进展');
+  await workspace.getByRole('button',{name:/准备下月/}).click();
+  await workspace.getByRole('button',{name:'＋ 增加事项'}).click();
+  await workspace.getByLabel('模块',{exact:true}).fill('下月工程');
+  await workspace.getByLabel('事项',{exact:true}).fill('下月匿名任务');
+  await workspace.getByRole('button',{name:'添加事项'}).click();
+  await expect(workspace.locator('[data-next-month-table]')).toContainText('下月匿名任务');
+  await expect(progress).not.toBeVisible();
+  await workspace.getByRole('button',{name:/^本月 /}).click();
+  await expect(progress).toHaveText('住宅工程匿名进展');
+  await expect(workspace.locator('[data-collaboration-publish]')).toBeEnabled();
+  await housing.evaluate(()=>window.scrollTo(0,0));
+  await housing.screenshot({path:'.local/weekly-collaboration-browser/shared-month-desktop.png',fullPage:true});
+  await housing.setViewportSize({width:390,height:844});
+  await expect.poll(()=>housing.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth+1)).toBe(true);
+  await housing.evaluate(()=>window.scrollTo(0,0));
+  await housing.screenshot({path:'.local/weekly-collaboration-browser/shared-month-mobile.png',fullPage:true});
+  await housing.setViewportSize({width:1440,height:1000});
+  housing.once('dialog',dialog=>dialog.accept());
+  await workspace.getByRole('button',{name:'确认本月计划',exact:true}).click();
+  await expect(workspace.locator('[data-month-plan-status]')).toContainText('月计划已确认');
+  await expect(progress).toHaveText('住宅工程匿名进展');
+  housing.once('dialog',dialog=>dialog.accept());
+  await workspace.getByRole('button',{name:'撤回确认并修改',exact:true}).click();
+  await expect(workspace.getByRole('button',{name:'＋ 增加事项'})).toBeVisible();
+  await expect(progress).toHaveText('住宅工程匿名进展');
   await workspace.locator('[data-collaboration-publish]').click();
   const overview=housing.locator('.professional-overview[data-report-id]');
   await expect(overview).toContainText('本期专业汇总');
   await expect(overview).toContainText('住宅工程匿名进展');
+  await expect(overview).not.toContainText('下月匿名任务');
   assert.deepEqual((await fixture.admin.query('SELECT * FROM public.reports WHERE id=$1',[legacyReport.id])).rows[0],legacyReport);
   assert.deepEqual(errors,[]);
 });

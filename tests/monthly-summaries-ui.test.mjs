@@ -9,6 +9,27 @@ import path from 'node:path';
 function fixture(){const context={};context.window=context;vm.createContext(context);for(const file of ['planning-windows.js','rich-text.js','monthly-plans.js','monthly-summaries.js','meeting-view.js'])vm.runInContext(readFileSync(new URL('../web/'+file,import.meta.url),'utf8'),context);return context;}
 const summary=(extra={})=>({id:'summary-one',project_id:'project-a',month:'2026-10',line:'设计部',owner_id:'anonymous-owner',owner_name:'匿名提报人',items:[{source_id:'one',mod:'设计',name:'月度事项<script>',due:'2026-11-05',progress:'完成说明<iframe>\n保留原文'}],...extra});
 
+test('summary groups complete module labels within one report and phase, and only infers an exact heading',()=>{
+  const {MonthlySummaries}=fixture();
+  const make=(source,id,mod,name='匿名事项')=>({source,item:{source_id:id,mod,name}});
+  const rows=[
+    make('甲一期','1',' 粉刷 '),make('甲二期','2','粉刷'),
+    make('甲一期','3','结构'),make('甲一期','4','钢构'),
+    make('甲一期','5','粉刷'),make('甲一期','6','','【粉刷】匿名事项'),
+    make('甲一期','7','','粉刷及回填：匿名事项'),make('乙一期','8','','粉刷：匿名事项'),
+    make('甲一期','9','东区／一标段'),make('甲一期','10','东区／二标段')
+  ];
+  const before=JSON.stringify(rows);
+  const grouped=MonthlySummaries.groupPlanRowsByModule(rows);
+  assert.deepEqual(Array.from(grouped,row=>[row.item.source_id,row.module,row.inferredModule]),[
+    ['1','粉刷',false],['5','粉刷',false],['6','粉刷',true],
+    ['3','结构',false],['4','钢构',false],['9','东区／一标段',false],['10','东区／二标段',false],['7','',false],
+    ['2','粉刷',false],['8','',false]
+  ]);
+  assert.equal(grouped[1].item,rows[4].item);
+  assert.equal(JSON.stringify(rows),before);
+});
+
 test('monthly summaries preserve source text and filter exact month, project, profession and complete merged scopes without mutating reports',()=>{
   const f=fixture(),rows=[summary(),summary({id:'other-month',month:'2026-11'}),summary({id:'other-line',line:'机电设计'}),summary({id:'scope',report_scope_id:'scope-one',scope_project_ids:['project-a','project-b']}),summary({id:'missing-scope',report_scope_id:'scope-two'})],before=JSON.stringify(rows);
   const options={projectIds:['project-a'],projects:[{id:'project-a',name:'匿名项目'}],month:'2026-10',line:'设计部'};
