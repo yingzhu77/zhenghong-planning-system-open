@@ -90,6 +90,23 @@ function inWeek(scope, selected = week) {
   return {...scope,week:selected};
 }
 
+test('只提前显示北京时间下一周中本人可以协同的项目专业',async t=>{
+  const f=await fixture(t), service=f.service;
+  const {current,next,later}=(await f.admin.query(`SELECT monday::text AS current,(monday+7)::text AS next,(monday+14)::text AS later
+    FROM (SELECT date_trunc('week',now() AT TIME ZONE 'Asia/Shanghai')::date AS monday) dates`)).rows[0];
+  await service.settings(operator,{...inWeek(a,next),submitter_id:retailLead.id,member_ids:[]});
+  await service.settings(operator,{...inWeek(custom,next),submitter_id:retailLead.id,member_ids:[retailPeer.id]});
+  await service.settings(operator,{...inWeek(merged,next),submitter_id:engineering.id,member_ids:[engineeringPeer.id]});
+  await service.settings(operator,{...inWeek(independent,current),submitter_id:engineering.id});
+  await service.settings(operator,{...inWeek(b,later),submitter_id:retailLead.id});
+  assert.deepEqual(await service.nextWeek(retailLead),{week:next,rooms:[custom,a].sort((x,y)=>x.line<y.line?-1:1)});
+  assert.deepEqual(await service.nextWeek(retailPeer),{week:next,rooms:[custom]});
+  assert.deepEqual(await service.nextWeek(engineeringPeer),{week:next,rooms:[merged]});
+  for (const user of [operator,incomplete,pilot]) assert.deepEqual(await service.nextWeek(user),{week:null,rooms:[]});
+  await service.settings(operator,{...inWeek(custom,next),submitter_id:retailLead.id,member_ids:[]});
+  assert.deepEqual(await service.nextWeek(retailPeer),{week:null,rooms:[]});
+});
+
 async function confirm(f, user, scope, plannedItem) {
   const {report_scope_id,...identity} = scope;
   return confirmMonthlyPlan(f.pool,user,{...identity,month,items:[plannedItem],...(report_scope_id ? {report_scope_id} : {})});

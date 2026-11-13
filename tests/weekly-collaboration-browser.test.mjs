@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium, expect } from '@playwright/test';
+import * as Y from 'yjs';
 import { createApp } from '../server/app.mjs';
 import { reportWeekStart } from '../server/database.mjs';
 import { hashPassword } from '../server/password.mjs';
@@ -322,5 +323,74 @@ test('独立住宅保留同周旧综合报告，仍可选择本人专业协同�
   await expect(overview).toContainText('住宅工程匿名进展');
   await expect(overview).not.toContainText('下月匿名任务');
   assert.deepEqual((await fixture.admin.query('SELECT * FROM public.reports WHERE id=$1',[legacyReport.id])).rows[0],legacyReport);
+  assert.deepEqual(errors,[]);
+});
+
+test('已配置的下周可提前从填报页进入并续编，未加入的项目专业只显示提示', {timeout: 90000}, async t => {
+  const fixture = await createFixture(t);
+  await fixture.admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES ('design-pilot-editor','demo-com','pm')");
+  const next = new Date(fixture.week+'T00:00:00Z');
+  next.setUTCDate(next.getUTCDate()+7);
+  const week=next.toISOString().slice(0,10), period={week,project_id:'hf',line:'设计部',report_scope_id:null};
+  const headers={Origin:fixture.base};
+  const browser=await chromium.launch({channel:'msedge',headless:true});
+  t.after(()=>browser.close());
+  const errors=[],requests=[];
+  const [ops,lead,editor,outsider]=await Promise.all([
+    login(browser,fixture,'demo-ops',errors,requests),
+    login(browser,fixture,'design-pilot-lead',errors,requests),
+    login(browser,fixture,'design-pilot-editor',errors,requests),
+    login(browser,fixture,'demo-pm-com',errors,requests)
+  ]);
+  const configured=await ops.request.post(fixture.base+'/api/weekly-collaboration/settings',{headers,data:{
+    ...period,submitter_id:'design-pilot-lead',member_ids:['design-pilot-editor']
+  }});
+  assert.equal(configured.status(),200);
+  const sourceId=randomUUID(), label='上周同步的匿名事项';
+  const seed=await lead.request.post(fixture.base+'/api/weekly-collaboration/month-items',{headers,data:{
+    ...period,month:week.slice(0,7),operation_id:sourceId,revision:0,action:'add',item:{mod:'设计',name:label,due:''}
+  }});
+  assert.equal(seed.status(),200);
+  const doc=new Y.Doc();
+  doc.getText('content').insert(0,'上周已填写的进展');
+  const seedProgress=await lead.request.post(fixture.base+'/api/weekly-collaboration/change',{headers,data:{
+    ...period,plan_id:(await seed.json()).data.plan.id,cell:sourceId+':prog',operation_id:randomUUID(),
+    update:Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64')
+  }});
+  doc.destroy();
+  assert.equal(seedProgress.status(),200);
+  const periodPicker=editor.locator('#pmPeriod');
+  const current=await periodPicker.inputValue();
+  assert.equal(reportWeekStart(current),fixture.week);
+  await expect(periodPicker.locator('option').filter({hasText:'已开放协同'})).toHaveCount(0);
+  await expect(outsider.locator('#pmPeriod option').filter({hasText:'已开放协同'})).toHaveCount(0);
+  const projectPicker=editor.locator('#planProject');
+  await projectPicker.selectOption('demo-com');
+  await editor.getByRole('button',{name:'刷新数据',exact:true}).click();
+  const early=periodPicker.locator('option').filter({hasText:'已开放协同'});
+  await expect(early).toHaveCount(1);
+  const option=await early.getAttribute('value');
+  assert.notEqual(option,current);
+  await periodPicker.selectOption(option);
+  await expect(projectPicker).toHaveValue('hf');
+  const workspace=editor.locator('[data-weekly-collaboration]');
+  await expect(workspace).toContainText(label);
+  const progress=cell(editor,sourceId+':prog');
+  await expect(progress).toBeEditable();
+  await expect(progress).toHaveText('上周已填写的进展');
+  await expect(workspace.getByRole('button',{name:'提交专业周报',exact:true})).toBeHidden();
+  const saved=editor.waitForResponse(response=>response.url().endsWith('/api/weekly-collaboration/change'));
+  await progress.fill('提前更新的匿名进展');
+  assert.equal((await saved).status(),200);
+  await editor.getByRole('button',{name:'刷新数据',exact:true}).click();
+  await expect(progress).toHaveText('提前更新的匿名进展');
+  await projectPicker.selectOption('demo-com');
+  await expect(editor.getByText('该项目专业尚未开放这周的协同填报，请切换项目、专业或报告周期。')).toBeVisible();
+  await expect(workspace).toHaveCount(0);
+  await editor.evaluate(()=>window.App.submitReport());
+  const savedReports=await fixture.admin.query('SELECT id FROM public.reports WHERE period=$1 AND author_id=$2',[option,'design-pilot-editor']);
+  assert.equal(savedReports.rows.length,0);
+  await periodPicker.selectOption(current);
+  await expect(workspace).toHaveCount(0);
   assert.deepEqual(errors,[]);
 });

@@ -405,7 +405,8 @@
     return JSON.stringify([dataEpoch,S.uid,S.pmProject,S.pmPeriod,S.pmLine || '',S.pmScopeId || '',S.view]);
   }
   function canCapturePMDraft() {
-    return !S.pmScopeTransition && (S.pmRenderedScope === undefined || S.pmRenderedScope === pmDraftScope());
+    return !S.pmScopeTransition && (!futureReportWeek(S.pmPeriod) || inlineCollaborationMode()==='member')
+      && (S.pmRenderedScope === undefined || S.pmRenderedScope === pmDraftScope());
   }
   function markPMRenderedScope() {
     if (S.profile && S.profile.role === 'pm' && (S.view === 'form' || S.view === 'center')) S.pmRenderedScope = pmDraftScope();
@@ -1486,6 +1487,7 @@
     monthlySummaries: ['@monthlySummaries', '月度完成情况汇总'],
     projectPeople: ['@projectPeople', '项目协调人员'],
     businessModuleGrants: ['@businessModuleGrants', '附加商业专业授权'],
+    nextCollaboration: ['@nextCollaboration', '提前开放的协同周'],
     completions: ['@completions', '完成审核'],
     nodeStatistics: ['@nodeStatistics', '节点有效审核状态'],
     reportAttachments: ['@reportAttachments', '填报附件']
@@ -1502,7 +1504,7 @@
     if(window.ZHAdminArchive && window.ZHAdminArchive.reset)window.ZHAdminArchive.reset();
     dataEpoch++; pageNavigation++; dataState = {};
     Object.keys(dataSources).forEach(function (key) { S[key] = []; });
-    S.loadErrors = []; S.pmReport = null; S.pmProject = null; S.pmLine = null; S.pmReportScope=null; S.pmScopeId=null; S.pmLegacyReportConflict=null; S.pmScopeTransition = null; delete S.pmRenderedScope;
+    S.loadErrors = []; S.pmReport = null; S.pmProject = null; S.pmPeriod=currentPeriod(); S.pmLine = null; S.pmReportScope=null; S.pmScopeId=null; S.pmLegacyReportConflict=null; S.pmScopeTransition = null; delete S.pmRenderedScope;
     S.pmLegacyResidentialProfession=null;S.pmLegacyResidentialSelection=null;
     clearTimeout(draftAutosaveTimer);
     S.briefDrafts = {}; S.reviewRichDrafts = {}; S.formRich = {}; S.lineEdits = {};
@@ -1527,7 +1529,7 @@
     if(S.profile.role==='pm')common.push('businessModuleGrants','projectReportingGrants');
     else if(isPzo())common.push('pms');
     var pages = {
-      form: ['pms', 'reports', 'milestones', 'orgList', 'projectPeople', 'leaderNotes', 'reporterTasks', 'coordinationTasks', 'monthlyPlans', 'completions', 'reportAttachments'],
+      form: ['pms', 'reports', 'milestones', 'orgList', 'projectPeople', 'leaderNotes', 'reporterTasks', 'coordinationTasks', 'monthlyPlans', 'completions', 'reportAttachments', 'nextCollaboration'],
       mine: ['pms', 'reports', 'milestones', 'reviews'],
       center: ['pms', 'reports', 'reviews', 'leaderNotes', 'orgList', 'projectPeople', 'milestones', 'reporterTasks', 'coordinationTasks', 'monthlyPlans', 'completions'],
       coordination: ['pms','reports','projectPeople','coordinationTasks','completions'],
@@ -1577,6 +1579,7 @@
     var state = dataState[key] || (dataState[key] = { revision: 0 });
     var scope = key === 'reportAttachments' ? JSON.stringify(reportAttachmentScope())
       : key === 'completions' ? JSON.stringify([completionQuery(),completionSourceKeys()])
+      : key === 'nextCollaboration' ? window.PlanningWindows?.periodStart(currentPeriod()) || ''
       : key === 'nodeStatistics' ? (S.view==='nodesCom'?'com':'res')
       : key === 'monthlySummaries' ? overviewSummaryMonth()
       : key === 'projectPeople' ? S.pmProject || (myProjects()[0] || {}).id || '' : '';
@@ -1597,6 +1600,8 @@
             if(result && !result.error && (!Array.isArray(result.data) || result.data.some(function(row){return !row || typeof row.user_id!=='string' || row.project_id!=='hf' || row.line!=='设计部';})))throw new Error('附加商业专业授权返回不完整，请刷新重试');
           }
           else if(key==='projectReportingGrants')result=await reporterRequest('/api/project-reporting-grants');
+          else if(key==='nextCollaboration')result=S.profile?.role==='pm' && S.profile.status==='approved'
+            ? await reporterRequest('/api/weekly-collaboration/next-week',{}) : {data:null};
           else if(key==='personnelDirectory')result=await reporterRequest('/api/personnel-directory');
           else if(key==='projectPersonnel')result=await reporterRequest('/api/project-personnel');
           else if(key==='monthlySummaries'){
@@ -1694,7 +1699,10 @@
     if(S.view==='projectPlanStats' && window.ProjectPlanStatistics)await window.ProjectPlanStatistics.load();
     if(S.view==='adminPlans' && window.AdminPlans){var adminSeed=S.adminPlanSeed;S.adminPlanSeed=null;await window.AdminPlans.load(adminSeed,!!force);}
     if (navigation !== pageNavigation || epoch !== dataEpoch || !S.profile) return;
-    if (prepare) await preparePM();
+    if (prepare) {
+      var future=S.view==='form' && futureReportWeek(S.pmPeriod);
+      await preparePM(future && !earlyCollaborationRooms(future).length ? currentPeriod() : undefined);
+    }
     await loadInlineCollaboration();
     if(S.profile.role==='pm' && ['form','center','coordination'].indexOf(S.view)>=0)await loadData(['projectPeople']);
     if(S.profile.role==='pm' && S.view==='coordination' && window.CompletionReview && window.CompletionReview.loadInitiated)await window.CompletionReview.loadInitiated();
@@ -1977,6 +1985,18 @@
   function weeklyCollaborationScope() {
     return weeklyCollaborationTarget(S.pmProject,S.pmLine,S.pmReportScope);
   }
+  function futureReportWeek(period) {
+    var windows=window.PlanningWindows;
+    var week=windows?.periodStart(period);
+    return week && week>windows.periodStart(currentPeriod()) ? week : '';
+  }
+  function earlyCollaborationRooms(week) {
+    var next=S.nextCollaboration;
+    return !dataState.nextCollaboration?.error && next?.week===week && Array.isArray(next.rooms) ? next.rooms : [];
+  }
+  function matchesCollaborationRoom(room,pid,line,scopeId) {
+    return room.project_id===pid && room.line===line && room.report_scope_id===(scopeId || null);
+  }
   function inlineCollaborationKey() {
     return JSON.stringify([dataEpoch,S.uid,S.pmProject,S.pmLine,S.pmScopeId,S.pmPeriod]);
   }
@@ -1985,13 +2005,21 @@
     return S.view==='form' && room && room.key===inlineCollaborationKey()?room.mode:null;
   }
   async function loadInlineCollaboration() {
-    if(S.view!=='form' || !window.PlanningBoot || !window.PlanningBoot.ensureWeeklyCollaboration)return;
-    var scope=weeklyCollaborationScope(), week=window.PlanningWindows.periodStart(S.pmPeriod);
-    if(!scope || !week)return;
-    var epoch=dataEpoch,navigation=pageNavigation,key=inlineCollaborationKey(),mode='error';
+    if(S.view!=='form')return;
+    var scope=weeklyCollaborationScope(),week=window.PlanningWindows?.periodStart(S.pmPeriod);
+    var future=futureReportWeek(S.pmPeriod),key=inlineCollaborationKey();
+    if(future && (!scope || !earlyCollaborationRooms(future).some(function(room){
+      return matchesCollaborationRoom(room,scope.project_id,scope.line,scope.report_scope_id);
+    }))){
+      S.inlineCollaboration={key:key,mode:'futureUnavailable'};
+      return;
+    }
+    if(!scope || !week || !window.PlanningBoot?.ensureWeeklyCollaboration)return;
+    var epoch=dataEpoch,navigation=pageNavigation,mode='error';
     try {
       var result=await reporterRequest('/api/weekly-collaboration/mode',{week:week,project_id:scope.project_id,line:scope.line,report_scope_id:scope.report_scope_id});
       if(!result.error && ['member','unconfigured','excluded'].includes(result.data && result.data.mode))mode=result.data.mode;
+      if(future && mode==='unconfigured')mode='futureUnavailable';
       if(mode==='member')await Promise.all([window.PlanningBoot.ensureWeeklyCollaboration(true),
         window.PlanningBoot.ensureMonthlySummaries?window.PlanningBoot.ensureMonthlySummaries():Promise.resolve()]);
     } catch(error) { mode='error'; }
@@ -2182,13 +2210,14 @@
     var sameWeekOther = S.reports.filter(function (r) {
       return r.project_id === pid && weekNo(r.period) === weekNo(S.pmPeriod || currentPeriod()) && (r.line || LINE_ALL) !== S.pmLine;
     });
-    var collaboration=inlineCollaborationMode();
+    var collaboration=inlineCollaborationMode() || (futureReportWeek(S.pmPeriod)?'futureUnavailable':null);
     if(collaboration && collaboration!=='unconfigured')return '<div class="workgrid onecol plan-form report3-compact-form"><div class="colmain">'
       +planFormContext(pid,cur,moduleHtml,commercial)
       +(collaboration==='member'?'<section class="card plan-form-section"><div class="cardhd"><h3>一、本周核心节点计划</h3></div>'+coreSection+'</section>'
         +'<div data-weekly-collaboration data-inline-key="'+esc(inlineCollaborationKey())+'"></div>'
         +(window.ReportAttachments?window.ReportAttachments.formHtml():'')
-        :'<p class="notice" role="status">'+(collaboration==='excluded'?'本周由管理员指定的协同人员填报。':'本周填报权限读取失败，请刷新重试。')+'</p>')
+        :'<p class="notice" role="status">'+(collaboration==='futureUnavailable'?'该项目专业尚未开放这周的协同填报，请切换项目、专业或报告周期。'
+          :collaboration==='excluded'?'本周由管理员指定的协同人员填报。':'本周填报权限读取失败，请刷新重试。')+'</p>')
       +'</div></div>';
 
     return (commercial ? '' : dlNodes) + dlMods + '<div class="workgrid onecol plan-form report3-compact-form" data-shared-rich-editor><div class="colmain">'
@@ -4575,8 +4604,12 @@
     return list;
   }
   function periodOptionsHtml() {
-    return periodList().map(function (p) {
-      return '<option value="' + esc(p) + '"' + (S.pmPeriod === p ? ' selected' : '') + '>' + esc(p) + '</option>';
+    var next=S.nextCollaboration?.week,periods=periodList();
+    var date=S.view==='form' && next && futureReportWeek(next) && earlyCollaborationRooms(next).length ? new Date(next+'T12:00:00') : null;
+    var early=date?'第'+isoWeek(date)+'周（'+weekRange(date)+'）':'';
+    if(early && periods.indexOf(early)<0)periods.unshift(early);
+    return periods.map(function (p) {
+      return '<option value="' + esc(p) + '"' + (S.pmPeriod === p ? ' selected' : '') + '>' + esc(p) + (p===early?' · 已开放协同':'') + '</option>';
     }).join('');
   }
 
@@ -4938,6 +4971,7 @@
       if (S.view === 'mline' && App.mlineCapture) App.mlineCapture();
       if (S.profile && S.profile.role === 'pm') return changePMScope(function(){
         if(v==='professionalOverview')S.professionalOverview={currentOnly:true};
+        if(v!=='form' && v!=='professionalOverview' && futureReportWeek(S.pmPeriod))S.pmPeriod=currentPeriod();
         S.view=v;
       },v==='form' || v==='center' || v==='coordination');
       if(window.AdminPlans)window.AdminPlans.capture();
@@ -4963,7 +4997,16 @@
     },
     period: async function (p) {
       if (attachmentBusy()) return;
-      return changePMScope(function(){S.pmPeriod=String(p || '').trim() || currentPeriod();});
+      var period=String(p || '').trim() || currentPeriod(),future=futureReportWeek(period);
+      var rooms=future && S.view==='form'?earlyCollaborationRooms(future):[];
+      if(future && !rooms.length)return toast('该周尚未开放协同填报。','warn');
+      return changePMScope(function(){
+        S.pmPeriod=period;
+        if(!future || rooms.some(function(room){return matchesCollaborationRoom(room,S.pmProject,S.pmLine,S.pmScopeId);}))return;
+        var room=rooms.find(function(room){return room.project_id===S.pmProject;}) || rooms[0];
+        S.pmProject=room.project_id;
+        S.pmLine=room.line;
+      });
     },
     switchProject: async function (pid) {
       if (attachmentBusy()) return;
@@ -5729,6 +5772,7 @@
 
     submitReport: async function () {
       if (attachmentBusy()) return;
+      if (futureReportWeek(S.pmPeriod))return;
       if (inlineCollaborationMode() && inlineCollaborationMode()!=='unconfigured')return;
       var pid = S.pmProject;
       if (!pid) return toast('未选择项目', 'err');

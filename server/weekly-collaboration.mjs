@@ -251,6 +251,17 @@ export function createWeeklyCollaboration(pool) {
     return withIdentity(pool,user.id,async client=>({mode:await roomAccess(client,user,scope)}));
   }
 
+  async function nextWeek(user) {
+    return withIdentity(pool,user.id,async client=>{
+      const {rows}=await client.query(`SELECT d.week::text AS week,d.project_id,d.line,d.report_scope_id
+        FROM app_private.weekly_collaboration_drafts d
+        WHERE d.week=date_trunc('week',now() AT TIME ZONE 'Asia/Shanghai')::date+7
+          AND app_private.weekly_collaboration_room_access(auth.uid(),d.project_id,d.line,d.report_scope_id,d.week)='member'
+        ORDER BY d.project_id,d.line`);
+      return {week:rows[0]?.week ?? null,rooms:rows.map(({project_id,line,report_scope_id})=>({project_id,line,report_scope_id}))};
+    });
+  }
+
   async function state(client, user, scope, settings, presenceInput) {
     const draft=await readWeek(client,scope);
     if (draft && draft.report_scope_id!==scope.scopeId) fail(409,'该周的合并填报范围已变化，请核对原协同稿。');
@@ -629,5 +640,5 @@ export function createWeeklyCollaboration(pool) {
     return result;
   }
 
-  return {open,poll,mode,catalog,settings,items,monthItems,confirmMonth,withdrawMonth,change,publish};
+  return {open,poll,mode,nextWeek,catalog,settings,items,monthItems,confirmMonth,withdrawMonth,change,publish};
 }

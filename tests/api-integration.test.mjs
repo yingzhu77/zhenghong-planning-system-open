@@ -79,6 +79,8 @@ test('full self-host HTTP flow uses runtime RLS: login, reporting, revisions, le
   assert.equal((await fetch(base + '/')).status, 200);
   for (const secretPath of ['/.env', '/db/002-import.sql', '/.local/demo-accounts.json', '/server/auth.mjs']) assert.equal((await fetch(base + secretPath)).status, 404);
   assert.equal((await call('/api/health')).body.data.status, 'ok');
+  assert.equal((await call('/api/weekly-collaboration/next-week', {}, 'anonymous')).status, 401);
+  assert.deepEqual((await call('/api/weekly-collaboration/next-week', {}, 'pm-res')).body.data, { week: null, rooms: [] });
   await admin.query(`INSERT INTO app_private.personnel_directory(user_id,division,team,title,sort_order)
     VALUES ('demo-pm-res','示例项目部','示例工程组','工程师',10)`);
   assert.equal((await call('/api/personnel-directory', undefined, 'anonymous')).status, 401);
