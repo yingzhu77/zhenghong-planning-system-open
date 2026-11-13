@@ -7,6 +7,7 @@ import path from 'node:path';
 import { chromium, expect } from '@playwright/test';
 import { createApp } from '../server/app.mjs';
 import { reportWeekStart } from '../server/database.mjs';
+import { previewCompletion, requestCompletion, reviewCompletion } from '../server/completions.mjs';
 import { seedDemo } from '../scripts/seed-demo.mjs';
 import { initializedDatabase, testPool } from './helpers/pglite-pool.mjs';
 import { makeAdminPlanWorkbook, adminPlanSheet, adminPlanTitle, adminPlanHeaders, adminPlanRow, adminPlanInline } from './helpers/admin-plan-workbook.mjs';
@@ -30,7 +31,7 @@ async function runtime(t, provider = {}) {
     await new Promise(resolve => { server.close(resolve); server.closeAllConnections?.(); });
     await pool.end(); await admin.end(); await db.close();
   });
-  return { admin, url, project, week, month, accounts };
+  return { admin, pool, url, project, week, month, accounts };
 }
 async function login(browser, f, id, errors) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } }), page = await context.newPage();
@@ -88,6 +89,104 @@ test('组织树和全局姓名搜索可区分同名账号，并保存原权限�
   await expect(team).toHaveAttribute('aria-pressed','true');
   await page.evaluate(()=>window.scrollTo(0,0));
   await page.screenshot({fullPage:true,path:path.join(artifacts,'personnel-mobile.png')});
+  assert.deepEqual(errors,[]);
+});
+
+test('员工完成统计按组织和姓名筛选时同步更新汇总与明细', {timeout:90000}, async t=>{
+  const f=await runtime(t),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];
+  t.after(()=>browser.close());
+  await f.admin.query("UPDATE public.profiles SET name='匿名同名员工' WHERE user_id IN ('demo-pm-res','demo-pm-com')");
+  await f.admin.query(`INSERT INTO app_private.personnel_directory(user_id,division,team,title,sort_order)
+    VALUES('demo-pm-res','示例项目部','工程组','工程经理',10),
+      ('demo-pzo','示例项目部','统筹组','项目总',20),
+      ('demo-pm-com','示例设计部','设计组','建筑设计师',30)`);
+  const ops={id:'demo-ops'};
+  const previousDay=new Date(f.week+'T00:00:00Z');
+  previousDay.setUTCDate(previousDay.getUTCDate()-1);
+  for(const [id,project,due] of [
+    ['demo-pm-res','demo-res',f.week],
+    ['demo-pm-com','demo-com',previousDay.toISOString().slice(0,10)]
+  ]){
+    const person={id};
+    const {id:note}=(await f.admin.query(`INSERT INTO public.leader_notes(project_id,period,kind,what,due,author_name)
+      VALUES($1,$2,'ceo_brief','匿名统计验收事项',$3,'匿名管理人员') RETURNING id`,[project,f.week,due])).rows[0];
+    const source=await previewCompletion(f.pool,person,{source_key:'leader:'+project+':'+note});
+    const submitted=await requestCompletion(f.pool,person,{source_key:source.source_key,source_version:source.source_version,
+      completion_date:f.week,completion_note:'匿名完成验收'});
+    await reviewCompletion(f.pool,ops,{id:submitted.id,expected_revision:submitted.revision,decision:'approve'});
+  }
+  const page=await login(browser,f,'demo-ops',errors);
+  await page.getByRole('button',{name:'统计分析',exact:true}).click();
+  await page.getByRole('button',{name:'员工完成统计',exact:true}).click();
+  const panel=page.locator('.completion-statistics');
+  const org=panel.getByRole('navigation',{name:'统计组织'});
+  const rows=panel.locator('[data-statistics-employee]');
+  const metric=name=>panel.locator('.completion-statistics-totals > div').filter({hasText:name}).locator('strong');
+  await expect(panel.getByRole('heading',{name:'员工事项完成统计'})).toBeVisible();
+  await expect(metric('已审完成')).toHaveText('2');
+  await expect(metric('按时完成')).toHaveText('1');
+  await expect(metric('延期完成')).toHaveText('1');
+  await expect(rows).toHaveCount(5);
+  await expect(org.getByRole('button',{name:/未归类/})).toBeVisible();
+
+  const toggle=org.getByRole('button',{name:'示例项目部下的组别'});
+  await expect(toggle).toHaveAttribute('aria-expanded','false');
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded','true');
+  const engineering=org.getByRole('button',{name:/^工程组/});
+  await engineering.click();
+  await expect(engineering).toHaveAttribute('aria-pressed','true');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('工程经理');
+  await expect(metric('已审完成')).toHaveText('1');
+  await expect(metric('按时完成')).toHaveText('1');
+  await expect(metric('延期完成')).toHaveText('0');
+  await rows.first().getByText('按类别查看',{exact:true}).click();
+  await expect(rows.first().getByText('领导安排',{exact:true})).toBeVisible();
+
+  const projectFilter=panel.locator('label').filter({hasText:/^项目/}).locator('select');
+  await projectFilter.selectOption('demo-com');
+  await expect(rows).toHaveCount(0);
+  await expect(metric('已审完成')).toHaveText('0');
+  await projectFilter.selectOption('');
+  await expect(rows).toHaveCount(1);
+  await expect(engineering).toHaveAttribute('aria-pressed','true');
+
+  await org.getByRole('button',{name:/^全部人员/}).click();
+  const search=panel.getByRole('searchbox',{name:'搜索姓名'});
+  await search.fill('同名');
+  await expect(search).toBeFocused();
+  await expect(rows).toHaveCount(2);
+  await expect(rows.filter({hasText:'工程经理'})).toHaveCount(1);
+  await expect(rows.filter({hasText:'建筑设计师'})).toHaveCount(1);
+  await expect(metric('已审完成')).toHaveText('2');
+
+  const artifacts=path.resolve('.local/completion-statistics-browser');
+  await mkdir(artifacts,{recursive:true});
+  await panel.screenshot({path:path.join(artifacts,'completion-statistics-desktop.png')});
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth+1));
+  await search.fill('没有对应人员');
+  await expect(rows).toHaveCount(0);
+  await expect(metric('已审完成')).toHaveText('0');
+  await search.fill('');
+  await org.getByRole('button',{name:/未归类/}).click();
+  await expect(rows).toHaveCount(2);
+  await expect(metric('已审完成')).toHaveText('0');
+  await engineering.click();
+  await expect(rows).toHaveCount(1);
+  await rows.first().getByText('按类别查看',{exact:true}).click();
+  await expect(rows.first().getByText('领导安排',{exact:true})).toBeVisible();
+  assert.ok(await page.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth+1));
+  await org.evaluate(node=>{node.scrollTop=0;});
+  await page.evaluate(()=>window.scrollTo(0,0));
+  await page.screenshot({fullPage:true,path:path.join(artifacts,'completion-statistics-mobile.png')});
+  await page.emulateMedia({media:'print'});
+  await expect(org).toBeHidden();
+  await expect(search).toBeHidden();
+  await expect(rows).toHaveCount(1);
+  await expect(metric('已审完成')).toHaveText('1');
   assert.deepEqual(errors,[]);
 });
 

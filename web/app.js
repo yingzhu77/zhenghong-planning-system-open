@@ -1305,7 +1305,7 @@
       render:function(){renderShell(true);},toast:toast,richItem:richItem,richCopy:richCopy,richCollect:richCollect,flush:snapDraft,
       presentationAction:function(task){return window.MeetingController?window.MeetingController.savedAction(task):'';},
       onSaved:function(task){if(window.MeetingController)window.MeetingController.onSaved(task);}});
-    if (window.CompletionStatistics) window.CompletionStatistics.configure({S:S,esc:esc,request:reporterRequest,
+    if (window.CompletionStatistics) window.CompletionStatistics.configure({S:S,esc:esc,request:reporterRequest,organizationTree:organizationTree,
       render:function(){renderShell(true);},toast:toast});
     if (window.ProjectPlanStatistics) window.ProjectPlanStatistics.configure({S:S,esc:esc,request:reporterRequest,
       render:function(){renderShell(true);},toast:toast});
@@ -4461,30 +4461,36 @@
       ? !S.memberDirectoryUI.selection
       : S.memberDirectoryUI.selection?.[0]===division && S.memberDirectoryUI.selection[1]===team);
   }
-  function memberDirectoryTree(directory) {
+  function organizationTree(organizations,options) {
     var divisions=new Map();
-    directory.forEach(function(row){
-      var division=row.org?.division || '',team=row.org?.team;
+    organizations.forEach(function(org){
+      var division=org?.division || '',team=org?.team;
       if(!divisions.has(division))divisions.set(division,new Set());
       if(team)divisions.get(division).add(team);
     });
     function link(label,division,team,kind) {
-      return '<button type="button" class="member-directory-link'+(kind?' '+kind:'')+'" data-member-filter'
+      return '<button type="button" class="member-directory-link'+(kind?' '+kind:'')+'" data-organization-filter'+(options.filterAttribute?' '+options.filterAttribute:'')
         +(division===undefined?'':' data-division="'+esc(division)+'" data-team="'+esc(team)+'"')
-        +' aria-pressed="'+memberSelection(division,team)+'" onclick="App.filterMembers(this)">'
+        +' aria-pressed="'+options.selected(division,team)+'" onclick="'+options.filter+'(this)">'
         +(kind==='member-directory-unit'?'<span class="member-directory-unit-icon" aria-hidden="true"></span>':'')
         +esc(label)+'</button>';
     }
     var branches=Array.from(divisions).map(function(entry,index){
       var division=entry[0],teams=Array.from(entry[1]),label=division || '未归类';
-      var open=S.memberDirectoryUI.open.has(division),id='memberDirectoryTeams'+index;
+      var open=options.open.has(division),id=options.idPrefix+index;
       return '<li><div class="member-directory-branch">'
-        +(teams.length?'<button type="button" class="member-directory-toggle" aria-label="'+esc(label)+'下的组别" aria-expanded="'+open+'" aria-controls="'+id+'" data-division="'+esc(division)+'" onclick="App.toggleMemberDivision(this)"></button>':'')
+        +(teams.length?'<button type="button" class="member-directory-toggle" aria-label="'+esc(label)+'下的组别" aria-expanded="'+open+'" aria-controls="'+id+'" data-division="'+esc(division)+'" onclick="'+options.toggle+'(this)"></button>':'')
         +link(label,division,'','member-directory-unit')+'</div>'
         +(teams.length?'<ul id="'+id+'" class="member-directory-teams"'+(open?'':' hidden')+'>'
           +teams.map(function(team){return '<li>'+link(team,division,team)+'</li>';}).join('')+'</ul>':'')+'</li>';
     }).join('');
-    return '<nav class="member-directory-nav" aria-label="人员组织"><ul><li>'+link('全部人员')+'</li>'+branches+'</ul></nav>';
+    return '<nav class="member-directory-nav" aria-label="'+esc(options.label)+'"><ul><li>'+link('全部人员')+'</li>'+branches+'</ul></nav>';
+  }
+  function memberDirectoryTree(directory) {
+    return organizationTree(directory.map(function(row){return row.org;}),{
+      idPrefix:'memberDirectoryTeams',label:'人员组织',open:S.memberDirectoryUI.open,selected:memberSelection,
+      filterAttribute:'data-member-filter',filter:'App.filterMembers',toggle:'App.toggleMemberDivision'
+    });
   }
   function memberDirectoryResults(directory) {
     var search=S.memberDirectoryUI.search.trim().toLocaleLowerCase(), selection=S.memberDirectoryUI.selection;

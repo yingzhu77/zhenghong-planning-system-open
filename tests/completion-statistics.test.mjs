@@ -20,13 +20,27 @@ test('complete employee statistics preserve authorization, dates, frozen deadlin
     await assert.rejects(completionStatistics(pool, ops, { ...range, project_id: 'missing-project' }), error => error.status === 403);
     await assert.rejects(completionStatistics(pool, ops, { start: '2026-02-30', end: '2026-03-01' }), error => error.status === 400);
     await admin.query("INSERT INTO public.profiles(user_id,name,role,status) VALUES('history-no-login','匿名历史档案','pm','approved')");
+    await admin.query(`INSERT INTO app_private.personnel_directory(user_id,division,team,title,sort_order) VALUES
+      ('demo-pm-res','匿名工程部','一组','工程师',1),
+      ('demo-pm-com','匿名计划部','','计划员',2),
+      ('history-no-login','历史部门','','',3)`);
     const result = await completionStatistics(pool, ops, range);
     assert.equal(result.employees.length, 5); assert.equal(result.totals.completed, 0);
     assert.equal(result.employees.every(person => person.counts.completed === 0), true);
     assert.equal(result.employees.some(person => person.user_id === 'history-no-login'), false);
+    const directory = ({division,team,title,sort_order}) => ({division,team,title,sort_order});
+    for (const list of [result.employees,result.filters.employees]) {
+      assert.deepEqual(directory(list.find(person => person.user_id === pm.id)),
+        {division:'匿名工程部',team:'一组',title:'工程师',sort_order:1});
+      assert.deepEqual(directory(list.find(person => person.user_id === ops.id)),
+        {division:null,team:null,title:null,sort_order:null});
+      assert.ok(list.every(person => person.user_id !== 'history-no-login' && !Object.hasOwn(person,'email')));
+    }
     const byProject = await completionStatistics(pool, ops, { ...range, project_id: 'demo-res' });
     assert.equal(byProject.employees.some(person => person.user_id === 'demo-pm-com'), false);
     assert.equal(byProject.employees.some(person => person.user_id === 'demo-president'), true);
+    assert.deepEqual(directory(byProject.employees.find(person => person.user_id === pm.id)),
+      {division:'匿名工程部',team:'一组',title:'工程师',sort_order:1});
   });
   let approved;
   await t.test('more than one queue page is aggregated without per-item source SQL, using actual completion dates', async () => {
