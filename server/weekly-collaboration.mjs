@@ -141,6 +141,11 @@ async function existingReport(client, scope, submitter) {
     [...scope.weekValues,submitter])).rows[0].found;
 }
 
+async function scopedConflicts(client,scope,candidate) {
+  return (await client.query(`SELECT * FROM app_private.scoped_weekly_settings_conflicts($1,$2,$3,$4::date,$5)`,
+    [...scope.eligibility,scope.week,candidate])).rows[0] || {};
+}
+
 async function appendOperation(client, user, scope, operation, kind, revision, cell, fingerprint) {
   const { name } = await getProfile(client, user.id);
   await client.query(`INSERT INTO app_private.weekly_collaboration_operations
@@ -209,10 +214,31 @@ export function createWeeklyCollaboration(pool) {
     if (changed) notify(scope);
   }
 
-  async function access(client, user, scope, settings) {
-    const allowed=settings?(await client.query('SELECT app_private.weekly_collaboration_operator() AS allowed')).rows[0].allowed
-      : ['member','unconfigured'].includes(await roomAccess(client,user,scope));
-    if (!allowed) fail(403,settings?'只有管理员可指定提交负责人。':'当前账号没有该项目专业的协同权限。');
+  async function access(client, user, scope) {
+    if (!['member','unconfigured'].includes(await roomAccess(client,user,scope))) fail(403,'当前账号没有该项目专业的协同权限。');
+  }
+
+  async function settingsAccess(client,user,scope) {
+    if ((await client.query('SELECT app_private.weekly_collaboration_operator() AS allowed')).rows[0].allowed) return null;
+    if ((await getProfile(client,user.id))?.role !== 'viewer')
+      fail(403,'当前账号没有该项目的协同设置权限。');
+    const projects=(await client.query('SELECT * FROM app_private.personnel_admin_projects()')).rows;
+    if (!projects.length || scope && !projects.some(p=>p.project_id===scope.projectId && p.report_scope_id===scope.scopeId))
+      fail(403,'当前账号没有该项目的协同设置权限。');
+    await client.query("SELECT set_config('app.scoped_weekly_settings','on',true)");
+    return projects;
+  }
+
+  async function scopedSettingsState(client,scope) {
+    const draft=await readWeek(client,scope);
+    const eligible=(await client.query('SELECT * FROM app_private.weekly_collaboration_participants($1,$2,$3)',scope.eligibility)).rows;
+    const submitter=eligible.find(person=>person.user_id===draft?.submitter_id);
+    const conflicts=draft?await scopedConflicts(client,scope,draft.submitter_id):{};
+    const locked=draft && (draft.plan_id || draft.shared_monthly_plan_id || draft.unplanned_items?.length || draft.published_report_id || conflicts.has_month_draft);
+    const status=!draft?'unconfigured':draft.published_report_id?'published':!submitter?'submitter_unavailable':
+      !draft.plan_id && !draft.shared_monthly_plan_id && conflicts.has_report?'legacy_report':'ready';
+    return {status,revision:draft?.revision || 0,submitter_id:draft?.submitter_id || null,
+      submitter_name:submitter?.name || '',can_configure:!locked,eligible,member_ids:draft?.member_ids ?? null};
   }
 
   async function roomAccess(client,user,scope) {
@@ -279,7 +305,7 @@ export function createWeeklyCollaboration(pool) {
     const tab=body.tab_id ?? '';
     if (tab!=='' && (typeof tab!=='string' || !uuid.test(tab))) fail(400,'协同页面标识不正确。');
     return withIdentity(pool,user.id,async client => {
-      await access(client,user,scope,false);
+      await access(client,user,scope);
       return state(client,user,scope,false,{tab,activeCell:body.active_cell});
     });
   }
@@ -320,8 +346,9 @@ export function createWeeklyCollaboration(pool) {
   async function settings(user,body) {
     const scope=scopeOf(body);
     const result = await withIdentity(pool,user.id,async client => {
-      await access(client,user,scope,true);
-      if (!Object.hasOwn(body,'submitter_id')) return state(client,user,scope,true);
+      const scoped=await settingsAccess(client,user,scope);
+      const readSettings=()=>scoped?scopedSettingsState(client,scope):state(client,user,scope,true);
+      if (!Object.hasOwn(body,'submitter_id')) return readSettings();
       const submitter = body.submitter_id;
       if (typeof submitter !== 'string' || !submitter || submitter.length > 128) fail(400,'请选择一位提交负责人。');
       const requestedMembers=body.member_ids;
@@ -333,25 +360,27 @@ export function createWeeklyCollaboration(pool) {
       const draft=await readWeek(client,scope);
       if (draft && draft.report_scope_id!==scope.scopeId) fail(409,'该周的合并填报范围已变化，请核对原协同稿。');
       const members=requestedMembers===undefined?draft?.member_ids ?? null:[...new Set(requestedMembers.filter(id=>id!==submitter))].sort();
-      if (draft?.submitter_id===submitter && JSON.stringify(draft.member_ids ?? null)===JSON.stringify(members)) return state(client,user,scope,true);
+      if (draft?.submitter_id===submitter && JSON.stringify(draft.member_ids ?? null)===JSON.stringify(members)) return readSettings();
       if (draft?.published_report_id) fail(409,'该周已提交，不能修改协同设置。');
       if (draft && draft.submitter_id!==submitter) {
         // Other weeks can create or edit these drafts under the same monthly locks.
         for (const month of Object.values(monthsOf(scope))) await lockSharedMonth(client,scope,draft.submitter_id,month);
-        if (await ownerIsLocked(client,scope,draft)) fail(409,'本周已有月计划或协同进展，不能更改负责人。');
+        if (await ownerIsLocked(client,scope,draft) || scoped && (await scopedConflicts(client,scope,draft.submitter_id)).has_month_draft)
+          fail(409,'本周已有月计划或协同进展，不能更改负责人。');
       }
       if (members?.length) {
         const eligible=(await client.query('SELECT * FROM app_private.weekly_collaboration_participants($1,$2,$3)',scope.eligibility)).rows;
         if (!members.every(id=>eligible.some(person=>person.user_id===id))) fail(403,'协同人员须有该项目专业的填报权限。');
       }
-      if (draft?.submitter_id!==submitter && await existingReport(client,scope,submitter)) fail(409,'该负责人本周已有个人周报，请选择其他报告周或核对历史记录。');
+      if (draft?.submitter_id!==submitter && (scoped ? (await scopedConflicts(client,scope,submitter)).has_report : await existingReport(client,scope,submitter)))
+        fail(409,'该负责人本周已有个人周报，请选择其他报告周或核对历史记录。');
       const revision = draft ? draft.revision + 1 : 1;
       await client.query(`INSERT INTO app_private.weekly_collaboration_drafts(project_id,line,week,report_scope_id,submitter_id,configured_by,revision,member_ids)
         VALUES($1,$2,$3::date,$4,$5,$6,$7,$8) ON CONFLICT(project_id,line,week) DO UPDATE
         SET submitter_id=excluded.submitter_id,configured_by=excluded.configured_by,revision=excluded.revision,member_ids=excluded.member_ids`,
         [...scope.weekValues,scope.scopeId,submitter,user.id,revision,members]);
       await appendOperation(client,user,scope,randomUUID(),'designate',revision,null,digest([submitter,members]));
-      return state(client,user,scope,true);
+      return readSettings();
     });
     if (Object.hasOwn(body,'submitter_id')) notify(scope);
     return result;
@@ -360,11 +389,12 @@ export function createWeeklyCollaboration(pool) {
   async function catalog(user,body) {
     weekOf(body);
     return withIdentity(pool,user.id,async client => {
-      await access(client,user,null,true);
+      const scopedProjects=await settingsAccess(client,user,null);
       const scopes=await configuredReportScopes(client);
       const grouped=new Map(scopes.flatMap(scope=>scope.project_ids.map(id=>[id,scope])));
-      const records=(await client.query(`SELECT id,name,project_type,reporting_professions FROM public.projects
-        WHERE active ORDER BY sort_order,name,id`)).rows;
+      const records=scopedProjects ? scopedProjects.map(({project_id,project_name,...project})=>({...project,id:project_id,name:project_name}))
+        : (await client.query(`SELECT id,name,project_type,reporting_professions FROM public.projects
+          WHERE active ORDER BY sort_order,name,id`)).rows;
       const candidates=[];
       for (const row of records) {
         const merged=grouped.get(row.id);
@@ -396,7 +426,7 @@ export function createWeeklyCollaboration(pool) {
     const fingerprint=digest(['items',action,id,item,revision]);
     const result=await withIdentity(pool,user.id,async client=>{
       await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
-      await access(client,user,scope,false);
+      await access(client,user,scope);
       if (await replay(client,user,scope,operation,fingerprint)) return state(client,user,scope,false);
       const draft=await readWeek(client,scope);
       if (draft) await lockSharedMonth(client,scope,draft.submitter_id,monthsOf(scope).current);
@@ -441,7 +471,7 @@ export function createWeeklyCollaboration(pool) {
     const fingerprint=digest(['month',month,action,id,item,revision]);
     const result=await withIdentity(pool,user.id,async client=>{
       await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
-      await access(client,user,scope,false);
+      await access(client,user,scope);
       const draft=await readWeek(client,scope);
       if (!draft) fail(409,'当前报告周尚未启用协同。');
       if (transition && draft.submitter_id!==user.id) fail(403,'仅本周指定负责人可以确认或撤回月计划。');
@@ -518,7 +548,7 @@ export function createWeeklyCollaboration(pool) {
     const fingerprint = digest(['edit',planId,body.cell,encoded]);
     const result = await withIdentity(pool,user.id,async client => {
       await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
-      await access(client,user,scope,false);
+      await access(client,user,scope);
       const draft=await readWeek(client,scope);
       if (draft) await lockSharedMonth(client,scope,draft.submitter_id,monthsOf(scope).current);
       if (await replay(client,user,scope,operation,fingerprint)) return state(client,user,scope,false);
@@ -556,7 +586,7 @@ export function createWeeklyCollaboration(pool) {
     const fingerprint = digest(['publish',body.revision,planId,period,attachments,...(body.plan_revision===undefined?[]:[body.plan_revision])]);
     const result = await withIdentity(pool,user.id,async client => {
       await lockWeeklyCollaborationWrite(client,projectId,line,week);
-      await access(client,user,scope,false);
+      await access(client,user,scope);
       const draft=await readWeek(client,scope);
       if (draft) await lockSharedMonth(client,scope,draft.submitter_id,monthsOf(scope).current);
       const current=await state(client,user,scope,false);

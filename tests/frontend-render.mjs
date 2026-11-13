@@ -235,7 +235,8 @@ function run(role, options = {}) {
           filters, options: {projects, groups: projects.map(project => project.display_group || project.name), disciplines: [], levels: []}, rows: [], projects: [],
           totals: {total: 0, completed: 0, incomplete: 0, group_count: 0, project_count: 0}}, error: null})};
       }
-      if(url.startsWith('/api/monthly-summaries?month=') || ['/api/commercial-module-grants','/api/project-reporting-grants'].includes(url))return {ok:true,json:async()=>({data:[]})};
+      if(url.startsWith('/api/monthly-summaries?month=') || ['/api/commercial-module-grants','/api/project-reporting-grants','/api/personnel-directory'].includes(url))return {ok:true,json:async()=>({data:[]})};
+      if(url==='/api/personnel-admin-access')return {ok:true,json:async()=>({data:{projects:[]}})};
       const tables = { '/api/report-scopes/list': 'report_scopes', '/api/monthly-plans/list': 'monthly_plans',
         '/api/reporter-tasks/list': 'reporter_tasks', '/api/coordination-tasks/list': 'coordination_tasks', '/api/completions/list': 'completion_requests',
         '/api/report-attachments/list': 'report_attachments' };

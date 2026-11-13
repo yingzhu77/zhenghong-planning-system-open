@@ -40,6 +40,95 @@ async function login(browser, f, id, errors) {
   await page.getByRole('button', { name: '登录', exact: true }).click(); await expect(page.locator('.planning-mainnav')).toBeVisible();
   return page;
 }
+
+test('组织树和全局姓名搜索可区分同名账号，并保存原权限编辑', {timeout:90000}, async t=>{
+  const f=await runtime(t),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];
+  t.after(()=>browser.close());
+  await f.admin.query("UPDATE public.profiles SET name='匿名同名员工' WHERE user_id IN ('demo-pm-res','demo-pm-com')");
+  await f.admin.query(`INSERT INTO app_private.personnel_directory(user_id,division,team,title,sort_order)
+    VALUES('demo-pm-res','示例项目部','工程组','工程经理',10),
+      ('demo-pm-com','示例设计部','设计组','建筑设计师',20)`);
+  const page=await login(browser,f,'demo-ops',errors);
+  await page.getByRole('button',{name:'系统设置',exact:true}).click();
+  await page.getByRole('button',{name:'成员与权限',exact:true}).click();
+  const nav=page.getByRole('navigation',{name:'人员组织'});
+  const rows=page.locator('[data-directory-member]');
+  await expect(nav.getByRole('button',{name:'示例项目部',exact:true})).toBeVisible();
+  await expect(nav.getByRole('button',{name:'未归类',exact:true})).toBeVisible();
+  const toggle=nav.getByRole('button',{name:'示例项目部下的组别'});
+  await expect(toggle).toHaveAttribute('aria-expanded','false');
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded','true');
+  const team=nav.getByRole('button',{name:'工程组',exact:true});
+  await team.click();
+  await expect(team).toHaveAttribute('aria-pressed','true');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('示例项目部 · 工程组 · 工程经理');
+  const search=page.getByRole('searchbox',{name:'搜索姓名'});
+  await search.fill('同名');
+  await expect(search).toBeFocused();
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(1)).toContainText('示例设计部 · 设计组 · 建筑设计师');
+  await rows.filter({hasText:'建筑设计师'}).getByLabel('匿名同名员工的专业条线').selectOption('设计');
+  await expect(page.getByText('已保存',{exact:true})).toBeVisible();
+  await expect(search).toHaveValue('同名');
+  await expect(rows.filter({hasText:'建筑设计师'}).getByLabel('匿名同名员工的专业条线')).toHaveValue('设计');
+  const saved=await f.admin.query("SELECT user_id,discipline FROM public.profiles WHERE name='匿名同名员工' ORDER BY user_id");
+  assert.deepEqual(saved.rows,[{user_id:'demo-pm-com',discipline:'设计'},{user_id:'demo-pm-res',discipline:'工程'}]);
+  const artifacts=path.resolve('.local/personnel-directory-browser');
+  await mkdir(artifacts,{recursive:true});
+  await page.locator('.member-directory').screenshot({path:path.join(artifacts,'personnel-desktop.png')});
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth+1));
+  await search.fill('没有对应人员');
+  await expect(page.getByText('未找到匹配的人员。')).toBeVisible();
+  await search.fill('');
+  await expect(rows).toHaveCount(1);
+  await expect(team).toHaveAttribute('aria-pressed','true');
+  await page.evaluate(()=>window.scrollTo(0,0));
+  await page.screenshot({fullPage:true,path:path.join(artifacts,'personnel-mobile.png')});
+  assert.deepEqual(errors,[]);
+});
+
+test('限定范围的项目人员管理员通过只读人员页进入本项目协同设置', {timeout:90000}, async t=>{
+  const f=await runtime(t),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];
+  t.after(()=>browser.close());
+  await f.admin.query("UPDATE public.profiles SET role='viewer',viewer_scope='projects',viewer_access='materials' WHERE user_id='demo-pzo'");
+  await f.admin.query("DELETE FROM public.project_members WHERE user_id='demo-pzo'");
+  await f.admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES('demo-pzo',$1,'viewer')",[f.project]);
+  await f.admin.query("INSERT INTO app_private.project_personnel_admins(user_id,project_id) VALUES('demo-pzo',$1)",[f.project]);
+  await f.admin.query(`INSERT INTO app_private.personnel_directory(user_id,division,team,title,sort_order)
+    VALUES('demo-pm-res','示例项目部','工程组','工程经理',10),('demo-pm-com','示例设计部','设计组','建筑设计师',20)`);
+  const page=await login(browser,f,'demo-pzo',errors);
+  const settings=page.getByRole('button',{name:'系统设置',exact:true});
+  await settings.click();
+  await expect(page.getByRole('button',{name:'成员与权限',exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'本项目人员',exact:true}).click();
+  const panel=page.locator('.member-directory');
+  await expect(panel.getByRole('heading',{name:'本项目人员'})).toBeVisible();
+  await expect(panel).toContainText('工程经理');
+  await expect(panel).not.toContainText('建筑设计师');
+  await expect(panel.locator('select')).toHaveCount(0);
+  await panel.getByRole('searchbox',{name:'搜索姓名'}).fill('住宅');
+  await expect(panel.locator('[data-directory-member]')).toHaveCount(1);
+  await expect(panel).toContainText('匿名管理员代填验收住宅 · 工程');
+  await settings.click();
+  await page.getByRole('button',{name:'周报协同设置',exact:true}).click();
+  const collaboration=page.locator('[data-weekly-collaboration]');
+  await expect(collaboration.getByRole('heading',{name:'周报协同设置'})).toBeVisible();
+  const project=collaboration.locator('[data-weekly-collaboration-project]');
+  await expect(project.locator('option')).toHaveText(['请选择项目','匿名管理员代填验收住宅']);
+  await project.selectOption(f.project);
+  await collaboration.locator('[data-weekly-collaboration-profession]').selectOption('工程');
+  await collaboration.locator('[data-weekly-collaboration-submitter]').selectOption('demo-pm-res');
+  await collaboration.getByRole('button',{name:'保存协同设置'}).click();
+  await expect(collaboration.getByRole('status')).toContainText('已保存。');
+  const configured=await f.admin.query("SELECT submitter_id FROM app_private.weekly_collaboration_drafts WHERE project_id=$1 AND line='工程'",[f.project]);
+  assert.deepEqual(configured.rows,[{submitter_id:'demo-pm-res'}]);
+  assert.deepEqual(errors,[]);
+});
+
 const richEditor = (page, id) => page.locator('[data-rich-editor-for="' + id + '"] .ql-editor');
 async function context(page, f) {
   const response = await page.request.get(f.url + '/api/admin-plans/context?project_type=res&month=' + f.month);

@@ -55,6 +55,7 @@ services:
       - ./db/040-materials-only-viewers.sql:/docker-entrypoint-initdb.d/040-materials-only-viewers.sql:ro
       - ./db/041-weekly-collaboration-items.sql:/docker-entrypoint-initdb.d/041-weekly-collaboration-items.sql:ro
       - ./db/042-shared-monthly-plans.sql:/docker-entrypoint-initdb.d/042-shared-monthly-plans.sql:ro
+      - ./db/043-personnel-directory.sql:/docker-entrypoint-initdb.d/043-personnel-directory.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s

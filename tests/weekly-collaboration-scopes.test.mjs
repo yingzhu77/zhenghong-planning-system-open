@@ -31,7 +31,7 @@ const denied = error => error.status === 403;
 const conflict = error => error.status === 409;
 const collaborationGuard = error => error.code === 'P3801' || error.status === 409;
 
-async function fixture(t, through = 42) {
+async function fixture(t, through = 43) {
   const database = await initializedDatabase({through:38});
   t.after(() => database.close());
   const admin = testPool(database, null);
@@ -67,6 +67,7 @@ async function fixture(t, through = 42) {
     await database.exec(await readFile(new URL('../db/039-weekly-collaboration-scopes.sql',import.meta.url),'utf8'));
   };
   if (through >= 39) await upgrade();
+  if (through >= 40) await database.exec(await readFile(new URL('../db/040-materials-only-viewers.sql',import.meta.url),'utf8'));
   const upgradeItems = async () => {
     await database.exec('RESET ROLE');
     await database.exec(await readFile(new URL('../db/041-weekly-collaboration-items.sql',import.meta.url),'utf8'));
@@ -77,6 +78,7 @@ async function fixture(t, through = 42) {
     await database.exec(await readFile(new URL('../db/042-shared-monthly-plans.sql',import.meta.url),'utf8'));
   };
   if (through >= 42) await upgradeMonths();
+  if (through >= 43) await database.exec(await readFile(new URL('../db/043-personnel-directory.sql',import.meta.url),'utf8'));
   return { database, admin, pool, upgrade, upgradeItems, upgradeMonths, service:createWeeklyCollaboration(pool) };
 }
 
@@ -289,6 +291,40 @@ test('管理员名单控制合并住宅协同，组员可直接登记和编辑�
   assert.equal(saved.report.biz.items[0].project_id,'zhx2');
   assert.equal(saved.report.biz.items[0].prog,'组员已填写进展');
   assert.equal(saved.report.biz.monthly_plan_ids,undefined);
+});
+
+test('单项目管理员仅可查看和配置授权范围的协同名单',async t=>{
+  const f=await fixture(t), service=f.service, viewer={id:'scoped-personnel-viewer'}, scope=inWeek(merged);
+  await f.admin.query("INSERT INTO app_private.auth_users(user_id,email,password_hash) VALUES($1,'viewer@example.invalid','unused')",[viewer.id]);
+  await f.admin.query("INSERT INTO public.profiles(user_id,name,role,status,viewer_scope,viewer_access) VALUES($1,'项目管理员','viewer','approved','projects','materials')",[viewer.id]);
+  await f.admin.query('INSERT INTO app_private.project_personnel_admins(user_id,project_id) VALUES($1,$2)',[viewer.id,merged.project_id]);
+  await f.admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES($1,'zhx1','viewer'),($1,'zhx2','viewer')",[viewer.id]);
+  await assert.rejects(service.catalog(viewer,{week}),denied);
+  await f.admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES($1,'klq','viewer')",[viewer.id]);
+  assert.deepEqual((await service.catalog(viewer,{week})).projects.map(p=>p.project_id),[merged.project_id]);
+  await assert.rejects(service.settings(viewer,inWeek(independent)),denied);
+  await assert.rejects(service.settings(viewer,{...scope,report_scope_id:null}),denied);
+  await assert.rejects(service.settings(viewer,{...scope,submitter_id:incomplete.id}),denied);
+  const request={...scope,submitter_id:engineering.id,member_ids:[engineeringPeer.id]};
+  const saved=await service.settings(viewer,request);
+  assert.equal(saved.status,'ready');
+  assert.equal(saved.submitter_id,engineering.id);
+  assert.deepEqual(saved.member_ids,[engineeringPeer.id]);
+  assert.ok(!Object.hasOwn(saved,'report') && !Object.hasOwn(saved,'cells') && !Object.hasOwn(saved,'plan'));
+  assert.deepEqual(await service.settings(viewer,scope),saved);
+  await assert.rejects(service.open(viewer,scope),denied);
+  await service.monthItems(engineeringPeer,{...scope,month,action:'add',revision:0,
+    operation_id:randomUUID(),item:item('不返回给项目管理员的月稿','zhx2')});
+  assert.equal((await service.settings(viewer,scope)).can_configure,false);
+  await assert.rejects(service.settings(viewer,{...scope,submitter_id:engineeringPeer.id,member_ids:[]}),conflict);
+  const changed=await service.settings(viewer,{...request,member_ids:[]});
+  assert.deepEqual(changed.member_ids,[]);
+  await assert.rejects(service.open(engineeringPeer,scope),denied);
+  await withIdentity(f.pool,viewer.id,async client=>{
+    assert.equal((await client.query('SELECT user_id FROM app_private.personnel_directory')).rows.length,0);
+    assert.equal((await client.query('SELECT project_id FROM app_private.weekly_collaboration_drafts')).rows.length,0);
+    assert.equal((await client.query('SELECT project_id FROM app_private.collaboration_monthly_drafts')).rows.length,0);
+  });
 });
 
 test('共同编制的月计划跨周共享，确认前可提交，确认后保留事项和进展身份',async t=>{

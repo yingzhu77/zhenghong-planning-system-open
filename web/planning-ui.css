@@ -576,6 +576,63 @@ h2{font-size:20px}h3{font-size:16px}h4{font-size:14px}
 .reporting-profession-actions input,.reporting-profession-actions select{flex:1;min-width:min(12rem,100%)}
 .reporting-profession-actions button{flex:none}
 
+.member-directory-header{display:grid;grid-template-columns:1fr auto minmax(12rem,20rem);align-items:center;gap:10px 14px;margin-bottom:14px}
+.member-directory-header h2{margin:0}
+.member-directory-header label{font-weight:600}
+.member-directory-header input{width:100%;min-width:0}
+.member-directory-help{margin:0 0 16px;padding:8px 12px}
+.member-directory-help summary{cursor:pointer}
+.member-directory-help>div{margin-top:8px}
+.member-directory-layout{display:grid;grid-template-columns:minmax(10rem,12rem) minmax(0,1fr);gap:18px}
+.member-directory-nav{border-right:1px solid var(--line);padding-right:10px}
+.member-directory-nav ul{list-style:none;margin:0;padding:0}
+.member-directory-branch{display:flex;align-items:center}
+.member-directory-branch:not(:has(.member-directory-toggle)){padding-left:28px}
+.member-directory-link,.member-directory-toggle{border:0;background:transparent;color:var(--ink);border-radius:4px}
+.member-directory-link{display:flex;align-items:center;gap:8px;width:100%;text-align:left;min-height:32px;padding:5px 8px;overflow-wrap:anywhere}
+.member-directory-link:hover,.member-directory-toggle:hover{background:#f3f7fc}
+.member-directory-link[aria-pressed=true]{background:var(--planning-blue-light);color:var(--planning-blue);font-weight:600}
+.member-directory-toggle{display:grid;place-items:center;flex:0 0 28px;min-height:32px;padding:0}
+.member-directory-toggle::before{content:"";width:0;height:0;border:4px solid transparent;border-left-color:var(--mut);transform:translateX(2px)}
+.member-directory-toggle[aria-expanded=true]::before{transform:translateY(2px) rotate(90deg)}
+.member-directory-unit-icon{width:10px;height:8px;margin-top:4px;border:1px solid currentColor;border-top:0;position:relative;flex:none}
+.member-directory-unit-icon::before{content:"";position:absolute;left:0;top:-4px;width:7px;height:7px;border-top:1px solid currentColor;border-left:1px solid currentColor;transform:rotate(45deg)}
+.member-directory-nav .member-directory-teams{padding-left:36px}
+.member-directory-results{min-width:0}
+.member-directory-results>p{margin:0 0 8px}
+.member-directory-context{margin-top:3px}
+.member-directory-table select{width:100%;min-width:0}
+.member-directory-table select+select{margin-top:4px}
+.member-directory-table label{display:flex;align-items:center;gap:6px;line-height:1.45}
+.planning-shell .member-directory-table input[type=checkbox]{width:16px;height:16px;min-height:0;margin:0;flex:none}
+.member-directory-table .reporting-profession-actions select{min-width:0}
+.member-directory-table .pchip{white-space:normal}
+.member-directory-remove{min-width:24px;min-height:24px;padding:0;border:0;background:transparent;color:var(--ink2)}
+.member-directory-remove:hover{color:#b91c1c}
+.planning-shell .member-directory-table :is(th,td){padding:8px;white-space:normal}
+@media screen and (min-width:1101px){
+  .member-directory-table td[data-label="负责项目"]{width:23%}
+  .member-directory-table td:is([data-label="账号角色"],[data-label="审核状态"]) select{min-width:5.3rem}
+  .member-directory-table td[data-label="专业条线"] select{min-width:6.1rem}
+  .member-directory-table td[data-label="填报模块 / 项目专业"] select{min-width:8rem}
+}
+@media screen and (max-width:1100px){
+  .member-directory-table thead{position:absolute;clip-path:inset(50%);overflow:hidden;width:1px;height:1px;white-space:nowrap}
+  .planning-shell .member-directory-results .tablewrap>table{display:block;min-width:0}
+  .member-directory-table tbody{display:grid;gap:10px}
+  .member-directory-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:10px;border:1px solid var(--line);border-radius:8px}
+  .member-directory-table td{display:block;border:0;min-width:0}
+  .member-directory-table td:first-child{grid-column:1/-1}
+  .member-directory-table td[data-label]::before{content:attr(data-label);display:block;font-size:13px;color:var(--mut);margin-bottom:3px}
+}
+@media screen and (max-width:767px){
+  .member-directory-header{grid-template-columns:minmax(0,1fr);gap:6px}
+  .member-directory-layout{grid-template-columns:minmax(0,1fr)}
+  .member-directory-nav{max-height:230px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:4px}
+  .member-directory-link,.member-directory-toggle{min-height:40px}
+  .member-directory-table tr{grid-template-columns:minmax(0,1fr)}
+}
+
 .planning-shell .overview-plan-adaptive .overview-data-table td.overview-cell-module[rowspan],
 .monthly-summary-table td[data-label="模块"][rowspan]{background:#d0e0f1}
 .professional-overview .overview-report-sections{display:grid;gap:18px}

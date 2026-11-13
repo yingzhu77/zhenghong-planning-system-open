@@ -3,7 +3,7 @@ import pg from 'pg';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createAuth, createOriginCheck } from './auth.mjs';
-import { executeDatabase, replaceLeaderNotes } from './database.mjs';
+import { executeDatabase, replaceLeaderNotes, withIdentity } from './database.mjs';
 import { listReporterTasks, saveReporterTask, listProjectPeople, assignLeaderRequirement } from './reporter-tasks.mjs';
 import { listProjectLibrary, setLibraryPassword, unlockProjectLibrary, uploadProjectDocument, withdrawProjectDocument, loadProjectDocument, MAX_LIBRARY_BYTES } from './project-library.mjs';
 import { listCoordinationTasks, createCoordinationTask } from './coordination-tasks.mjs';
@@ -289,6 +289,27 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   }));
   app.get('/api/project-reporting-grants', auth.requireUser, asyncRoute(async (req, res) => {
     res.set('Cache-Control','no-store'); res.json({ data: await listProjectReportingGrants(pool, req.user), error: null });
+  }));
+  app.get('/api/personnel-directory', auth.requireUser, asyncRoute(async (req, res) => {
+    const rows = await withIdentity(pool, req.user.id, async client => {
+      const { allowed } = (await client.query('SELECT app_private.weekly_collaboration_operator() AS allowed')).rows[0];
+      if (!allowed) throw new HttpError(403, '仅管理员可读取人员目录', 'personnel_directory_forbidden');
+      return (await client.query('SELECT user_id, division, team, title, sort_order FROM app_private.personnel_directory ORDER BY sort_order, user_id')).rows;
+    });
+    res.set('Cache-Control', 'no-store').json({ data: rows, error: null });
+  }));
+  app.get('/api/personnel-admin-access', auth.requireUser, asyncRoute(async (req, res) => {
+    const projects = await withIdentity(pool, req.user.id, async client =>
+      (await client.query('SELECT project_id,project_name,report_scope_id FROM app_private.personnel_admin_projects()')).rows);
+    res.json({ data: { projects }, error: null });
+  }));
+  app.get('/api/project-personnel', auth.requireUser, asyncRoute(async (req, res) => {
+    const rows = await withIdentity(pool, req.user.id, async client => {
+      const { allowed } = (await client.query('SELECT EXISTS(SELECT 1 FROM app_private.personnel_admin_projects()) AS allowed')).rows[0];
+      if (!allowed) throw new HttpError(403, '当前账号没有本项目人员查看权限', 'project_personnel_forbidden');
+      return (await client.query('SELECT * FROM app_private.project_personnel()')).rows;
+    });
+    res.json({ data: rows, error: null });
   }));
   app.post('/api/project-reporting-grants', auth.requireUser, express.json({ limit: '8kb' }), asyncRoute(async (req, res) => {
     res.json({ data: await grantProjectReportingProfession(pool, req.user, req.body ?? {}), error: null });

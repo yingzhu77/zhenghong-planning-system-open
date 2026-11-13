@@ -533,7 +533,9 @@
 
   var S = {
     session: null, uid: null, profile: null,
-    projects: [], reportScopes: [], milestones: [], reports: [], members: [], orgList: [], pms: [], businessModuleGrants: [], projectReportingGrants: [], versions: [],
+    projects: [], reportScopes: [], milestones: [], reports: [], members: [], personnelDirectory: [], projectPersonnel: [], orgList: [], pms: [], businessModuleGrants: [], projectReportingGrants: [], versions: [],
+    personnelAdminProjects: [],
+    memberDirectoryUI: {search:'',selection:null,open:new Set()},
     reviews: [], leaderNotes: [], coordinationTasks: [], monthlyPlans: [], monthlySummaries: [], monthlyUnmatchedItems: [], briefDrafts: {},
     /* 项目主数据：master=设计数据与经营指标 / phases=分期与销售套数 / drawings=项目图纸 */
     master: [], phases: [], drawings: [],
@@ -869,7 +871,13 @@
   function render(html, keepScroll) {
     var y = keepScroll ? (window.pageYOffset || (document.documentElement && document.documentElement.scrollTop) || 0) : 0;
     var previousCollaboration=rootEl.querySelector && rootEl.querySelector('[data-weekly-collaboration][data-inline-key]');
+    var activeSearch=document.activeElement?.id==='memberDirectorySearch' ? document.activeElement : null;
     rootEl.innerHTML = html;
+    if(activeSearch){
+      var search=document.getElementById('memberDirectorySearch');
+      search?.focus({preventScroll:true});
+      search?.setSelectionRange(activeSearch.selectionStart,activeSearch.selectionEnd);
+    }
     var inline=rootEl.querySelector && rootEl.querySelector('[data-weekly-collaboration][data-inline-key]');
     if(inline && previousCollaboration && inline.dataset.inlineKey===previousCollaboration.dataset.inlineKey)inline.replaceWith(previousCollaboration);
     if (window.ZHRichEditor) window.ZHRichEditor.mount(rootEl,richBinding);
@@ -1057,7 +1065,11 @@
       if(!myProjects().length)return renderFail('当前尚未分配负责项目，请联系管理员。');
     }
     S.view = S.profile.role === 'viewer' ? (S.profile.viewer_access==='materials'?'managementArchive':S.profile.viewer_scope==='projects'?'managementPlans':'managementCoord') : S.profile.role === 'pm' ? 'form' : isPzo() && myProjects().some(function(p){return isCom(p.id);}) ? 'presCom' : 'pres';
-    if(S.profile.role==='viewer')return showPage();
+    if(S.profile.role==='viewer'){
+      await loadPersonnelAdminAccess();
+      if(epoch===dataEpoch)return showPage();
+      return;
+    }
     if (window.PlanningBoot) {
       try { await Promise.all([loadPageData(), window.PlanningBoot.ensureEditor(), S.profile.role === 'pm' && window.PlanningBoot.ensureReporter ? window.PlanningBoot.ensureReporter() : Promise.resolve(),
         window.PlanningBoot.ensureWorkflow ? window.PlanningBoot.ensureWorkflow(true) : Promise.resolve(),
@@ -1109,6 +1121,13 @@
       if (!response.ok && !result.error) result.error = {message:'请求失败（HTTP ' + response.status + '）'};
       return result;
     } catch (error) { return {error:{message:'无法连接服务器，请检查网络后重试。'}}; }
+  }
+  async function loadPersonnelAdminAccess() {
+    if(S.profile?.role!=='viewer' || S.profile.status!=='approved' || S.profile.viewer_access!=='materials')return;
+    var epoch=dataEpoch,result=await reporterRequest('/api/personnel-admin-access');
+    if(epoch!==dataEpoch)return;
+    S.personnelAdminProjects=!result.error && Array.isArray(result.data?.projects)?result.data.projects:[];
+    invalidateData(['projectPersonnel']);
   }
   var planningAITransactions=new Map();
   function meetingContext() {
@@ -1451,6 +1470,8 @@
     milestones: ['milestones', '节点基线', 'sort_order'],
     reports: ['reports', '填报记录', 'submitted_at', false],
     members: ['profiles', '成员', 'created_at'],
+    personnelDirectory: ['@personnelDirectory', '人员组织归属'],
+    projectPersonnel: ['@projectPersonnel', '本项目人员'],
     pms: ['project_members', '项目成员'],
     orgList: ['org', '组织', 'sort_order'],
     versions: ['plan_versions', '计划版本', 'created_at'],
@@ -1488,6 +1509,8 @@
     S.overviewUI = { project: '', line: '', discipline: '', open: {} };
     S.professionalOverview=null;
     S.reportingProfessionProject='';S.projectReportingGrants=[];
+    S.memberDirectoryUI={search:'',selection:null,open:new Set()};
+    S.personnelAdminProjects=[];
     S.followupRows = []; S.monthlyUnmatchedItems=[];S.meetingDraft = null; S.mlineDraft = {}; S.reporterArchiveTab = 'knowledge'; S.submittingReport = null;
     S.attachmentIds = []; S.completionQuery = null; S.completionMeta = {}; S.completionQueueIds = [];
   }
@@ -1497,7 +1520,8 @@
       current = navs.filter(function (item) { return item.k === 'board'; })[0] || navs[0];
       S.view = current.k;
     }
-    if(S.profile.role==='viewer' || isManagementReadView(S.view))return [];
+    if(S.profile.role==='viewer')return current?.v==='projectPersonnel'?['projectPersonnel']:[];
+    if(isManagementReadView(S.view))return [];
     var common = ['projects','reportScopes'];
     if (!isPlanningManager()) common = common.concat(['pms', 'reports']);
     if(S.profile.role==='pm')common.push('businessModuleGrants','projectReportingGrants');
@@ -1520,7 +1544,7 @@
       presPzo: ['members', 'pms', 'milestones', 'reports', 'monthlyPlans', 'monthlySummaries', 'leaderNotes', 'reporterTasks', 'drawings', 'reportAttachments'],
       adminPlans: ['monthlyPlans'],
       master: ['milestones', 'master', 'phases', 'drawings'],
-      lineAdm: ['milestones'], members: ['members', 'pms', 'businessModuleGrants','projectReportingGrants']
+      lineAdm: ['milestones'], members: ['members', 'personnelDirectory', 'pms', 'businessModuleGrants','projectReportingGrants']
     };
     var needed = current ? pages[current.v] || [] : ['reports'];
     if (S.profile.role==='ops' && ['pres','presCom','presPzo'].indexOf(current && current.v)>=0) needed=needed.concat(['reporterTasks']);
@@ -1573,6 +1597,8 @@
             if(result && !result.error && (!Array.isArray(result.data) || result.data.some(function(row){return !row || typeof row.user_id!=='string' || row.project_id!=='hf' || row.line!=='设计部';})))throw new Error('附加商业专业授权返回不完整，请刷新重试');
           }
           else if(key==='projectReportingGrants')result=await reporterRequest('/api/project-reporting-grants');
+          else if(key==='personnelDirectory')result=await reporterRequest('/api/personnel-directory');
+          else if(key==='projectPersonnel')result=await reporterRequest('/api/project-personnel');
           else if(key==='monthlySummaries'){
             if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(scope))throw new Error('查看月份无法确定，请重新选择周期');
             result=await reporterRequest('/api/monthly-summaries?month='+encodeURIComponent(scope));
@@ -1972,7 +1998,8 @@
     if(epoch===dataEpoch && navigation===pageNavigation && S.view==='form' && key===inlineCollaborationKey())S.inlineCollaboration={key:key,mode:mode};
   }
   function weeklyCollaborationContext() {
-    var settings=S.view==='weeklyCollaborationSettings' && S.profile && S.profile.role==='ops' && S.profile.status==='approved';
+    var settings=S.view==='weeklyCollaborationSettings' && S.profile?.status==='approved'
+      && (S.profile.role==='ops' || S.personnelAdminProjects.length>0);
     var scope=inlineCollaborationMode()==='member' && weeklyCollaborationScope();
     if (!settings && !scope) return null;
     var period=settings?currentPeriod():S.pmPeriod || currentPeriod();
@@ -4389,23 +4416,84 @@
       +'<select name="project_profession" aria-label="为'+esc(member.name || '提报人')+'分配项目专业" required><option value="">选择项目专业</option>'+options.join('')+'</select>'
       +'<button class="btn sm" type="submit">分配专业</button></form>':'');
   }
-  function viewMembers() {
+  function memberDirectory() {
+    var directory;
+    if(S.view==='projectPersonnel')directory=S.projectPersonnel.map(function(row){
+      return {member:row,org:row.division?row:null};
+    });
+    else {
+      var byUser=new Map(S.personnelDirectory.map(function(row){return [row.user_id,row];}));
+      directory=S.members.map(function(member){return {member:member,org:byUser.get(member.user_id)};});
+    }
+    return directory.sort(function(a,b){return (a.org?.sort_order ?? Infinity)-(b.org?.sort_order ?? Infinity);});
+  }
+  function memberSelection(division,team) {
+    return !S.memberDirectoryUI.search.trim() && (division===undefined
+      ? !S.memberDirectoryUI.selection
+      : S.memberDirectoryUI.selection?.[0]===division && S.memberDirectoryUI.selection[1]===team);
+  }
+  function memberDirectoryTree(directory) {
+    var divisions=new Map();
+    directory.forEach(function(row){
+      var division=row.org?.division || '',team=row.org?.team;
+      if(!divisions.has(division))divisions.set(division,new Set());
+      if(team)divisions.get(division).add(team);
+    });
+    function link(label,division,team,kind) {
+      return '<button type="button" class="member-directory-link'+(kind?' '+kind:'')+'" data-member-filter'
+        +(division===undefined?'':' data-division="'+esc(division)+'" data-team="'+esc(team)+'"')
+        +' aria-pressed="'+memberSelection(division,team)+'" onclick="App.filterMembers(this)">'
+        +(kind==='member-directory-unit'?'<span class="member-directory-unit-icon" aria-hidden="true"></span>':'')
+        +esc(label)+'</button>';
+    }
+    var branches=Array.from(divisions).map(function(entry,index){
+      var division=entry[0],teams=Array.from(entry[1]),label=division || '未归类';
+      var open=S.memberDirectoryUI.open.has(division),id='memberDirectoryTeams'+index;
+      return '<li><div class="member-directory-branch">'
+        +(teams.length?'<button type="button" class="member-directory-toggle" aria-label="'+esc(label)+'下的组别" aria-expanded="'+open+'" aria-controls="'+id+'" data-division="'+esc(division)+'" onclick="App.toggleMemberDivision(this)"></button>':'')
+        +link(label,division,'','member-directory-unit')+'</div>'
+        +(teams.length?'<ul id="'+id+'" class="member-directory-teams"'+(open?'':' hidden')+'>'
+          +teams.map(function(team){return '<li>'+link(team,division,team)+'</li>';}).join('')+'</ul>':'')+'</li>';
+    }).join('');
+    return '<nav class="member-directory-nav" aria-label="人员组织"><ul><li>'+link('全部人员')+'</li>'+branches+'</ul></nav>';
+  }
+  function memberDirectoryResults(directory) {
+    var search=S.memberDirectoryUI.search.trim().toLocaleLowerCase(), selection=S.memberDirectoryUI.selection;
+    var filtered=directory.filter(function(row){
+      if(search)return String(row.member.name || '').toLocaleLowerCase().includes(search);
+      return !selection || (row.org?.division || '')===selection[0] && (!selection[1] || row.org?.team===selection[1]);
+    });
+    var scoped=S.view==='projectPersonnel';
+    return {count:filtered.length,rows:(scoped?projectPersonnelRows(filtered):memberRows(filtered)) || '<tr><td colspan="'+(scoped?2:8)+'" class="empty">'
+      +(search?'未找到匹配的人员。':'该组织暂无人员。')+'</td></tr>'};
+  }
+  function refreshMemberDirectoryResults() {
+    var results=memberDirectoryResults(memberDirectory());
+    document.getElementById('memberDirectoryRows').innerHTML=results.rows;
+    document.getElementById('memberDirectoryCount').textContent=results.count+' 人';
+    rootEl.querySelectorAll('[data-member-filter]').forEach(function(button){
+      button.setAttribute('aria-pressed',String(memberSelection(button.dataset.division,button.dataset.team)));
+    });
+  }
+  function memberRows(directory) {
     var reportingProjects=reportingSettingsProjects().filter(function(project){return project.reporting_professions && project.reporting_professions.length;});
-    var rows = S.members.map(function (m) {
+    var actionId="this.closest('[data-directory-member]').dataset.directoryMember";
+    return directory.map(function (row) {
+      var m=row.member, name=m.name || '未填写姓名';
       var mine = S.pms.filter(function (x) { return x.user_id === m.user_id; }).map(function (x) { return x.project_id; });
       if (m.role!=='viewer' && m.project_id && mine.indexOf(m.project_id) < 0) mine.push(m.project_id);
       var chips = mine.map(function (pid) {
-        return '<span class="pchip">' + esc(projName(pid)) + '<b onclick="App.memberUnassign(\'' + esc(m.user_id) + '\',\'' + esc(pid) + '\')">×</b></span>';
+        return '<span class="pchip">' + esc(projName(pid)) + '<button type="button" class="member-directory-remove" data-project-id="'+esc(pid)+'" aria-label="移除'+esc(name)+'的'+esc(projName(pid))+'权限" onclick="App.memberUnassign('+actionId+',this.dataset.projectId)">×</button></span>';
       }).join('');
       var rest = S.projects.filter(function (p) { return mine.indexOf(p.id) < 0; });
       var addSel = rest.length
-        ? '<select onchange="App.memberAssign(\'' + esc(m.user_id) + '\',this.value)" style="width:150px;margin-top:6px"><option value="">＋ 添加项目</option>'
+        ? '<select aria-label="为'+esc(name)+'添加项目" onchange="App.memberAssign('+actionId+',this.value)"><option value="">＋ 添加项目</option>'
           + rest.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>'; }).join('') + '</select>'
         : '';
       var isPending = m.status !== 'approved' || ((m.role === 'pm' || m.role==='viewer' && m.viewer_scope==='projects') && !mine.length);
       var hasCom = mine.filter(function (pid) { return isCom(pid); }).length > 0;
       var lineCell = hasCom && m.role==='pm'
-        ? '<select onchange="App.memberSet(\'' + esc(m.user_id) + '\',\'biz_line\',this.value)">'
+        ? '<select aria-label="'+esc(name)+'的填报模块" onchange="App.memberSet('+actionId+',\'biz_line\',this.value)">'
           + ['<option value="">未指定模块</option>', '<option value="*"' + (m.biz_line === '*' ? ' selected' : '') + '>全部商业模块（测试）</option>'].concat(businessLinesForProjects(S.projects.filter(function(p){return mine.indexOf(p.id)>=0 && isCom(p.id);})).map(function (l) {
               return '<option value="' + esc(l) + '"' + (m.biz_line === l ? ' selected' : '') + '>' + esc(l) + '</option>';
             })).join('') + '</select>'
@@ -4415,37 +4503,59 @@
       lineCell+=memberReportingProfessions(m,reportingProjects);
       /* 专业条线（组织口径）：指定后该成员在「我的条线」只看本专业的节点 */
       var discCell = m.role === 'pm'
-        ? '<select onchange="App.memberSet(\'' + esc(m.user_id) + '\',\'discipline\',this.value)">'
+        ? '<select aria-label="'+esc(name)+'的专业条线" onchange="App.memberSet('+actionId+',\'discipline\',this.value)">'
           + ['<option value="">未指定条线</option>'].concat(DISCIPLINES.map(function (l) {
               return '<option value="' + esc(l) + '"' + (m.discipline === l ? ' selected' : '') + '>' + esc(l) + '</option>';
             })).join('') + '</select>'
         : '<span class="muted">—</span>';
-      return '<tr>'
-        + '<td><b>' + esc(m.name || '未填写姓名') + '</b>' + (isPending ? ' <span class="badge yellow">待处理</span>' : '') + '</td>'
-        + '<td><select onchange="App.memberSet(\'' + esc(m.user_id) + '\',\'role\',this.value)">'
+      return '<tr data-directory-member="'+esc(m.user_id)+'">'
+        + '<td><b>' + esc(name) + '</b>' + (isPending ? ' <span class="badge yellow">待处理</span>' : '')
+        + memberDirectoryContext(row)+'</td>'
+        + '<td data-label="账号角色"><select aria-label="'+esc(name)+'的账号角色" onchange="App.memberSet('+actionId+',\'role\',this.value)">'
         + ['pm', 'ops', 'president', 'pzo', 'viewer'].map(function (r) { return '<option value="' + r + '" ' + (m.role === r ? 'selected' : '') + '>' + ROLE_LABEL[r] + '</option>'; }).join('')
         + '</select></td>'
-        + '<td>' + (m.role === 'pm' || m.role==='viewer' && m.viewer_scope==='projects' ? (chips || '<span class="muted">未分配</span>') + addSel : m.role==='viewer'?'<span class="muted">全部项目（只读）</span>':'<span class="muted">全部项目（汇总端）</span>') + '</td>'
-        + '<td>' + discCell + '</td>'
-        + '<td>' + lineCell + '</td>'
-        + '<td>' + (m.role==='pm'?'<label><input type="checkbox" '+(m.management_viewer?'checked ':'')+'onchange="App.memberSet(\''+esc(m.user_id)+'\',\'management_viewer\',this.checked)">全项目只读</label>':m.role==='viewer'?'<select aria-label="查看人项目范围" onchange="App.memberSet(\''+esc(m.user_id)+'\',\'viewer_scope\',this.value)"><option value="all"'+(m.viewer_scope!=='projects'?' selected':'')+'>全部项目只读</option><option value="projects"'+(m.viewer_scope==='projects'?' selected':'')+'>已分配项目只读</option></select><select aria-label="查看人内容范围" onchange="App.memberSet(\''+esc(m.user_id)+'\',\'viewer_access\',this.value)"><option value="full"'+(m.viewer_access!=='materials'?' selected':'')+'>计划及项目资料</option><option value="materials"'+(m.viewer_access==='materials'?' selected':'')+'>仅项目资料</option></select>':'<span class="muted">—</span>') + '</td>'
-        + '<td><select onchange="App.memberSet(\'' + esc(m.user_id) + '\',\'status\',this.value)">'
+        + '<td data-label="负责项目">' + (m.role === 'pm' || m.role==='viewer' && m.viewer_scope==='projects' ? (chips || '<span class="muted">未分配</span>') + addSel : m.role==='viewer'?'<span class="muted">全部项目（只读）</span>':'<span class="muted">全部项目（汇总端）</span>') + '</td>'
+        + '<td data-label="专业条线">' + discCell + '</td>'
+        + '<td data-label="填报模块 / 项目专业">' + lineCell + '</td>'
+        + '<td data-label="管理查看权限">' + (m.role==='pm'?'<label><input type="checkbox" '+(m.management_viewer?'checked ':'')+'onchange="App.memberSet('+actionId+',\'management_viewer\',this.checked)">全项目只读</label>':m.role==='viewer'?'<select aria-label="查看人项目范围" onchange="App.memberSet('+actionId+',\'viewer_scope\',this.value)"><option value="all"'+(m.viewer_scope!=='projects'?' selected':'')+'>全部项目只读</option><option value="projects"'+(m.viewer_scope==='projects'?' selected':'')+'>已分配项目只读</option></select><select aria-label="查看人内容范围" onchange="App.memberSet('+actionId+',\'viewer_access\',this.value)"><option value="full"'+(m.viewer_access!=='materials'?' selected':'')+'>计划及项目资料</option><option value="materials"'+(m.viewer_access==='materials'?' selected':'')+'>仅项目资料</option></select>':'<span class="muted">—</span>') + '</td>'
+        + '<td data-label="审核状态"><select aria-label="'+esc(name)+'的审核状态" onchange="App.memberSet('+actionId+',\'status\',this.value)">'
         + ['pending', 'approved'].map(function (s) { return '<option value="' + s + '" ' + (m.status === s ? 'selected' : '') + '>' + (s === 'approved' ? '已通过' : '待审核') + '</option>'; }).join('')
         + '</select></td>'
-        + '<td class="muted">' + esc(fmtTime(m.created_at)) + '</td></tr>';
+        + '<td data-label="加入时间" class="muted">' + esc(fmtTime(m.created_at)) + '</td></tr>';
     }).join('');
-
-    return '<div class="card"><h2>成员管理</h2>'
-      + '<div class="notice"><b>账号角色</b>：提报人、管理员、总裁、项目总、查看人。查看人可授权全部项目或已分配项目的计划、事项与资料只读；指定项目查看人可作为本项目协调对象。提报人可另外授权全项目只读，原填报职责不变。自助注册固定为「待审核」的提报人，角色与只读权限由管理员授权。<br>'
+  }
+  function memberDirectoryContext(row) {
+    var context=row.org?[row.org.division,row.org.team,row.org.title].filter(Boolean).join(' · '):'未归类';
+    return '<div class="muted member-directory-context">'+esc(context)+'</div>';
+  }
+  function projectPersonnelRows(directory) {
+    return directory.map(function(row){
+      var member=row.member;
+      return '<tr data-directory-member="'+esc(member.user_id)+'"><td><b>'+esc(member.name || '未填写姓名')+'</b>'
+        +memberDirectoryContext(row)+'</td><td data-label="项目及填报专业">'
+        +member.projects.map(function(project){
+          var primary=project.biz_line==='*'?'全部商业模块':project.biz_line || project.discipline;
+          var lines=Array.from(new Set([primary].concat(project.professions).filter(Boolean)));
+          return '<div>'+esc(project.project_name)+(lines.length?' · '+esc(lines.join('、')):'')+'</div>';
+        }).join('')+'</td></tr>';
+    }).join('');
+  }
+  function viewMembers(scoped) {
+    var directory=memberDirectory(),results=memberDirectoryResults(directory);
+    return '<section class="card member-directory"><header class="member-directory-header"><h2>'+(scoped?'本项目人员':'成员与权限')+'</h2>'
+      + '<label for="memberDirectorySearch">搜索姓名</label><input id="memberDirectorySearch" type="search" placeholder="输入全名或部分姓名"'
+      + ' value="'+esc(S.memberDirectoryUI.search)+'" oninput="if(!event.isComposing)App.searchMembers(this.value)" oncompositionend="App.searchMembers(this.value)"></header>'
+      + (scoped?'':'<details class="notice member-directory-help"><summary>角色与权限说明</summary><div><b>账号角色</b>：提报人、管理员、总裁、项目总、查看人。查看人可授权全部项目或已分配项目的计划、事项与资料只读；指定项目查看人可作为本项目协调对象。提报人可另外授权全项目只读，原填报职责不变。自助注册固定为「待审核」的提报人，角色与只读权限由管理员授权。<br>'
       + '<b>项目类型</b>：住宅与商业共用提报人角色，按获授权项目显示相应表单。商业项目（弘坊）沿用已分配的专业模块，各人填报自己获授权的部分。<br>'
       + '<b>特殊账号权限</b>：管理员管理项目和成员；总裁查看计划总览并记录总裁交代；项目总查看商业计划总览并记录项目总安排。历史评价保留只读，具体操作沿用现有权限，特殊账号均不能修改他人的原始提报。<br>'
-      + '<b>专业条线</b>：指定后该成员在工作台只看本专业的节点；未指定时，按原项目范围查看全部节点。</div>'
-      + '<div class="tablewrap"><table><thead><tr><th style="width:12%">姓名</th><th style="width:11%">账号角色</th><th style="width:22%">负责项目</th>'
-      + '<th style="width:13%">专业条线</th>'
-      + '<th style="width:15%">填报模块 / 项目专业</th>'
-      + '<th>管理查看权限</th>'
-      + '<th style="width:11%">审核状态</th><th style="width:12%">加入时间</th></tr></thead>'
-      + '<tbody>' + (rows || '<tr><td colspan="8" class="empty">暂无成员。</td></tr>') + '</tbody></table></div></div>';
+      + '<b>专业条线</b>：指定后该成员在工作台只看本专业的节点；未指定时，按原项目范围查看全部节点。</div></details>')
+      + '<div class="member-directory-layout">'+memberDirectoryTree(directory)+'<div class="member-directory-results">'
+      + '<p id="memberDirectoryCount" class="muted" role="status">'+results.count+' 人</p>'
+      + '<div class="tablewrap"><table class="member-directory-table"><thead><tr><th scope="col">姓名</th>'
+      + (scoped?'<th scope="col">项目及填报专业</th>':'<th scope="col">账号角色</th><th scope="col">负责项目</th>'
+      + '<th scope="col">专业条线</th><th scope="col">填报模块 / 项目专业</th><th scope="col">管理查看权限</th>'
+      + '<th scope="col">审核状态</th><th scope="col">加入时间</th>')+'</tr></thead>'
+      + '<tbody id="memberDirectoryRows">'+results.rows+'</tbody></table></div></div></div></section>';
   }
 
   /* ================= 外壳 ================= */
@@ -4494,7 +4604,10 @@
 
   function planningNavItems() {
     var role=S.profile.role, items;
-    if(role==='viewer')return managementNavItems();
+    if(role==='viewer')return managementNavItems().concat(S.personnelAdminProjects.length?[
+      {k:'projectPersonnel',v:'projectPersonnel',label:'本项目人员',group:'settings'},
+      {k:'weeklyCollaborationSettings',v:'weeklyCollaborationSettings',label:'周报协同设置',group:'settings'}
+    ]:[]);
     if(role==='pzo'){
       var assignedProjects=myProjects();
       items=[{k:'pres',v:'pres',pt:'res',label:'住宅计划总览',group:'overview'},
@@ -4542,7 +4655,7 @@
   function isPlanningManager() { return isReviewer() || isPzo(); }
   function planningGroups(items) {
     var labels={work:'工作台',form:'本期填报',projects:'项目资料',history:'历史记录',overview:'计划总览',analysis:'统计分析',collaboration:'事项管理',settings:'系统设置'};
-    var order=S.profile.role==='viewer'?['overview','collaboration','projects']:isPlanningManager()?['overview','analysis','collaboration','projects','settings']:['work','form','overview','collaboration','projects','history'];
+    var order=S.profile.role==='viewer'?['overview','collaboration','projects','settings']:isPlanningManager()?['overview','analysis','collaboration','projects','settings']:['work','form','overview','collaboration','projects','history'];
     return order.filter(function(key){return items.some(function(item){return item.group===key;});}).map(function(key){return {key:key,label:labels[key]};});
   }
   function detailProjects() {
@@ -4610,9 +4723,10 @@
     var groupInfo=groups.filter(function(t){return t.key===group;})[0] || groups[0];
     S.ptype=current && current.pt || (S.view==='detail' && isCom(S.detailPid)?'com':'res');
     var body='', view=current && current.v, managementRead=isManagementReadView(S.view);
-    if(S.profile.role==='viewer' && !managementRead)body='<div class="card empty">没有管理查看权限，请联系管理员。</div>';
+    if(view==='weeklyCollaborationSettings')body='<div data-weekly-collaboration></div>';
+    else if(view==='projectPersonnel')body=viewMembers(true);
+    else if(S.profile.role==='viewer' && !managementRead)body='<div class="card empty">没有管理查看权限，请联系管理员。</div>';
     else if(managementRead)body=window.ManagementReader?window.ManagementReader.html(S.view):'<div class="card empty">正在加载只读资料…</div>';
-    else if(view==='weeklyCollaborationSettings')body='<div data-weekly-collaboration></div>';
     else if(S.view==='detail')body=viewProjectDetail();
     else if(view==='presPzo')body=viewPresPzo();
     else if(rev){
@@ -4867,6 +4981,11 @@
 
     reload: async function () {
       if (attachmentBusy()) return;
+      if(S.profile?.role==='viewer' && S.profile.viewer_access==='materials'){
+        var epoch=dataEpoch;
+        await loadPersonnelAdminAccess();
+        if(epoch!==dataEpoch)return;
+      }
       if(isManagementReadView(S.view)){await showPage(false,true);if(S.view==='managementLibrary' && window.ProjectLibrary)await window.ProjectLibrary.reload();return;}
       if(S.view==='library' && window.ProjectLibrary){await window.ProjectLibrary.reload();return;}
       if (S.profile && S.profile.role === 'pm') {
@@ -5701,6 +5820,29 @@
       } finally { if(S.submittingReport===saveToken)S.submittingReport=null; }
     },
 
+    searchMembers: function(value) {
+      if(!['members','projectPersonnel'].includes(S.view) || value===S.memberDirectoryUI.search)return;
+      S.memberDirectoryUI.search=value;
+      refreshMemberDirectoryResults();
+    },
+    filterMembers: function(button) {
+      if(!['members','projectPersonnel'].includes(S.view))return;
+      var division=button.dataset.division;
+      S.memberDirectoryUI.selection=division===undefined?null:[division,button.dataset.team];
+      S.memberDirectoryUI.search='';
+      document.getElementById('memberDirectorySearch').value='';
+      var toggle=button.previousElementSibling;
+      if(toggle?.classList.contains('member-directory-toggle') && toggle.getAttribute('aria-expanded')==='false')App.toggleMemberDivision(toggle);
+      refreshMemberDirectoryResults();
+    },
+    toggleMemberDivision: function(button) {
+      if(!['members','projectPersonnel'].includes(S.view))return;
+      var open=button.getAttribute('aria-expanded')==='false',division=button.dataset.division;
+      if(open)S.memberDirectoryUI.open.add(division);
+      else S.memberDirectoryUI.open.delete(division);
+      button.setAttribute('aria-expanded',String(open));
+      document.getElementById(button.getAttribute('aria-controls')).hidden=!open;
+    },
     memberSet: async function (uid, field, value) {
       /* 函数级权限拦截：总裁为只读浏览，成员管理仅限运营管理员 */
       if (!S.profile || S.profile.role !== 'ops') return toast('无权限：成员管理仅限管理员', 'err');
