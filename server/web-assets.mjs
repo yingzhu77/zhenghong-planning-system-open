@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 
-const files = ['logo.png', 'login-bg-desktop.avif', 'login-bg-mobile.avif', 'login-bg-desktop.webp', 'login-bg-mobile.webp',
+const files = ['logo.png', 'favicon.png', 'login-bg-desktop.avif', 'login-bg-mobile.avif', 'login-bg-desktop.webp', 'login-bg-mobile.webp',
   'styles.css', 'planning-ui.css', 'cloud-compat.js', 'login-boot.js', 'app.js', 'password-change.js', 'password-change.css',
   'rich-text.js', 'rich-editor.js', 'selection-format.css', 'vendor/quill/quill.js', 'vendor/quill/quill.core.css',
   'reporter-tasks.js', 'reporter-archive.js', 'reporter-workbench.css', 'reporter-tasks.css', 'reporter-archive.css',
