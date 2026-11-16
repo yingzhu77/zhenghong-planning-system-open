@@ -246,6 +246,59 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
   await editor.getByRole('button',{name:'本期填报',exact:true}).first().click();
   await editor.getByRole('button',{name:'本期专业汇总',exact:true}).click();
   await expect(editor.locator('.professional-overview[data-report-id]')).toContainText('机电复核');
+
+  for (const page of [lead, editor]) {
+    await page.getByRole('button',{name:'返回本期填报',exact:true}).click();
+    await expect(page.locator('[data-collaboration-result]')).toBeVisible();
+  }
+  const withdraw = lead.getByRole('button',{name:'撤回周报并修改',exact:true});
+  await expect(withdraw).toBeEnabled();
+  await expect(editor.getByRole('button',{name:'撤回周报并修改',exact:true})).toHaveCount(0);
+  const withdrawRequests = () => requests.filter(url=>url.endsWith('/api/weekly-collaboration/withdraw')).length;
+  const attempts = withdrawRequests();
+  lead.once('dialog',dialog=>dialog.dismiss());
+  await withdraw.click();
+  assert.equal(withdrawRequests(), attempts);
+  await expect(lead.locator('[data-collaboration-result]')).toBeVisible();
+  await leadPanel.screenshot({ path: artifacts + '/withdraw-report-entry.png' });
+
+  lead.once('dialog',dialog=>dialog.accept());
+  const withdrawing = lead.waitForResponse(response=>response.url().endsWith('/api/weekly-collaboration/withdraw'));
+  await withdraw.click();
+  const withdrawn = await withdrawing;
+  assert.equal(withdrawn.status(),200,JSON.stringify((await withdrawn.json()).error));
+  await expect(lead.locator('[data-collaboration-result]')).toBeHidden();
+  await expect(editor.locator('[data-collaboration-result]')).toBeHidden({timeout:18000});
+  await expect(leadCell).toBeEditable();
+  await expect(editorCell).toBeEditable();
+  await expect(leadCell.locator('strong')).toContainText('已完成会签');
+  await expect(cell(lead,'pilot-source-one:blocker')).toHaveText('待核对接口尺寸');
+  const selectedAttachment = lead.getByRole('checkbox',{name:'将协同验收附件.png选入本期填报'});
+  await expect(selectedAttachment).toBeChecked();
+  await selectedAttachment.click();
+  await expect(lead.locator('.report-attachment-library summary')).toContainText('1 件');
+  await lead.reload();
+  await expect(leadCell).toBeEditable();
+  await lead.locator('.report-attachment-library summary').click();
+  await expect(selectedAttachment).not.toBeChecked();
+  await selectedAttachment.click();
+  await expect(selectedAttachment).toBeChecked();
+
+  await editorCell.press('End');
+  await editor.keyboard.insertText('、撤回后复核');
+  await expect(leadCell).toContainText('撤回后复核',{timeout:18000});
+  await expect(editor.locator('[data-collaboration-publish]')).toBeHidden();
+  const publishingAgain = lead.waitForResponse(response=>response.url().endsWith('/api/weekly-collaboration/publish'));
+  await lead.locator('[data-collaboration-publish]').click();
+  const publishedAgain = await publishingAgain;
+  assert.equal(publishedAgain.status(),200,JSON.stringify((await publishedAgain.json()).error));
+  const republishedReport = (await publishedAgain.json()).data.report;
+  assert.deepEqual(republishedReport.biz.attachments,[attachmentId]);
+  assert.ok(republishedReport.biz.items[0].prog.includes('撤回后复核'));
+  await expect(overview).toContainText('撤回后复核');
+  await expect(editor.locator('[data-collaboration-result]')).toBeVisible({timeout:18000});
+  await expect(editorPanel).toContainText('撤回后复核');
+
   await fixture.admin.query("DELETE FROM public.project_members WHERE project_id='hf' AND user_id='design-pilot-editor'");
   const revoked = await editor.request.post(fixture.base + '/api/weekly-collaboration/open',{headers,data:{week:fixture.week}});
   assert.equal(revoked.status(),403);

@@ -136,7 +136,7 @@ test('professional AI facts and memory remain personal and recheck every origina
 });
 
 test('attachments preserve professional identity and saved history while other lines and lost group access cannot reuse them',async t=>{
-  const f=await fixture(t),dir=await mkdtemp(path.join(os.tmpdir(),'merged-professional-files-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+  const f=await fixture(t,44),dir=await mkdtemp(path.join(os.tmpdir(),'merged-professional-files-'));t.after(()=>rm(dir,{recursive:true,force:true}));
   const input={project_id:zh.anchor,report_scope_id:zh.id,line:'工程',period:week,filename:'匿名工程凭证.png'};
   const attachment=await uploadReportAttachment(f.pool,people.engineer,dir,input,png);
   assert.equal(attachment.line,'工程');assert.equal(attachment.report_scope_id,zh.id);assert.deepEqual(attachment.scope_project_ids,zh.members);

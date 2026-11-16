@@ -3,8 +3,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import * as Y from 'yjs';
+import { previewCompletion, requestCompletion, reviewCompletion } from '../server/completions.mjs';
 import { executeDatabase, withIdentity } from '../server/database.mjs';
-import { confirmMonthlyPlan } from '../server/monthly-plans.mjs';
+import { confirmMonthlyPlan, withdrawMonthlyPlan } from '../server/monthly-plans.mjs';
+import { listReportAttachments } from '../server/report-attachments.mjs';
 import { createWeeklyCollaboration } from '../server/weekly-collaboration.mjs';
 import { initializedDatabase, testPool } from './helpers/pglite-pool.mjs';
 
@@ -31,7 +33,7 @@ const denied = error => error.status === 403;
 const conflict = error => error.status === 409;
 const collaborationGuard = error => error.code === 'P3801' || error.status === 409;
 
-async function fixture(t, through = 43) {
+async function fixture(t, through = 44) {
   const database = await initializedDatabase({through:38});
   t.after(() => database.close());
   const admin = testPool(database, null);
@@ -79,7 +81,12 @@ async function fixture(t, through = 43) {
   };
   if (through >= 42) await upgradeMonths();
   if (through >= 43) await database.exec(await readFile(new URL('../db/043-personnel-directory.sql',import.meta.url),'utf8'));
-  return { database, admin, pool, upgrade, upgradeItems, upgradeMonths, service:createWeeklyCollaboration(pool) };
+  const upgradeWithdrawals = async () => {
+    await database.exec('RESET ROLE');
+    await database.exec(await readFile(new URL('../db/044-weekly-report-withdrawal.sql',import.meta.url),'utf8'));
+  };
+  if (through >= 44) await upgradeWithdrawals();
+  return { database, admin, pool, upgrade, upgradeItems, upgradeMonths, upgradeWithdrawals, service:createWeeklyCollaboration(pool) };
 }
 
 function item(label, projectId) {
@@ -134,6 +141,100 @@ function standaloneReport(f,user,scope,plan,period=week) {
     values:{...identity,period,biz:{monthly_plan_id:plan.id,monthly_plan_month:month,
       items:plan.items.map(row=>({...row,prog:'匿名独立周报',blocker:''}))},...(report_scope_id ? {report_scope_id} : {})}});
 }
+
+test('本周负责人可撤回已提交周报，保留共享稿和附件，组员修改后重新提交',async t=>{
+  const f=await fixture(t,44), {service}=f;
+  const {current,prior}=(await f.admin.query(`SELECT monday::text AS current,(monday-7)::text AS prior
+    FROM (SELECT date_trunc('week',now() AT TIME ZONE 'Asia/Shanghai')::date AS monday) dates`)).rows[0];
+  const scope=inWeek(custom,current), month=current.slice(0,7);
+  const plan=await confirmMonthlyPlan(f.pool,retailLead,{
+    project_id:scope.project_id,line:scope.line,month,items:[{...item('待重新提交的原计划事项'),due:month+'-24'}]
+  });
+  await service.settings(operator,{...scope,submitter_id:retailLead.id,member_ids:[retailPeer.id]});
+  const draft=await service.change(retailPeer,{...scope,plan_id:plan.id,cell:progressCell,
+    update:edit('原提交进展'),operation_id:randomUUID()});
+  const attachment=randomUUID();
+  await f.admin.query(`INSERT INTO public.report_attachments(id,project_id,period,line,owner_id,name,mime,size,storage_key)
+    VALUES ($1,$2,$3,$4,$5,'匿名验收.png','image/png',100,$6)`,
+  [attachment,scope.project_id,current,scope.line,retailLead.id,'report-attachments/'+attachment+'.png']);
+  const publish=revision=>service.publish(retailLead,{...scope,plan_id:plan.id,revision,operation_id:randomUUID(),
+    period:current,attachment_ids:[attachment]});
+  const published=await publish(draft.revision);
+  assert.equal(published.can_withdraw,true);
+  assert.equal((await service.open(retailPeer,scope)).can_withdraw,false);
+  const reportId=String(published.report.id);
+  const request={...scope,report_id:reportId,revision:published.revision,operation_id:randomUUID()};
+  await assert.rejects(service.withdraw(retailPeer,request),denied);
+  await assert.rejects(service.withdraw(retailLead,{...request,revision:draft.revision}),conflict);
+  const readReport=id=>withIdentity(f.pool,operator.id,async client=>(await client.query(
+    'SELECT id FROM public.reports WHERE id=$1',[id])).rows);
+  assert.equal((await readReport(reportId)).length,1);
+
+  const reopened=await service.withdraw(retailLead,request);
+  assert.equal(reopened.status,'ready');
+  assert.equal(reopened.can_publish,true);
+  assert.equal(reopened.report,null);
+  assert.equal(reopened.plan.confirmed_id,plan.id);
+  assert.equal(contents(reopened.cells[progressCell]),'原提交进展');
+  assert.deepEqual(reopened.withdrawn_attachment_ids,[attachment]);
+  assert.equal((await readReport(reportId)).length,0);
+  const archived=(await f.admin.query(`SELECT report_snapshot,actor_id FROM app_private.weekly_collaboration_withdrawals
+    WHERE report_id=$1 AND operation_id=$2`,[reportId,request.operation_id])).rows[0];
+  assert.equal(archived.actor_id,retailLead.id);
+  assert.deepEqual(archived.report_snapshot.biz,published.report.biz);
+  const links=(await f.admin.query(`SELECT attachment_id FROM app_private.weekly_collaboration_withdrawal_attachments
+    WHERE report_id=$1`,[reportId])).rows;
+  assert.deepEqual(links,[{attachment_id:attachment}]);
+  assert.equal((await listReportAttachments(f.pool,retailLead,{ids:[attachment]}))[0].referenced,true);
+  assert.deepEqual(await listReportAttachments(f.pool,operator,{ids:[attachment]}),[]);
+  await assert.rejects(withIdentity(f.pool,retailLead.id,client=>client.query(
+    'SELECT report_snapshot FROM app_private.weekly_collaboration_withdrawals')),error=>error.code==='42501');
+  await assert.rejects(withIdentity(f.pool,retailLead.id,client=>client.query(
+    'SELECT * FROM app_private.discard_report_attachment($1::uuid)',[attachment])),error=>error.code==='P0001');
+  await assert.rejects(withdrawMonthlyPlan(f.pool,retailLead,{project_id:scope.project_id,line:scope.line,month,
+    expected_plan_id:plan.id}),error=>error.code==='monthly_plan_in_use');
+  const peerRoom=await service.open(retailPeer,scope);
+  assert.equal(peerRoom.can_edit,true);
+  assert.equal(peerRoom.can_publish,false);
+  assert.ok(!peerRoom.withdrawn_attachment_ids?.length);
+  assert.equal((await service.withdraw(retailLead,request)).revision,reopened.revision);
+  await assert.rejects(service.withdraw(retailLead,{...request,operation_id:randomUUID()}),conflict);
+
+  const edited=await service.change(retailPeer,{...scope,plan_id:plan.id,cell:blockerCell,
+    update:edit('组员补录后的卡点'),operation_id:randomUUID()});
+  const republished=await publish(edited.revision);
+  assert.equal(republished.status,'published');
+  assert.deepEqual(republished.report.biz.attachments,[attachment]);
+  assert.equal(republished.report.biz.items[0].prog,'原提交进展');
+  assert.equal(republished.report.biz.items[0].blocker,'组员补录后的卡点');
+  assert.equal((await readReport(republished.report.id)).length,1);
+  const reportCount=(await f.admin.query('SELECT count(*)::int AS count FROM public.reports WHERE project_id=$1 AND period=$2 AND line=$3',
+    [scope.project_id,current,scope.line])).rows[0].count;
+  assert.equal(reportCount,1);
+  assert.equal((await service.withdraw(retailLead,request)).report.id,republished.report.id);
+  await assert.rejects(service.withdraw(retailLead,{...request,revision:republished.revision,operation_id:randomUUID()}),conflict);
+
+  const source=await previewCompletion(f.pool,retailLead,{source_key:'plan:'+scope.project_id+':'+republished.report.id+':items:'+sourceId});
+  const completion=await requestCompletion(f.pool,retailLead,{source_key:source.source_key,source_version:source.source_version,
+    completion_date:current,completion_note:'匿名已完工证据'});
+  const approval=await reviewCompletion(f.pool,operator,{id:completion.id,expected_revision:completion.revision,decision:'approve'});
+  assert.equal(approval.status,'approved');
+  assert.equal((await service.open(retailLead,scope)).can_withdraw,false);
+  await assert.rejects(service.withdraw(retailLead,{...scope,revision:republished.revision,report_id:String(republished.report.id),
+    operation_id:randomUUID()}),conflict);
+  assert.equal((await readReport(republished.report.id)).length,1);
+
+  const history=inWeek(custom,prior), oldMonth=prior.slice(0,7);
+  const oldPlan=oldMonth===month?plan:await confirmMonthlyPlan(f.pool,retailLead,{
+    project_id:scope.project_id,line:scope.line,month:oldMonth,items:[{...item('已结束的报告周事项'),due:oldMonth+'-24'}]
+  });
+  const oldDraft=await service.settings(operator,{...history,submitter_id:retailLead.id});
+  const oldReport=await service.publish(retailLead,{...history,plan_id:oldPlan.id,
+    revision:oldDraft.revision,operation_id:randomUUID()});
+  assert.equal(oldReport.can_withdraw,false);
+  await assert.rejects(service.withdraw(retailLead,{...history,report_id:String(oldReport.report.id),
+    revision:oldReport.revision,operation_id:randomUUID()}),conflict);
+});
 
 test('运营可以给不同项目和专业分别指定负责人，同周同一事项标识也不会混稿',async t=>{
   const f=await fixture(t), service=f.service;
@@ -261,6 +362,7 @@ test('038 的活动草稿、操作历史及已发布周报经过 039 重复迁�
   await f.upgradeItems();
   await f.upgradeMonths();
   await f.upgradeMonths();
+  await f.upgradeWithdrawals();
   assert.deepEqual((await f.admin.query(`SELECT to_jsonb(d)-'project_id'-'line'-'report_scope_id'-'unplanned_items'-'member_ids'-'shared_monthly_plan_id' row
     FROM app_private.weekly_collaboration_drafts d WHERE project_id='hf' AND line='设计部' ORDER BY week`)).rows,oldDrafts);
   assert.deepEqual((await f.admin.query(`SELECT to_jsonb(o)-'project_id'-'line' row
@@ -478,6 +580,7 @@ test('042 保留 041 已保存的独立周稿、编辑和操作回执',async t=>
     [scope.project_id,scope.line,scope.week,operationId,engineeringPeer.id,progressCell,
       createHash('sha256').update(JSON.stringify(['edit',null,progressCell,encoded])).digest('hex')]);
   await f.upgradeMonths();
+  await f.upgradeWithdrawals();
   const legacy=await f.service.open(engineeringPeer,scope);
   assert.equal(legacy.plan.shared,false);
   assert.equal(legacy.plan.id,null);

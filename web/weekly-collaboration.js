@@ -254,6 +254,7 @@
         + '<button type="button" class="btn ghost sm collaboration-add-item" data-open-item-form hidden>＋ 增加事项</button>'
         + '<div data-collaboration-items hidden></div><p class="collaboration-attachments" data-collaboration-attachments hidden></p><footer class="collaboration-footer plan-form-actions" hidden>'
         + '<p data-collaboration-saved-info></p><button type="button" class="btn ghost" data-collaboration-result hidden>查看提交结果</button>'
+        + '<button type="button" class="btn ghost" data-collaboration-withdraw hidden>撤回周报并修改</button>'
         + '<button type="button" class="btn primary" data-collaboration-publish hidden>提交专业周报</button></footer></section>';
       const find = selector => this.root.querySelector(selector);
       this.status = find('[data-collaboration-status]');
@@ -301,12 +302,14 @@
       this.toolbar = find('.collaboration-toolbar');
       this.publishButton = find('[data-collaboration-publish]');
       this.resultButton = find('[data-collaboration-result]');
+      this.withdrawReportButton = find('[data-collaboration-withdraw]');
       this.retryButton = find('[data-collaboration-retry]');
       this.copyButton = find('[data-collaboration-copy]');
       this.retryButton.addEventListener('click', () => this.reconnect());
       this.copyButton.addEventListener('click', () => this.copyPending());
       this.publishButton.addEventListener('click', () => this.publish());
       this.resultButton.addEventListener('click', () => this.showResult());
+      this.withdrawReportButton.addEventListener('click', () => this.withdrawReport());
       this.toolbar.addEventListener('pointerdown', event => { if (event.target.closest('button')) event.preventDefault(); });
       this.toolbar.addEventListener('click', event => {
         const button = event.target.closest('[data-collaboration-format]');
@@ -317,9 +320,9 @@
 
     isComposing() { return Array.from(this.editors.values()).some(editor => editor.composing); }
 
-    canLeave() { return !this.publishing && !this.savingItem && !this.confirmingMonth && !this.itemFormChanged() && !this.isComposing() && (!this.queue.length || this.persisted); }
+    canLeave() { return !this.publishing && !this.withdrawingReport && !this.savingItem && !this.confirmingMonth && !this.itemFormChanged() && !this.isComposing() && (!this.queue.length || this.persisted); }
 
-    canEdit() { return Boolean(this.state?.can_edit && this.state?.plan?.id === this.planId && !this.publishing && !this.revoked); }
+    canEdit() { return Boolean(this.state?.can_edit && this.state?.plan?.id === this.planId && !this.publishing && !this.withdrawingReport && !this.revoked); }
 
     async connect() {
       if (this.closed || this.connecting) return;
@@ -401,12 +404,15 @@
       if (this.state && (next.revision < this.state.revision
         || next.revision === this.state.revision && number < this.acceptedRequest)) return;
       this.acceptedRequest = number;
+      const previousReport = this.state?.report;
       this.state = next;
-      if (!next.plan && !this.queue.length && this.editors.size) {
+      if (previousReport && next.status === 'ready') this.writeError = '';
+      if (!next.plan && !this.queue.length && (this.editors.size || this.planId !== undefined)) {
         this.destroyEditors();
         this.table.replaceChildren();
         this.planId = undefined;
       }
+      if (!next.report) this.publishedReport = null;
       this.syncEditors();
       for (const [cell, editor] of this.editors) {
         if (next.plan?.id === this.planId && next.cells && next.cells[cell] && editor.serverState !== next.cells[cell]) {
@@ -419,6 +425,9 @@
         }
       }
       if(next.report && !this.queue.length)this.showPublishedItems(next.report);
+      if (!next.report && Array.isArray(next.withdrawn_attachment_ids) && next.withdrawn_revision != null) {
+        this.config.onWithdrawn?.(next.withdrawn_revision, next.withdrawn_attachment_ids, previousReport);
+      }
       this.schedulePlanResize();
       this.paint();
     }
@@ -441,7 +450,7 @@
     }
 
     selectMonth(month) {
-      if(this.savingItem || this.confirmingMonth || this.activeMonth===month)return;
+      if(this.savingItem || this.confirmingMonth || this.withdrawingReport || this.activeMonth===month)return;
       if(this.itemFormChanged() && !global.confirm('事项尚未保存，是否切换月份？'))return;
       this.activeMonth=month;
       this.resetItemForm();this.itemFormOpen=false;
@@ -573,8 +582,9 @@
     }
 
     showPublishedItems(report) {
-      if(this.publishedReport===report.id)return;
-      this.publishedReport=report.id;
+      const key = JSON.stringify([report.id, report.updated_at || report.submitted_at]);
+      if (this.publishedReport === key) return;
+      this.publishedReport = key;
       const items=report.biz?.items || [];
       const fields={};
       for(const [key,value] of Object.entries(report.rich_text?.fields || {}))if(key.startsWith('biz.items.'))fields[key.slice(4)]=value;
@@ -780,7 +790,8 @@
     }
 
     async publish() {
-      if (this.publishButton.disabled || this.closed || !this.state?.can_publish || this.queue.length || this.sending || this.savingItem || this.isComposing()) return;
+      if (this.publishButton.disabled || this.closed || !this.state?.can_publish || this.queue.length || this.sending || this.savingItem
+        || this.isComposing() || this.config.attachmentBusy?.()) return;
       this.publishing = true;
       this.error = '';
       this.notice = '';
@@ -790,7 +801,9 @@
         this.publishAttempt = {plan_id:this.planId, revision:this.state.revision, operation_id:uuid()};
         if(planRevision!==undefined)this.publishAttempt.plan_revision=planRevision;
         const ids = this.config.attachmentIds?.() || [];
-        if (ids.length) Object.assign(this.publishAttempt, {attachment_ids:ids, period:this.config.period});
+        if (ids.length || this.state.withdrawn_revision != null) {
+          Object.assign(this.publishAttempt, {attachment_ids:ids, period:this.config.period});
+        }
       }
       const number = ++this.requestNumber;
       this.paint();
@@ -815,9 +828,44 @@
       }
     }
 
+    async withdrawReport() {
+      const report = this.state?.report;
+      if (this.closed || this.withdrawingReport || this.withdrawReportButton.disabled || !report || !this.state.can_withdraw
+        || this.config.attachmentBusy?.()) return;
+      if (!global.confirm('撤回后，本周周报将从已提交结果中收起，协同人员可继续修改。修改完成后由负责人重新提交。是否撤回？')) return;
+
+      const reportId = String(report.id), revision = this.state.revision;
+      if (this.withdrawAttempt?.report_id !== reportId || this.withdrawAttempt.revision !== revision) {
+        this.withdrawAttempt = {report_id:reportId, revision, operation_id:uuid()};
+      }
+      this.withdrawingReport = true;
+      this.error = '';
+      this.notice = '';
+      const number = ++this.requestNumber;
+      this.paint();
+      try {
+        const next = await this.request('withdraw', this.withdrawAttempt, this.controller.signal);
+        if (this.closed) return;
+        this.accept(next, number);
+        this.withdrawAttempt = null;
+        this.publishAttempt = null;
+        if (!this.state?.report) this.config.notify('周报已撤回，组员可以继续修改。');
+      } catch (error) {
+        if (this.closed) return;
+        if (error.status && error.status < 500 && error.status !== 429) this.withdrawAttempt = null;
+        if (error.status === 409) {
+          this.notice = error.message;
+          this.reconnect();
+        } else this.failed(error);
+      } finally {
+        this.withdrawingReport = false;
+        if (!this.closed) { this.paint(); this.scheduleSend(); }
+      }
+    }
+
     async showResult() {
       const report = this.state?.report;
-      if (!report || this.openingResult) return;
+      if (!report || this.openingResult || this.withdrawingReport) return;
       this.openingResult = true;
       try { await this.config.onPublished(report); }
       catch (_) { this.error = '周报已提交，结果页暂未打开。请重试查看提交结果。'; }
@@ -844,7 +892,7 @@
       const plan=this.selectedMonthPlan(), next=this.state?.month_plans?.next;
       const current=this.state?.month_plans?.current || this.state?.plan;
       const isNext=this.activeMonth==='next';
-      const busy=this.savingItem || this.confirmingMonth;
+      const busy=this.savingItem || this.confirmingMonth || this.withdrawingReport;
       const waiting=!!(this.queue.length || this.sending || this.isComposing());
       for(const button of this.monthButtons){
         const nextButton=button.dataset.planMonth==='next';
@@ -891,9 +939,11 @@
       else if (!this.online) { state = 'offline'; text = '连接中断，正在重连。'; }
       else if (!next) { state = 'loading'; text = '正在读取本周协同稿…'; }
       else if (this.publishing) { state = 'pending'; text = '正在提交专业周报…'; }
+      else if (this.withdrawingReport) { state = 'pending'; text = '正在撤回专业周报…'; }
       else if (next.status !== 'ready') {
         state = next.status === 'published' ? 'saved' : 'blocked';
         text = statusMessages[next.status] || '当前周无法协同填报。';
+        if (next.withdraw_blocked) text += ' 这份周报已有事项申报，需联系管理员处理。';
       }
       else if (pending) { state = 'pending'; text = '正在同步至服务器…'; }
       if (pending && state !== 'pending') text += this.persisted ? ' 有未同步内容保存在当前浏览器。' : ' 有未同步内容仅在当前页面，请保留此页面。';
@@ -918,6 +968,10 @@
         if (this.attachments.textContent !== label) this.attachments.textContent = label;
       }
       this.resultButton.hidden = !next?.report;
+      this.resultButton.disabled = Boolean(this.withdrawingReport);
+      this.withdrawReportButton.hidden = !next?.can_withdraw;
+      this.withdrawReportButton.disabled = !this.online || Boolean(this.withdrawingReport || this.publishing || this.openingResult || this.confirmingMonth
+        || this.savingItem || this.sending || this.isComposing());
       const owner = this.root.querySelector('[data-collaboration-owner]');
       owner.textContent = next?.submitter_name ? '本周提交负责人 ' + next.submitter_name : '';
       const people = next?.presence || [];

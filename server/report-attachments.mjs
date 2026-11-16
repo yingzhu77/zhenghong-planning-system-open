@@ -13,7 +13,9 @@ export const MAX_DRAFT_ATTACHMENTS = 100;
 export const MAX_DRAFT_ATTACHMENT_BYTES = 200 * 1024 * 1024;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const columns = 'a.id,a.project_id,a.period,a.line,a.owner_id,a.name,a.mime,a.size,a.created_at,a.report_scope_id,a.scope_project_ids,a.scope_week,EXISTS(SELECT 1 FROM public.report_attachment_links ref_link WHERE ref_link.attachment_id=a.id) AS referenced';
+const columns = `a.id,a.project_id,a.period,a.line,a.owner_id,a.name,a.mime,a.size,a.created_at,a.report_scope_id,a.scope_project_ids,a.scope_week,
+  (EXISTS(SELECT 1 FROM public.report_attachment_links ref_link WHERE ref_link.attachment_id=a.id)
+    OR app_private.owner_has_withdrawn_report_attachment(a.id)) AS referenced`;
 const inline = mime => mime.startsWith('image/') || mime === 'application/pdf';
 function metadata(row) { return { ...row, referenced: !!row.referenced, url: '/api/report-attachments/' + row.id, inline: inline(row.mime) }; }
 function storagePath(uploadDir, id, key) {

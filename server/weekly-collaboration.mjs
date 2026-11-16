@@ -290,6 +290,10 @@ export function createWeeklyCollaboration(pool) {
         else plan=current;
       }
     }
+    const withdrawal = !settings && draft?.submitter_id === user.id && (status==='published' || status==='ready')
+      ? (await client.query('SELECT * FROM app_private.weekly_withdrawal_info($1,$2,$3,$4::date)',
+        [...scope.eligibility,scope.week])).rows[0]
+      : null;
     if (!settings && draft && presenceInput) {
       const {tab,activeCell}=presenceInput;
       touch(user,scope,tab,validCell(plan,activeCell)?activeCell:null);
@@ -305,6 +309,10 @@ export function createWeeklyCollaboration(pool) {
       ]),online]),
       submitter_id:draft?.submitter_id || null, submitter_name:submitter?.name || report?.author_name || '',
       can_edit:!settings && status === 'ready', can_publish:!settings && status === 'ready' && submitter.user_id === user.id && (!plan.unplanned || plan.items.length>0),
+      can_withdraw:status === 'published' && !!withdrawal?.can_withdraw,
+      withdraw_blocked:status === 'published' && !!withdrawal?.withdraw_blocked,
+      withdrawn_revision:withdrawal?.withdrawn_revision ?? null,
+      withdrawn_attachment_ids:withdrawal?.withdrawn_attachment_ids ?? [],
       can_configure:settings && !(await ownerIsLocked(client,scope,draft)),
       eligible:settings ? eligible : [], member_ids:settings ? draft?.member_ids ?? null : undefined, plan:settings || status !== 'ready' ? null : plan,
       month_plans:settings ? undefined : monthPlans,
@@ -640,5 +648,41 @@ export function createWeeklyCollaboration(pool) {
     return result;
   }
 
-  return {open,poll,mode,nextWeek,catalog,settings,items,monthItems,confirmMonth,withdrawMonth,change,publish};
+  async function withdraw(user,body) {
+    const scope = scopeOf(body);
+    const operation = operationOf(body);
+    const suppliedId = body.report_id;
+    const reportId = typeof suppliedId === 'string' || Number.isSafeInteger(suppliedId) ? String(suppliedId) : '';
+    if (!/^[1-9]\d{0,18}$/.test(reportId) || BigInt(reportId) > 9223372036854775807n)
+      fail(400,'已提交周报编号不正确。');
+    const revision = body.revision;
+    if (!Number.isSafeInteger(revision) || revision < 1 || revision >= 2147483647)
+      fail(400,'协同稿版本不正确。');
+    const fingerprint = digest(['withdraw',revision,reportId]);
+    const result = await withIdentity(pool,user.id,async client => {
+      await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
+      await access(client,user,scope);
+      const draft = await readWeek(client,scope);
+      if (draft?.submitter_id !== user.id) fail(403,'仅本周指定负责人可以撤回周报。');
+      if (await replay(client,user,scope,operation,fingerprint)) return state(client,user,scope,false);
+      if (draft.revision !== revision || String(draft.published_report_id) !== reportId)
+        fail(409,'已提交周报的状态已变化，请刷新后核对。');
+      await lockSharedMonth(client,scope,draft.submitter_id,monthsOf(scope).current);
+      await appendOperation(client,user,scope,operation,'withdraw',revision+1,null,fingerprint);
+      try {
+        await client.query('SELECT app_private.withdraw_weekly_collaboration_report($1,$2,$3,$4::date,$5::bigint,$6::int,$7::uuid)',
+          [...scope.eligibility,scope.week,reportId,revision,operation]);
+      } catch (error) {
+        if (error.code==='P4401') fail(409,'只能撤回当前报告周的已提交周报，请刷新后核对。');
+        if (error.code==='P4402') fail(409,'这份周报已关联事项申报或历史记录，请联系管理员处理。');
+        if (error.code==='P4403') fail(403,'仅本周指定负责人可以撤回周报。');
+        throw error;
+      }
+      return state(client,user,scope,false);
+    });
+    notify(scope);
+    return result;
+  }
+
+  return {open,poll,mode,nextWeek,catalog,settings,items,monthItems,confirmMonth,withdrawMonth,change,publish,withdraw};
 }

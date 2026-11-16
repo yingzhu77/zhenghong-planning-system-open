@@ -334,6 +334,7 @@
 !/db/041-weekly-collaboration-items.sql
 !/db/042-shared-monthly-plans.sql
 !/db/043-personnel-directory.sql
+!/db/044-weekly-report-withdrawal.sql
 !/tests/materials-only-viewers.test.mjs
 
 !/scripts/enable-weekly-collaboration.mjs

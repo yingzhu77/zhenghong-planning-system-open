@@ -471,6 +471,7 @@
         effect: pick('ef') || prev.effect || null,
         next: [valIf('nx-0', prevNext[0]), valIf('nx-1', prevNext[1]), valIf('nx-2', prevNext[2])]
       };
+      if(S.withdrawnAttachmentKey)payload.withdrawnAttachmentKey=S.withdrawnAttachmentKey;
       if(window.MonthlyPlans && window.MonthlyPlans.planReferences){var monthlyReferences=window.MonthlyPlans.planReferences();if(Object.keys(monthlyReferences).length)payload.monthlyPlanReferences=monthlyReferences;}
       /* 内容没变就不写：否则每次进个人中心都会刷新草稿时间戳 */
       var rawPrev = null;
@@ -1741,6 +1742,7 @@
   async function preparePM(forcePeriod) {
     S.planningAIEntries=[];
     S.monthlyUnmatchedItems=[];
+    S.withdrawnAttachmentKey=null;
     var pid = S.pmProject || (myProjects()[0] && myProjects()[0].id);
     var period = forcePeriod || S.pmPeriod || currentPeriod();
     S.pmPeriod = period;
@@ -2031,9 +2033,25 @@
     var scope=inlineCollaborationMode()==='member' && weeklyCollaborationScope();
     if (!settings && !scope) return null;
     var period=settings?currentPeriod():S.pmPeriod || currentPeriod();
+    var week=window.PlanningWindows.periodStart(period);
+    var key=inlineCollaborationKey();
     return {mode:settings?'settings':'editor',scope:scope,uid:S.uid,period:period,
-      week:window.PlanningWindows.periodStart(period),
+      week:week,
       attachmentIds:function(){return window.ReportAttachments ? window.ReportAttachments.ids() : [];},
+      attachmentBusy:attachmentBusy,
+      onWithdrawn:function(revision,attachmentIds,report){
+        if(S.view!=='form' || key!==inlineCollaborationKey())return;
+        var selectionKey=JSON.stringify([scope.project_id,scope.line,scope.report_scope_id,week,revision]);
+        if(S.withdrawnAttachmentKey===selectionKey)return;
+        S.withdrawnAttachmentKey=selectionKey;
+        if(S.draft?.withdrawnAttachmentKey!==selectionKey)S.attachmentIds=attachmentIds.slice();
+        if(report){
+          S.reports=S.reports.filter(function(row){return String(row.id)!==String(report.id);});
+          if(String(S.pmReport?.id)===String(report.id))S.pmReport=null;
+          invalidateData(['reports','reportAttachments','completions']);
+        }
+        renderShell(true);
+      },
       openReference:function(){return App.openReportReference();},
       planWidths:function(items,hasSource){
         return window.MonthlySummaries && window.MonthlySummaries.columnWidths(samplePlanRows(items),
