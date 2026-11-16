@@ -305,6 +305,93 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
   assert.deepEqual(errors, []);
 });
 
+test('已确认月计划下两人可补充本周事项，负责人提交后同步到原月计划', {timeout: 90000}, async t => {
+  const fixture = await createFixture(t);
+  const browser = await chromium.launch({channel:'msedge',headless:true});
+  t.after(()=>browser.close());
+  const errors=[], requests=[];
+  const [ops,lead,editor] = await Promise.all([
+    login(browser,fixture,'demo-ops',errors,requests),
+    login(browser,fixture,'design-pilot-lead',errors,requests),
+    login(browser,fixture,'design-pilot-editor',errors,requests)
+  ]);
+  const scope={project_id:'hf',line:'设计部',week:fixture.week};
+  const headers={Origin:fixture.base};
+  const original={source_id:'approved-structure-item',mod:'图纸',name:'原定图纸会签',due:fixture.month+'-20'};
+  const planRequest={project_id:scope.project_id,line:scope.line,month:fixture.month};
+  const confirmed=await lead.request.post(fixture.base+'/api/monthly-plans/confirm',{
+    headers,data:{...planRequest,items:[original]}
+  });
+  assert.equal(confirmed.status(),200,JSON.stringify((await confirmed.json()).error));
+  const planId=(await confirmed.json()).data.id;
+  const settings=await ops.request.post(fixture.base+'/api/weekly-collaboration/settings',{
+    headers,data:{...scope,submitter_id:'design-pilot-lead',member_ids:['design-pilot-editor']}
+  });
+  assert.equal(settings.status(),200,JSON.stringify((await settings.json()).error));
+  await Promise.all([openWorkspace(lead),openWorkspace(editor)]);
+  const leadPanel=lead.locator('[data-weekly-collaboration]');
+  const editorPanel=editor.locator('[data-weekly-collaboration]');
+  const add=editorPanel.getByRole('button',{name:'＋ 新增本周事项',exact:true});
+  await expect(add).toBeEnabled();
+  await expect(leadPanel.getByRole('row').filter({hasText:original.name}).getByRole('button',{name:'修改事项',exact:true})).toHaveCount(0);
+  await expect(editorPanel.locator('[data-collaboration-publish]')).toBeHidden();
+
+  await add.click();
+  await expect(editorPanel.getByText('负责人提交周报后同步至本月计划。',{exact:false})).toBeVisible();
+  await editorPanel.getByLabel('模块',{exact:true}).fill('施工配合');
+  await editorPanel.getByLabel('事项',{exact:true}).fill('临时补充现场图纸复核');
+  await editorPanel.getByLabel('完成时间',{exact:true}).fill(fixture.week);
+  const saved=editor.waitForResponse(response=>response.url().endsWith('/api/weekly-collaboration/items'));
+  await editorPanel.getByRole('button',{name:'添加事项',exact:true}).click();
+  const response=await saved;
+  assert.equal(response.status(),200,JSON.stringify((await response.json()).error));
+  const draft=(await response.json()).data;
+  assert.equal(draft.plan.weekly_supplement_ids.length,1);
+  const newId=draft.plan.weekly_supplement_ids[0];
+  const newRow=leadPanel.getByRole('row').filter({hasText:'临时补充现场图纸复核'});
+  await expect(newRow.getByText('本周新增',{exact:true})).toBeVisible({timeout:18000});
+  await expect(newRow.getByRole('button',{name:'修改事项',exact:true})).toBeEnabled();
+  const before=await lead.request.post(fixture.base+'/api/monthly-plans/list',{headers,data:planRequest});
+  assert.equal(before.status(),200);
+  const [originalPlan]=(await before.json()).data;
+  assert.deepEqual(originalPlan.items.map(item=>item.source_id),[original.source_id]);
+
+  const updated=lead.waitForResponse(response=>response.url().endsWith('/api/weekly-collaboration/items'));
+  await newRow.getByRole('button',{name:'修改事项',exact:true}).click();
+  await leadPanel.getByLabel('事项',{exact:true}).fill('临时补充现场图纸复核及会签');
+  await leadPanel.getByRole('button',{name:'保存事项',exact:true}).click();
+  assert.equal((await updated).status(),200);
+  await expect(editorPanel.getByRole('row').filter({hasText:'临时补充现场图纸复核及会签'})).toBeVisible({timeout:18000});
+  await cell(editor,newId+':prog').fill('组员已完成复核');
+  await expect(cell(lead,newId+':prog')).toHaveText('组员已完成复核',{timeout:18000});
+  const publish=leadPanel.getByRole('button',{name:'提交专业周报',exact:true});
+  await expect(publish).toBeEnabled({timeout:18000});
+  const artifacts='.local/weekly-collaboration-browser';
+  await mkdir(artifacts,{recursive:true});
+  await leadPanel.screenshot({path:artifacts+'/weekly-supplement-desktop.png'});
+  lead.once('dialog',async dialog=>{
+    assert.match(dialog.message(),/同步至本月计划/);
+    await dialog.accept();
+  });
+  const formal=lead.waitForResponse(response=>response.url().endsWith('/api/weekly-collaboration/publish'));
+  await publish.click();
+  const published=await formal;
+  assert.equal(published.status(),200,JSON.stringify((await published.json()).error));
+  const report=(await published.json()).data.report;
+  const supplement=report.biz.items.find(item=>item.source_id===newId);
+  assert.equal(supplement.prog,'组员已完成复核');
+  assert.equal(report.biz.monthly_plan_id,planId);
+  const after=await lead.request.post(fixture.base+'/api/monthly-plans/list',{headers,data:planRequest});
+  assert.equal(after.status(),200);
+  const [synced]=(await after.json()).data;
+  assert.equal(synced.id,planId);
+  assert.deepEqual(synced.items[0],originalPlan.items[0]);
+  assert.deepEqual(synced.items.slice(1).map(item=>[item.source_id,item.name,item.due]),[
+    [newId,'临时补充现场图纸复核及会签',fixture.week]
+  ]);
+  assert.deepEqual(errors,[]);
+});
+
 test('独立住宅保留同周旧综合报告，仍可选择本人专业协同填报并查看正式总览', {timeout: 60000}, async t => {
   const fixture = await createFixture(t);
   const projectId='demo-res';

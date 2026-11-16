@@ -2060,6 +2060,9 @@
       formatTime:fmtTime,
       itemAction:function(item,plan,state){
         if(!window.CompletionReview || !item.source_id)return '';
+        if(plan.weekly_supplement_ids?.includes(item.source_id)){
+          return '<span class="muted">提交本期填报后可申报完成或延期。</span>';
+        }
         if(state.report){
           var report=state.report, owner=report.author_id;
           var key=planSourceKey(report,'items',item);
@@ -2071,6 +2074,7 @@
         }
         return '<span class="muted">提交本期填报后可申报完成或延期。</span>';
       },
+      onPublicationObserved:function(){invalidateData(['monthlyPlans']);},
       notify:toast,onPublished:function(report){
         return App.openProfessionalOverview(report.id,report.updated_at || report.submitted_at,{report:report});
       }};

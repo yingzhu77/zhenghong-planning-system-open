@@ -276,10 +276,11 @@
       this.withdrawButton.addEventListener('click',()=>this.saveMonthDecision('withdraw'));
       this.addItemButton.addEventListener('click',()=>{
         this.resetItemForm();
-        this.itemFormOpen=true;this.paint();this.itemForm.querySelector('[name=name]').focus();
+        this.openItemForm(this.selectedItemPlan());
+        this.paint();this.itemForm.querySelector('[name=name]').focus();
       });
       const names=this.config.scope.projectNames || {};
-      this.itemForm.innerHTML='<form><div class="f2">'
+      this.itemForm.innerHTML='<form><p class="muted" data-weekly-item-help hidden>新增事项在本周共享稿中保存，负责人提交周报后同步至本月计划。</p><div class="f2">'
         + (this.target.report_scope_id?'<label>实际项目／分期<select name="project_id" required>'
           +Object.entries(names).map(([id,name])=>'<option value="'+esc(id)+'">'+esc(name)+'</option>').join('')+'</select></label>':'')
         + '<label>模块<input name="mod" maxlength="200"></label><label class="collaboration-item-name">事项<textarea name="name" maxlength="10000" rows="2" required></textarea></label>'
@@ -414,6 +415,9 @@
       }
       if (!next.report) this.publishedReport = null;
       this.syncEditors();
+      if (next.report && String(next.report.id) !== String(previousReport?.id)) {
+        this.config.onPublicationObserved?.();
+      }
       for (const [cell, editor] of this.editors) {
         if (next.plan?.id === this.planId && next.cells && next.cells[cell] && editor.serverState !== next.cells[cell]) {
           editor.serverState = next.cells[cell];
@@ -435,7 +439,7 @@
     syncEditors() {
       const plan=this.state?.plan;
       if (!plan || this.queue.length || this.isComposing() || this.sending && !this.state?.can_edit) return;
-      const itemKey=JSON.stringify([plan.unplanned,plan.confirmed_id,plan.items]);
+      const itemKey=JSON.stringify([plan.unplanned,plan.confirmed_id,plan.can_add_weekly_items,plan.weekly_supplement_ids,plan.items]);
       if(plan.id!==this.planId || itemKey!==this.itemKey) {
         this.createEditors(plan,this.state.cells || {});
         this.itemKey=itemKey;
@@ -447,6 +451,14 @@
       const plan=this.state?.plan;
       if(plan?.unplanned && !plan.shared)return {...plan,revision:this.state.revision,can_edit:this.state.can_edit,legacyWeek:true};
       return this.state?.month_plans?.current ?? plan;
+    }
+
+    selectedItemPlan() {
+      const plan = this.state?.plan;
+      if (this.activeMonth === 'current' && plan?.can_add_weekly_items) {
+        return {...plan, weeklySupplement:true, revision:this.state.revision, can_edit:this.state.can_edit};
+      }
+      return this.selectedMonthPlan();
     }
 
     selectMonth(month) {
@@ -473,6 +485,17 @@
       return this.itemFormOpen && JSON.stringify(this.itemFormValues())!==this.itemFormBaseline;
     }
 
+    itemFormScope(plan) {
+      if (!plan) return null;
+      if (plan.weeklySupplement) return 'week:'+plan.confirmed_id;
+      return plan.legacyWeek ? 'legacy-week' : 'month:'+plan.month;
+    }
+
+    openItemForm(plan) {
+      this.itemFormOpen = true;
+      this.openItemFormScope = this.itemFormScope(plan);
+    }
+
     resetItemForm() {
       this.editingItem=null;
       const form=this.itemForm.querySelector('form');
@@ -484,12 +507,14 @@
     }
 
     editItem(sourceId) {
-      const plan=this.selectedMonthPlan();
-      if(!plan?.can_edit || this.savingItem || this.confirmingMonth) return;
+      const plan=this.selectedItemPlan();
+      if(!plan?.can_edit || this.publishing || this.savingItem || this.confirmingMonth) return;
+      if (plan.weeklySupplement && !plan.weekly_supplement_ids?.includes(sourceId)) return;
       const item=plan.items.find(row=>row.source_id===sourceId);
       if(!item)return;
+      if (this.itemFormChanged() && !global.confirm('事项尚未保存，是否切换到这条事项？')) return;
       this.editingItem={id:sourceId,revision:plan.revision};
-      this.itemFormOpen=true;
+      this.openItemForm(plan);
       const form=this.itemForm.querySelector('form');
       for(const field of ['mod','name','due','project_id'])if(form.elements[field])form.elements[field].value=item[field] || '';
       this.itemFormBaseline=JSON.stringify(this.itemFormValues());
@@ -501,21 +526,31 @@
     }
 
     async saveItem(action) {
-      const plan=this.selectedMonthPlan();
-      if(!plan?.can_edit || !this.online || this.savingItem || this.confirmingMonth || this.queue.length || this.sending || this.isComposing())return;
+      const plan=this.selectedItemPlan();
+      if(!plan?.can_edit || !this.online || this.publishing || this.savingItem || this.confirmingMonth || this.queue.length || this.sending || this.isComposing())return;
       const form=this.itemForm.querySelector('form'), status=form.querySelector('[data-item-status]');
+      if (this.openItemFormScope !== this.itemFormScope(plan)) {
+        status.textContent='计划状态已变化。请保留当前输入，再重新打开事项。';
+        return;
+      }
       const editing=this.editingItem;
       const deleting=action==='delete';
-      if(deleting && (!editing || plan.legacyWeek || !global.confirm('删除此计划事项？')))return;
+      if (plan.weeklySupplement && editing && !plan.weekly_supplement_ids?.includes(editing.id)) {
+        status.textContent='该事项已变化，请重新选择。';
+        return;
+      }
+      if(deleting && (!editing || plan.legacyWeek || !global.confirm(plan.weeklySupplement?'删除此本周新增事项？':'删除此计划事项？')))return;
       const item=deleting?undefined:this.itemFormValues();
+      const scope = plan.weeklySupplement ? {weekly_supplement:true,plan_id:plan.confirmed_id}
+        : plan.legacyWeek ? {} : {month:plan.month};
       const payload={action:deleting?'delete':editing?'update':'add',revision:editing?.revision ?? plan.revision,item,
-        ...(editing?{source_id:editing.id}:{}),...(plan.legacyWeek?{}:{month:plan.month})};
-      const key=JSON.stringify([payload.month,payload.action,payload.source_id,item]);
+        ...(editing?{source_id:editing.id}:{}),...scope};
+      const key=JSON.stringify([scope,payload.action,payload.source_id,item]);
       if(this.itemAttempt?.key!==key)this.itemAttempt={key,body:{...payload,operation_id:uuid()}};
       this.savingItem=true;status.textContent='正在保存事项…';this.paint();
       try {
         const number=++this.requestNumber;
-        const next=await this.request(plan.legacyWeek?'items':'month-items',this.itemAttempt.body,this.controller.signal);
+        const next=await this.request(plan.legacyWeek || plan.weeklySupplement?'items':'month-items',this.itemAttempt.body,this.controller.signal);
         if(this.closed)return;
         this.itemAttempt=null;this.resetItemForm();this.itemFormOpen=false;this.accept(next,number);
         this.addItemButton.focus();
@@ -568,10 +603,11 @@
         +'</tbody></table></div>';
     }
 
-    itemColumns(plan,item,index,editable) {
+    itemColumns(plan,item,index,editable,supplemental=false) {
       const names=this.config.scope.projectNames || {};
       return (this.target.report_scope_id?'<td data-label="实际项目／分期"><div>'+esc(names[item.project_id] || '未明确')+'</div></td>':'')
         +'<td data-label="模块"><div>'+planField(plan,'mod',item,index)+'</div></td><td data-label="事项"><div>'+planField(plan,'name',item,index)
+        +(supplemental?'<br><small class="muted">本周新增</small>':'')
         +'</div>'+(editable?'<button type="button" class="btn ghost sm collaboration-edit-item" data-edit-item="'+esc(item.source_id)+'">修改事项</button>':'')
         +'</td><td data-label="完成时间"><div>'+esc(item.due || '—')+'</div></td>';
     }
@@ -645,10 +681,14 @@
       const editorHtml=(item,field,label)=>'<div class="collaboration-cell" data-collaboration-cell="'
         +esc(item.source_id+':'+field)+'" data-editor-label="'+esc(item.name+' · '+label)
         +'"><div data-collaboration-editor></div><small data-collaboration-cell-presence></small></div>';
-      this.table.innerHTML=this.renderTable(items,true,(item,index)=>'<tr>'+this.itemColumns(plan,item,index,plan.unplanned)
-        +'<td data-label="当周进展">'+editorHtml(item,'prog','当周进展')
-        +'<details class="collaboration-blocker"'+(cells[item.source_id+':blocker'] || openedBlockers.has(item.source_id+':blocker')?' open':'')+'><summary>卡点</summary>'
-        +editorHtml(item,'blocker','卡点')+'</details>'+this.itemActions(item,plan)+'</td></tr>');
+      const supplements = new Set(plan.weekly_supplement_ids || []);
+      this.table.innerHTML=this.renderTable(items,true,(item,index)=>{
+        const supplemental=supplements.has(item.source_id);
+        return '<tr>'+this.itemColumns(plan,item,index,plan.unplanned || supplemental && plan.can_add_weekly_items,supplemental)
+          +'<td data-label="当周进展">'+editorHtml(item,'prog','当周进展')
+          +'<details class="collaboration-blocker"'+(cells[item.source_id+':blocker'] || openedBlockers.has(item.source_id+':blocker')?' open':'')+'><summary>卡点</summary>'
+          +editorHtml(item,'blocker','卡点')+'</details>'+this.itemActions(item,plan)+'</td></tr>';
+      });
       for (const element of this.table.querySelectorAll('[data-collaboration-cell]')) {
         const cell = element.dataset.collaborationCell;
         const doc = new Y.Doc();
@@ -792,10 +832,12 @@
     async publish() {
       if (this.publishButton.disabled || this.closed || !this.state?.can_publish || this.queue.length || this.sending || this.savingItem
         || this.isComposing() || this.config.attachmentBusy?.()) return;
+      if (this.state.plan?.weekly_supplement_ids?.length
+        && !global.confirm('提交后，新增事项将同步至本月计划。是否提交专业周报？')) return;
       this.publishing = true;
       this.error = '';
       this.notice = '';
-      const planRevision=this.state.plan?.shared ? this.state.plan.revision : undefined;
+      const planRevision=this.state.plan?.revision;
       if (!this.publishAttempt || this.publishAttempt.revision !== this.state.revision || this.publishAttempt.plan_id !== this.planId
         || this.publishAttempt.plan_revision!==planRevision) {
         this.publishAttempt = {plan_id:this.planId, revision:this.state.revision, operation_id:uuid()};
@@ -890,9 +932,10 @@
 
     paintMonth() {
       const plan=this.selectedMonthPlan(), next=this.state?.month_plans?.next;
+      const itemPlan=this.selectedItemPlan();
       const current=this.state?.month_plans?.current || this.state?.plan;
       const isNext=this.activeMonth==='next';
-      const busy=this.savingItem || this.confirmingMonth || this.withdrawingReport;
+      const busy=this.savingItem || this.confirmingMonth || this.withdrawingReport || this.publishing;
       const waiting=!!(this.queue.length || this.sending || this.isComposing());
       for(const button of this.monthButtons){
         const nextButton=button.dataset.planMonth==='next';
@@ -919,13 +962,15 @@
       this.confirmButton.textContent=isNext?'确认下月计划':'确认本月计划';
       this.withdrawButton.hidden=!plan?.can_withdraw;
       this.withdrawButton.disabled=this.confirmButton.disabled;
-      this.addItemButton.hidden=!plan?.can_edit || !!this.itemFormOpen;
+      this.addItemButton.hidden=!itemPlan?.can_edit || !!this.itemFormOpen;
       this.addItemButton.disabled=busy || waiting || !this.online;
-      this.itemForm.hidden=!this.itemFormOpen || !plan;
+      this.addItemButton.textContent=itemPlan?.weeklySupplement?'＋ 新增本周事项':'＋ 增加事项';
+      this.itemForm.hidden=!this.itemFormOpen || !itemPlan;
       const form=this.itemForm.querySelector('form');
+      form.querySelector('[data-weekly-item-help]').hidden=!this.openItemFormScope?.startsWith('week:');
       for(const field of form.elements)field.disabled=busy;
-      form.querySelector('[type=submit]').disabled=!plan?.can_edit || !this.online || busy || waiting;
-      form.querySelector('[data-delete-item]').disabled=!plan?.can_edit || !this.online || busy || waiting;
+      form.querySelector('[type=submit]').disabled=!itemPlan?.can_edit || !this.online || busy || waiting;
+      form.querySelector('[data-delete-item]').disabled=!itemPlan?.can_edit || !this.online || busy || waiting;
     }
 
     paint() {

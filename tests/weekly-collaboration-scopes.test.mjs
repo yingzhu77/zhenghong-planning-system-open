@@ -33,7 +33,7 @@ const denied = error => error.status === 403;
 const conflict = error => error.status === 409;
 const collaborationGuard = error => error.code === 'P3801' || error.status === 409;
 
-async function fixture(t, through = 44) {
+async function fixture(t, through = 45) {
   const database = await initializedDatabase({through:38});
   t.after(() => database.close());
   const admin = testPool(database, null);
@@ -86,7 +86,13 @@ async function fixture(t, through = 44) {
     await database.exec(await readFile(new URL('../db/044-weekly-report-withdrawal.sql',import.meta.url),'utf8'));
   };
   if (through >= 44) await upgradeWithdrawals();
-  return { database, admin, pool, upgrade, upgradeItems, upgradeMonths, upgradeWithdrawals, service:createWeeklyCollaboration(pool) };
+  const upgradeSupplements = async () => {
+    await database.exec('RESET ROLE');
+    await database.exec(await readFile(new URL('../db/045-weekly-collaboration-supplements.sql',import.meta.url),'utf8'));
+  };
+  if (through >= 45) await upgradeSupplements();
+  return { database, admin, pool, upgrade, upgradeItems, upgradeMonths, upgradeWithdrawals, upgradeSupplements,
+    service:createWeeklyCollaboration(pool) };
 }
 
 function item(label, projectId) {
@@ -119,6 +125,17 @@ async function confirm(f, user, scope, plannedItem) {
   return confirmMonthlyPlan(f.pool,user,{...identity,month,items:[plannedItem],...(report_scope_id ? {report_scope_id} : {})});
 }
 
+async function currentWeekAndSiblings(f) {
+  return (await f.admin.query(`WITH calendar AS (
+    SELECT date_trunc('week',now() AT TIME ZONE 'Asia/Shanghai')::date AS monday
+  )
+  SELECT monday::text AS current,ARRAY(SELECT sibling::date::text
+    FROM generate_series(date_trunc('month',monday)::date,(date_trunc('month',monday)+interval '1 month - 1 day')::date,
+      interval '1 day') AS dates(sibling)
+    WHERE extract(isodow from sibling)=1 AND sibling::date<>monday
+    ORDER BY sibling) AS siblings FROM calendar`)).rows[0];
+}
+
 function edit(text) {
   const doc = new Y.Doc();
   try {
@@ -143,7 +160,7 @@ function standaloneReport(f,user,scope,plan,period=week) {
 }
 
 test('本周负责人可撤回已提交周报，保留共享稿和附件，组员修改后重新提交',async t=>{
-  const f=await fixture(t,44), {service}=f;
+  const f=await fixture(t), {service}=f;
   const {current,prior}=(await f.admin.query(`SELECT monday::text AS current,(monday-7)::text AS prior
     FROM (SELECT date_trunc('week',now() AT TIME ZONE 'Asia/Shanghai')::date AS monday) dates`)).rows[0];
   const scope=inWeek(custom,current), month=current.slice(0,7);
@@ -234,6 +251,133 @@ test('本周负责人可撤回已提交周报，保留共享稿和附件，组�
   assert.equal(oldReport.can_withdraw,false);
   await assert.rejects(service.withdraw(retailLead,{...history,report_id:String(oldReport.report.id),
     revision:oldReport.revision,operation_id:randomUUID()}),conflict);
+});
+
+test('已确认月计划保留原事项与历史周报，组员临时事项随负责人提交同步且可重新提报',async t=>{
+  const f=await fixture(t), {service}=f;
+  const {current,siblings:[alreadySubmitted,otherWeek,standaloneWeek]}=await currentWeekAndSiblings(f);
+  const month=current.slice(0,7), scope=inWeek(custom,current), historical=inWeek(custom,alreadySubmitted);
+  const originalName='保留的确认月计划事项', originalId=randomUUID();
+  const plan=await confirmMonthlyPlan(f.pool,retailLead,{
+    project_id:scope.project_id,line:scope.line,month,
+    items:[{...item(originalName),source_id:originalId,due:month+'-24'}],
+    rich_text:{v:1,fields:{'items.0.name':{ops:[{insert:originalName,attributes:{bold:true}}]}}}
+  });
+  const settings=scope=>service.settings(operator,{...scope,submitter_id:retailLead.id,member_ids:[retailPeer.id]});
+  await settings(historical);
+  const publishBody=(room,state)=>({...room,plan_id:state.plan.id,plan_revision:state.plan.revision,
+    revision:state.revision,operation_id:randomUUID()});
+  const historicalReport=(await service.publish(retailLead,publishBody(historical,await service.open(retailLead,historical)))).report;
+  assert.deepEqual(historicalReport.biz.items.map(row=>row.source_id),[originalId]);
+  const saveStandalone=(name,prog)=>executeDatabase(f.pool,retailLead,{table:'reports',operation:'upsert',
+    onConflict:'project_id,period,line',values:{project_id:scope.project_id,line:scope.line,period:standaloneWeek,
+      biz:{monthly_plan_id:plan.id,monthly_plan_month:month,items:[{...plan.items[0],name,prog,blocker:''}]},
+      rich_text:{v:1,fields:{'biz.items.0.name':{ops:[{insert:name,attributes:{bold:true}}]}}}}});
+  const [legacy]=await saveStandalone(originalName,'历史个人周报进展');
+  const originalKey='monthly:'+scope.project_id+':'+plan.id+':'+originalId;
+  const originalSource=await previewCompletion(f.pool,retailLead,{source_key:originalKey});
+  await settings(scope);
+  const sibling=inWeek(custom,otherWeek);
+  await settings(sibling);
+  const siblingBefore=await service.open(retailLead,sibling);
+  assert.equal(siblingBefore.plan.can_add_weekly_items,false);
+  const before=await service.open(retailPeer,scope);
+  assert.equal(before.plan.can_add_weekly_items,true);
+  assert.equal(before.can_publish,false);
+  const request={...scope,weekly_supplement:true,plan_id:plan.id,action:'add',revision:before.revision,
+    operation_id:randomUUID(),item:{...item('本周临时完成项'),due:month+'-20'}};
+  await assert.rejects(service.items(retailPeer,{...request,...inWeek(b,current)}),denied);
+  await assert.rejects(service.items(retailPeer,{...request,plan_id:randomUUID()}),conflict);
+  const added=await service.items(retailPeer,request);
+  const id=request.operation_id;
+  assert.deepEqual(added.plan.weekly_supplement_ids,[id]);
+  assert.deepEqual(added.plan.items.map(row=>row.source_id),[originalId,id]);
+  assert.equal((await service.items(retailPeer,request)).revision,added.revision);
+  await assert.rejects(service.items(retailPeer,{...request,action:'update',source_id:originalId,
+    revision:added.revision,operation_id:randomUUID()}),conflict);
+  await assert.rejects(service.items(retailPeer,{...request,action:'update',source_id:id,operation_id:randomUUID()}),conflict);
+  const editRequest={...request,action:'update',source_id:id,revision:added.revision,
+    operation_id:randomUUID(),item:{...request.item,name:'组员更新的本周临时事项'}};
+  const updated=await service.items(retailPeer,editRequest);
+  assert.equal(updated.plan.items.at(-1).name,editRequest.item.name);
+  const temporary={...request,revision:updated.revision,operation_id:randomUUID()};
+  const extra=await service.items(retailPeer,temporary);
+  const removed=await service.items(retailPeer,{...request,action:'delete',item:undefined,source_id:temporary.operation_id,
+    revision:extra.revision,operation_id:randomUUID()});
+  assert.deepEqual(removed.plan.weekly_supplement_ids,[id]);
+  const edited=await service.change(retailPeer,{...scope,plan_id:removed.plan.id,cell:id+':prog',
+    update:edit('组员补录临时进展'),operation_id:randomUUID()});
+  assert.equal(contents((await service.open(retailLead,scope)).cells[id+':prog']),'组员补录临时进展');
+
+  const physicalPlan=async()=> (await f.admin.query('SELECT id,items,rich_text,confirmed_at FROM public.monthly_plans WHERE id=$1',[plan.id])).rows[0];
+  const original=await physicalPlan();
+  assert.deepEqual(original.items,plan.items);
+  const draft=await service.open(retailLead,scope);
+  assert.equal(draft.revision,edited.revision);
+  const publish=publishBody(scope,draft);
+  await assert.rejects(service.publish(retailPeer,publish),denied);
+  await assert.rejects(service.publish(retailLead,{...publish,revision:before.revision}),conflict);
+  assert.deepEqual(await physicalPlan(),original);
+  const submitted=await service.publish(retailLead,publish);
+  assert.equal(submitted.report.biz.monthly_plan_id,plan.id);
+  assert.equal(submitted.report.biz.items.at(-1).prog,'组员补录临时进展');
+  const synchronized=await physicalPlan();
+  assert.deepEqual(synchronized.items.map(row=>row.source_id),[originalId,id]);
+  assert.deepEqual(synchronized.items[0],original.items[0]);
+  assert.equal(synchronized.items[1].name,editRequest.item.name);
+  assert.deepEqual(synchronized.rich_text,original.rich_text);
+  assert.equal((await previewCompletion(f.pool,retailLead,{source_key:originalKey})).source_version,originalSource.source_version);
+  const synchronizedKey='monthly:'+scope.project_id+':'+plan.id+':'+id;
+  assert.equal((await previewCompletion(f.pool,retailLead,{source_key:synchronizedKey})).what,editRequest.item.name);
+  assert.deepEqual((await service.open(retailLead,historical)).report.biz,historicalReport.biz);
+  await assert.rejects(saveStandalone('试图改写原固定事项','历史个人周报进展'),error=>error.code==='23514' || error.status>=400);
+  const [legacyUpdated]=await saveStandalone(originalName,'保留固定快照并更新个人进展');
+  assert.equal(legacyUpdated.id,legacy.id);
+  assert.equal(legacyUpdated.biz.items.length,1);
+  assert.equal(legacyUpdated.biz.items[0].prog,'保留固定快照并更新个人进展');
+  assert.deepEqual((await service.open(retailPeer,sibling)).plan.items.map(row=>row.source_id),[originalId,id]);
+  await assert.rejects(service.publish(retailLead,publishBody(sibling,siblingBefore)),conflict);
+  assert.equal((await service.publish(retailLead,publish)).report.id,submitted.report.id);
+
+  await service.withdraw(retailLead,{...scope,report_id:String(submitted.report.id),revision:submitted.revision,operation_id:randomUUID()});
+  const reopened=await service.open(retailPeer,scope);
+  assert.deepEqual(reopened.plan.items.map(row=>row.source_id),[originalId,id]);
+  assert.equal(contents(reopened.cells[id+':prog']),'组员补录临时进展');
+  const revised=await service.change(retailPeer,{...scope,plan_id:reopened.plan.id,cell:id+':blocker',
+    update:edit('撤回后继续填报'),operation_id:randomUUID()});
+  const republished=await service.publish(retailLead,publishBody(scope,revised));
+  assert.equal(republished.report.biz.items.at(-1).blocker,'撤回后继续填报');
+  assert.deepEqual(await physicalPlan(),synchronized);
+});
+
+test('合并项目临时事项受原月计划分期约束，发布后按原确认版同步',async t=>{
+  const f=await fixture(t), {service}=f;
+  const {current,siblings:[otherWeek]}=await currentWeekAndSiblings(f);
+  const month=current.slice(0,7), scope=inWeek(merged,current), later=inWeek(merged,otherWeek);
+  for(const room of [scope,later]){
+    await service.settings(operator,{...room,submitter_id:engineering.id,member_ids:[engineeringPeer.id]});
+  }
+  const built=await service.monthItems(engineeringPeer,{...scope,month,action:'add',revision:0,
+    operation_id:randomUUID(),item:{...item('合并项目已确认事项','zhx2'),due:month+'-24'}});
+  const confirmed=await service.confirmMonth(engineering,{...scope,month,revision:built.plan.revision,operation_id:randomUUID()});
+  assert.notEqual(confirmed.plan.id,confirmed.plan.confirmed_id);
+  const body={...scope,weekly_supplement:true,plan_id:confirmed.plan.confirmed_id,action:'add',
+    revision:confirmed.revision,operation_id:randomUUID(),item:{...item('一期临时事项','zhx1'),due:month+'-22'}};
+  await assert.rejects(service.items(engineeringPeer,{...body,item:{...body.item,project_id:b.project_id}}),error=>error.status===400);
+  await assert.rejects(service.items(engineeringPeer,{...body,plan_id:confirmed.plan.id}),conflict);
+  const ready=await service.items(engineeringPeer,body);
+  const blocker=await service.change(engineeringPeer,{...scope,plan_id:ready.plan.id,cell:body.operation_id+':blocker',
+    update:edit('一期临时工作卡点'),operation_id:randomUUID()});
+  const published=await service.publish(engineering,{...scope,plan_id:blocker.plan.id,plan_revision:blocker.plan.revision,
+    revision:blocker.revision,operation_id:randomUUID()});
+  assert.deepEqual(published.report.biz.monthly_plan_ids,[confirmed.plan.confirmed_id]);
+  assert.deepEqual(published.report.biz.items.map(row=>[row.project_id,row.monthly_plan_id]),
+    [['zhx2',confirmed.plan.confirmed_id],['zhx1',confirmed.plan.confirmed_id]]);
+  assert.equal(published.report.biz.items[1].blocker,'一期临时工作卡点');
+  const refreshed=await service.open(engineeringPeer,later);
+  assert.equal(refreshed.plan.id,confirmed.plan.id);
+  assert.equal(refreshed.plan.confirmed_id,confirmed.plan.confirmed_id);
+  assert.deepEqual(refreshed.plan.items.map(row=>row.project_id),['zhx2','zhx1']);
 });
 
 test('运营可以给不同项目和专业分别指定负责人，同周同一事项标识也不会混稿',async t=>{
@@ -363,7 +507,8 @@ test('038 的活动草稿、操作历史及已发布周报经过 039 重复迁�
   await f.upgradeMonths();
   await f.upgradeMonths();
   await f.upgradeWithdrawals();
-  assert.deepEqual((await f.admin.query(`SELECT to_jsonb(d)-'project_id'-'line'-'report_scope_id'-'unplanned_items'-'member_ids'-'shared_monthly_plan_id' row
+  await f.upgradeSupplements();
+  assert.deepEqual((await f.admin.query(`SELECT to_jsonb(d)-'project_id'-'line'-'report_scope_id'-'unplanned_items'-'member_ids'-'shared_monthly_plan_id'-'supplement_items' row
     FROM app_private.weekly_collaboration_drafts d WHERE project_id='hf' AND line='设计部' ORDER BY week`)).rows,oldDrafts);
   assert.deepEqual((await f.admin.query(`SELECT to_jsonb(o)-'project_id'-'line' row
     FROM app_private.weekly_collaboration_operations o WHERE project_id='hf' AND line='设计部' ORDER BY week`)).rows,oldOperations);
@@ -581,6 +726,7 @@ test('042 保留 041 已保存的独立周稿、编辑和操作回执',async t=>
       createHash('sha256').update(JSON.stringify(['edit',null,progressCell,encoded])).digest('hex')]);
   await f.upgradeMonths();
   await f.upgradeWithdrawals();
+  await f.upgradeSupplements();
   const legacy=await f.service.open(engineeringPeer,scope);
   assert.equal(legacy.plan.shared,false);
   assert.equal(legacy.plan.id,null);

@@ -90,7 +90,8 @@ function monthsOf(scope) {
 async function monthlySources(client, scope, draft, user, status) {
   const months=monthsOf(scope);
   const result=await client.query(`SELECT v.month, to_jsonb(m) AS shared, to_jsonb(p) AS confirmed,
-      j.project_type, app_private.collaboration_monthly_draft_unavailable($1,$2,$3,$5::date,(v.month||'-01')::date) AS unavailable
+      j.project_type, $5::date=date_trunc('week',now() AT TIME ZONE 'Asia/Shanghai')::date AS current_week,
+      app_private.collaboration_monthly_draft_unavailable($1,$2,$3,$5::date,(v.month||'-01')::date) AS unavailable
     FROM unnest($6::text[]) AS v(month) JOIN public.projects j ON j.id=$1
     LEFT JOIN app_private.collaboration_monthly_drafts m ON m.project_id=$1 AND m.line=$2 AND m.report_scope_id IS NOT DISTINCT FROM $3::text
       AND m.owner_id=$4 AND m.plan_month=(v.month||'-01')::date
@@ -98,7 +99,7 @@ async function monthlySources(client, scope, draft, user, status) {
       AND p.confirmed_by=$4 AND p.plan_month=(v.month||'-01')::date`,
     [...scope.eligibility,draft.submitter_id,scope.week,[months.current,months.next]]);
   const planFor=(row,key)=>{
-    const {month,project_type,confirmed,shared,unavailable}=row;
+    const {month,project_type,confirmed,shared,unavailable,current_week}=row;
     const usingShared=!!shared || !confirmed && !unavailable;
     const confirmedHere=!!confirmed && (!shared || confirmed.id===shared.confirmed_id);
     const confirmationConflict=!!shared && !!confirmed && !confirmedHere;
@@ -106,11 +107,13 @@ async function monthlySources(client, scope, draft, user, status) {
     return {
       id:usingShared?shared?.id ?? null:confirmed?.id ?? null,
       confirmed_id:confirmedHere?confirmed.id:null,
-      month,project_type,items:usingShared?shared?.items ?? []:confirmed?.items ?? [],
-      revision:shared?.revision ?? 0,shared:usingShared,confirmed:confirmedHere,
+      month,project_type,items:confirmedHere?confirmed.items:shared?.items ?? [],
+      revision:usingShared?shared?.revision ?? 0:confirmed?.supplement_revision ?? 0,shared:usingShared,confirmed:confirmedHere,
       unplanned:!confirmedHere,unavailable,confirmation_conflict:confirmationConflict,
       can_edit:canEdit,can_confirm:canEdit && !confirmationConflict && !!shared?.items.length && user.id===draft.submitter_id,
       can_withdraw:confirmedHere && !!shared && user.id===draft.submitter_id && (status==='ready' || status==='published' && key==='next'),
+      can_add_weekly_items: key==='current' && status==='ready' && confirmedHere && !unavailable
+        && (current_week || !!draft.supplement_items?.length),
       rich_text:confirmedHere?confirmed.rich_text:undefined,scope_project_ids:confirmedHere?confirmed.scope_project_ids:undefined,
       confirmed_name:confirmedHere?confirmed.confirmed_name:undefined,confirmed_at:confirmedHere?confirmed.confirmed_at:undefined
     };
@@ -124,9 +127,13 @@ async function lockSharedMonth(client,scope,owner,month) {
     [...scope.eligibility,owner,month]);
 }
 
+async function lockConfirmedMonth(client,scope) {
+  await client.query('SELECT app_private.lock_weekly_supplement_month($1,$2,$3,$4::date)',[...scope.eligibility,scope.week]);
+}
+
 async function ownerIsLocked(client,scope,draft) {
   if (!draft) return false;
-  if (draft.plan_id || draft.shared_monthly_plan_id || draft.unplanned_items?.length || draft.published_report_id) return true;
+  if (draft.plan_id || draft.shared_monthly_plan_id || draft.unplanned_items?.length || draft.supplement_items?.length || draft.published_report_id) return true;
   const months=Object.values(monthsOf(scope)).map(month=>month+'-01');
   // An emptied draft retains its identity and still uses the original week's roster.
   return (await client.query(`SELECT EXISTS(SELECT 1 FROM app_private.collaboration_monthly_drafts
@@ -287,7 +294,10 @@ export function createWeeklyCollaboration(pool) {
         else if (current.unavailable && (!current.confirmed || draft.shared_monthly_plan_id)) status='month_access_changed';
         else if ((draft.plan_id && current.confirmed_id!==draft.plan_id)
           || (draft.shared_monthly_plan_id && current.id!==draft.shared_monthly_plan_id)) status='plan_changed';
-        else plan=current;
+        else {
+          const supplements=draft.supplement_items ?? [];
+          plan={...current,items:[...current.items,...supplements],weekly_supplement_ids:supplements.map(item=>item.source_id)};
+        }
       }
     }
     const withdrawal = !settings && draft?.submitter_id === user.id && (status==='published' || status==='ready')
@@ -305,7 +315,7 @@ export function createWeeklyCollaboration(pool) {
     return {
       week:scope.week, project_id:scope.projectId,line:scope.line,report_scope_id:scope.scopeId,status,revision,
       cursor:digest([revision,status,plan?.id,...Object.values(monthPlans || {}).map(value=>[
-        value.id,value.revision,value.confirmed_id,value.unavailable,value.confirmation_conflict
+        value.id,value.revision,value.confirmed_id,value.items.length,value.unavailable,value.confirmation_conflict
       ]),online]),
       submitter_id:draft?.submitter_id || null, submitter_name:submitter?.name || report?.author_name || '',
       can_edit:!settings && status === 'ready', can_publish:!settings && status === 'ready' && submitter.user_id === user.id && (!plan.unplanned || plan.items.length>0),
@@ -437,6 +447,7 @@ export function createWeeklyCollaboration(pool) {
   }
 
   async function items(user,body) {
+    if (body.weekly_supplement === true) return supplementItems(user,body);
     const scope=scopeOf(body), operation=operationOf(body), {action,revision}=body;
     if (!['add','update'].includes(action) || !Number.isSafeInteger(revision) || revision<0) fail(400,'事项操作不正确。');
     const id=action==='add'?operation:body.source_id;
@@ -477,6 +488,54 @@ export function createWeeklyCollaboration(pool) {
     return result;
   }
 
+  async function supplementItems(user,body) {
+    const scope=scopeOf(body),operation=operationOf(body),{action,revision,plan_id:planId}=body;
+    if (!['add','update','delete'].includes(action) || !Number.isSafeInteger(revision) || revision<1
+      || typeof planId!=='string' || !uuid.test(planId)) fail(400,'本周新增事项的操作或月计划不正确。');
+    const id=action==='add'?operation:body.source_id;
+    if (typeof id!=='string' || !uuid.test(id)) fail(400,'事项标识不正确。');
+    const item=action==='delete'?null:normalizeMonthlyPlanItems([{...body.item,source_id:id}],scope.scopeId)[0];
+    const fingerprint=digest(['weekly-supplement',action,id,item,planId,revision]);
+    const result=await withIdentity(pool,user.id,async client=>{
+      await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
+      await access(client,user,scope);
+      const draft=await readWeek(client,scope);
+      if (draft) await lockSharedMonth(client,scope,draft.submitter_id,monthsOf(scope).current);
+      if (await replay(client,user,scope,operation,fingerprint)) return state(client,user,scope,false);
+      await lockConfirmedMonth(client,scope);
+      const current=await state(client,user,scope,false),plan=current.plan;
+      if (!current.can_edit || !plan?.can_add_weekly_items || plan.confirmed_id!==planId)
+        fail(409,'当前周报或月计划已变化，请刷新后核对。');
+      if (action!=='add' && revision!==current.revision) fail(409,'协同稿已更新，请核对事项后重试。');
+      if (item && scope.scopeId) {
+        const range=(await client.query('SELECT project_ids FROM app_private.report_scopes WHERE id=$1',[scope.scopeId])).rows[0];
+        if (!range.project_ids.includes(item.project_id)) fail(400,'请选择本项目范围内的实际分期。');
+      }
+      const rows=draft.supplement_items.slice();
+      if (action==='add') {
+        if (plan.items.length>=500) fail(400,'月计划及本周新增事项合计最多 500 项。');
+        rows.push(item);
+      } else {
+        const index=rows.findIndex(row=>row.source_id===id);
+        if (index<0) fail(409,'只能修改尚未提交同步的本周新增事项。');
+        if (action==='update') rows[index]=item;
+        else {
+          if (draft.cells[id+':prog'] || draft.cells[id+':blocker'])
+            fail(409,'该事项已有当周进展或卡点，不能删除。');
+          rows.splice(index,1);
+        }
+      }
+      if (Buffer.byteLength(JSON.stringify(rows))>maxDraftBytes) fail(400,'本周新增事项累计内容已达上限。');
+      const nextRevision=current.revision+1;
+      await client.query(`UPDATE app_private.weekly_collaboration_drafts SET supplement_items=$4::jsonb,revision=$5,plan_id=$6
+        WHERE ${weekFilter}`,[...scope.weekValues,JSON.stringify(rows),nextRevision,planId]);
+      await appendOperation(client,user,scope,operation,'items',nextRevision,null,fingerprint);
+      return state(client,user,scope,false);
+    });
+    notify(scope);
+    return result;
+  }
+
   async function writeMonth(user,body,transition) {
     const scope=scopeOf(body),operation=operationOf(body),months=monthsOf(scope);
     const {month,revision}=body;
@@ -498,6 +557,8 @@ export function createWeeklyCollaboration(pool) {
       if (await replay(client,user,scope,operation,fingerprint)) return state(client,user,scope,false);
       const current=await state(client,user,scope,false);
       const plan=current.month_plans?.[target];
+      if (transition==='withdraw' && target==='current' && draft.supplement_items?.length)
+        fail(409,'本周已有待同步事项，请先处理新增事项后再撤回月计划。');
       const allowed=transition==='withdraw'?plan?.can_withdraw:transition==='confirm'?plan?.can_confirm:plan?.can_edit;
       if (!allowed || !plan.shared) fail(409,'当前月计划无法执行该操作，请刷新后核对。');
       if (action!=='add' && revision!==plan.revision) fail(409,'月计划已更新，请核对后重试。');
@@ -608,11 +669,13 @@ export function createWeeklyCollaboration(pool) {
       await access(client,user,scope);
       const draft=await readWeek(client,scope);
       if (draft) await lockSharedMonth(client,scope,draft.submitter_id,monthsOf(scope).current);
+      if (draft?.supplement_items?.length) await lockConfirmedMonth(client,scope);
       const current=await state(client,user,scope,false);
       if (current.submitter_id !== user.id) fail(403,'仅本周指定负责人可以正式提交。');
       if (await replay(client,user,scope,operation,fingerprint)) return current;
+      const hasSupplements=!!draft?.supplement_items?.length;
       if (!current.can_publish || current.revision !== body.revision || current.plan.id !== planId
-        || current.plan.shared && current.plan.revision!==body.plan_revision)
+        || (current.plan.shared || hasSupplements || current.plan.revision>0) && current.plan.revision!==body.plan_revision)
         fail(409,'协同稿版本或状态已变化，请核对最新内容后提交。');
       const normalized = (await client.query('SELECT app_private.report_week_start($1,now())::text AS week',[period])).rows[0].week;
       if (normalized !== week) fail(400,'附件周期与本周协同稿不一致。');
@@ -635,6 +698,17 @@ export function createWeeklyCollaboration(pool) {
         WHERE ${weekFilter}`,[...scope.weekValues,current.plan.confirmed_id ?? null,
         current.plan.unplanned?JSON.stringify(current.plan.items):null,current.plan.shared?current.plan.id:null]);
       await appendOperation(client,user,scope,operation,'publish',revision,null,fingerprint);
+      if (hasSupplements) {
+        try {
+          await client.query('SELECT app_private.append_weekly_collaboration_monthly_items($1,$2,$3,$4::date,$5::uuid,$6::int,$7::uuid)',
+            [...scope.eligibility,scope.week,current.plan.confirmed_id,current.revision,operation]);
+        } catch (error) {
+          if (error.code==='P4501' || error.code==='P4502') fail(409,error.message);
+          if (error.code==='42501') fail(403,'仅本周指定负责人可以同步新增事项并提交。');
+          if (error.code==='23514') fail(400,error.message);
+          throw error;
+        }
+      }
       await client.query("SELECT set_config('app.weekly_collaboration_publish',$1,true)",[operation]);
       const {id}=(await client.query(`INSERT INTO public.reports(project_id,period,line,author_id,author_name,biz,rich_text,status,self_speed,
         report_scope_id,scope_project_ids,scope_week) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12) RETURNING id`,

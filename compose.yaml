@@ -57,6 +57,7 @@ services:
       - ./db/042-shared-monthly-plans.sql:/docker-entrypoint-initdb.d/042-shared-monthly-plans.sql:ro
       - ./db/043-personnel-directory.sql:/docker-entrypoint-initdb.d/043-personnel-directory.sql:ro
       - ./db/044-weekly-report-withdrawal.sql:/docker-entrypoint-initdb.d/044-weekly-report-withdrawal.sql:ro
+      - ./db/045-weekly-collaboration-supplements.sql:/docker-entrypoint-initdb.d/045-weekly-collaboration-supplements.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s
