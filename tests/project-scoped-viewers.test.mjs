@@ -121,7 +121,8 @@ test('actual login, read-only plan navigation and selecting a scoped viewer as c
   const account=f.accounts.find(row=>row.id===pm.id);
   await author.goto(url);await author.locator('#email').fill(account.email);await author.locator('#password').fill(account.password);await author.getByRole('button',{name:'登录',exact:true}).click();
   await expect(author.locator('.planning-mainnav')).toBeVisible();
-  await author.getByRole('button',{name:'工作台',exact:true}).click();await author.getByRole('button',{name:'协调申请',exact:true}).click();
+  await expect(author.getByRole('button',{name:'工作台',exact:true})).toHaveCount(0);
+  await author.locator('[data-immediate-coordination] > summary').click();
   const peopleResponse=await author.request.post(url+'/api/project-people/list',{headers,data:{project_id:'demo-com'}});
   assert.equal(peopleResponse.status(),200);assert.ok((await peopleResponse.json()).data.some(p=>p.user_id===viewer.id));
   const owner=author.locator('.coordination-workbench').getByRole('combobox');await expect(owner.locator('option[value="'+viewer.id+'"]')).toHaveCount(1);await owner.selectOption(viewer.id);

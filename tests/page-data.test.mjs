@@ -92,7 +92,7 @@ function fixture(role = 'ops') {
         const operation={table:'@monthlySummaries',operation:'select',query:{month:new URL(url,'http://anonymous.test').searchParams.get('month')}};calls.push(operation);const result=await handler(operation);return {ok:!result?.error,json:async()=>result};
       }
       const sources = {'/api/report-scopes/list':'@reportScopes','/api/monthly-plans/list':'@monthlyPlans','/api/reporter-tasks/list': '@reporterTasks', '/api/project-people/list': '@projectPeople', '/api/completions/list': '@completions','/api/coordination-tasks/list':'@coordinationTasks','/api/coordination-tasks/create':'@coordinationCreate',
-        '/api/report-attachments/list': '@reportAttachments', '/api/project-plan-statistics':'@nodeStatistics'};
+        '/api/report-attachments/list': '@reportAttachments', '/api/project-plan-statistics':'@nodeStatistics', '/api/weekly-collaboration/next-week':'@nextCollaboration'};
       assert.ok(sources[url], 'unexpected read endpoint: ' + url);
       const operation = {table: sources[url], operation: 'select', query: JSON.parse(init.body)};
       calls.push(operation);
@@ -190,7 +190,7 @@ test('independent coordination loads before completion metadata and reaches PM w
   for (const pid of ['p1','p3']) {
     const f=fixture('pm'), id='10000000-0000-4000-8000-000000000201',key='coord:'+pid+':'+id;
     const row={id,project_id:pid,author_id:'other',author_name:'匿名协调发起人',owner_id:'current',owner_name:'当前演示用户',what:'无需周报的独立协调',due:'2026-11-01',created_at:'2026-10-21T08:00:00Z',source_key:key};
-    Object.assign(f.S,{view:'center',pmProject:pid,pmPeriod:'第1周'});
+    Object.assign(f.S,{view:'form',pmProject:pid,pmPeriod:''});
     f.setHandler(operation=>({data:operation.table==='reports'?[]:operation.table==='@coordinationTasks'?[row]:f.tables[operation.table] || [],error:null}));
     await f.loadPageData();await f.preparePM();f.renderShell();
     assert.ok(f.calls.findIndex(call=>call.table==='@coordinationTasks')<f.calls.findIndex(call=>call.table==='@completions'));
@@ -204,13 +204,13 @@ test('independent coordination loads before completion metadata and reaches PM w
 });
 
 test('coordination creation integrates its source and clears rendered fields without creating or modifying a report',async()=>{
-  const f=fixture('pm');f.S.view='coordination';let created=null;
+  const f=fixture('pm');f.S.view='form';let created=null;
   f.setHandler(operation=>{
     if(operation.table==='@coordinationCreate')return {data:created={...operation.query,author_id:'current',author_name:'当前演示用户',owner_name:'当前演示用户',created_at:'2026-10-21T08:00:00Z',source_key:'coord:p1:'+operation.query.id},error:null};
     return {data:operation.table==='reports'?[]:operation.table==='@coordinationTasks'?created?[created]:[]:f.tables[operation.table] || [],error:null};
   });
   await f.loadPageData();await f.preparePM();f.renderShell();
-  f.dom.set('coordination_owner_id_p1',{value:'current'});f.dom.set('coordination_what_p1',{value:'工作台即时发起'});f.dom.set('coordination_due_p1',{value:'2026-11-02'});
+  f.dom.set('coordination_owner_id_p1',{value:'current'});f.dom.set('coordination_what_p1',{value:'本期填报即时发起'});f.dom.set('coordination_due_p1',{value:'2026-11-02'});
   const reportDraft=JSON.stringify(f.S.coordRows);
   await f.window.CoordinationWorkbench.create('p1');
   assert.ok(created);assert.equal(f.S.coordinationTasks.length,1);assert.equal(f.S.reports.length,0);
@@ -285,9 +285,9 @@ test('review and attachment reads are limited to their actual page consumers', a
   assert.ok(form.calls.some(call => call.table === '@reporterTasks'));
   assert.ok(form.calls.some(call => call.table === '@completions'));
   assert.ok(form.calls.some(call => call.table === '@reportAttachments'));
-  for (const view of ['mline', 'center']) {
+  for (const view of ['mline', 'master']) {
     const f = fixture('pm'); f.S.view = view; await f.loadPageData();
-    assert.ok(f.calls.some(call => call.table === '@completions'), view);
+    assert.equal(f.calls.some(call => call.table === '@completions'), view==='mline', view);
     assert.equal(f.calls.some(call => call.table === '@reportAttachments'), false, view);
   }
   for (const role of ['ops', 'president', 'pzo']) {

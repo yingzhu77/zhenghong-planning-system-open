@@ -103,9 +103,10 @@ test('president and project chief gain read-only analysis while existing mainten
  }
 });
 
-test('reporter navigation preserves the existing personal work, reporting, files and history routes',()=>{
+test('reporter navigation groups project plans under project materials and keeps reporting history reachable',()=>{
  const {api}=harness('pm'),items=plain(api.planningNavItems());
- assert.deepEqual(plain(api.planningGroups(items)).map(group=>group.label),['工作台','本期填报','项目资料']);
- assert.deepEqual(items.map(item=>item.k),['center','mline','coordination','history','form','professionalOverview','master','library']);
+ assert.deepEqual(plain(api.planningGroups(items)).map(group=>group.label),['本期填报','项目资料']);
+ assert.deepEqual(items.map(item=>item.k),['form','professionalOverview','history','master','mline','library']);
+ assert.deepEqual(items.filter(item=>item.group==='projects').map(item=>item.label),['项目档案','项目计划','资料共享']);
  assert.ok(!items.some(item=>['projectPlanStats','nodes','nodesCom','completionStats','members','lineAdm'].includes(item.k)));
 });

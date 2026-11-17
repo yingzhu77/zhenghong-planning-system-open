@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8')
-  .replace('window.App = App;', 'window.App = App; window.audit = { S, maxDelay, suggestSpeed, statusOf, itemOverdue, itemState, viewDual, viewBoard, viewPres, viewPresCom, viewMyProjects, viewPMForm, viewMaster, viewMembers, viewPMCenter, viewPMHistory, reporterNodeSectionHtml, reportHistoryHtml, briefRowsHtml, buildNodeRows, buildEditRows, buildBizRows, currentPeriod, configureReporter, preparePM, loadPageData, reportAttachmentScope, planningAIContext, BIZ_LINES, businessLinesForProject, myBizLines, canReportBizLine, lineStat, overviewFilterHtml, draftKey }; renderShell = function () {};')
+  .replace('window.App = App;', 'window.App = App; window.audit = { S, maxDelay, suggestSpeed, statusOf, itemOverdue, itemState, viewDual, viewBoard, viewPres, viewPresCom, viewMyProjects, viewPMForm, viewMaster, viewMembers, viewReporterForm, viewPMHistory, reporterNodeSectionHtml, reportHistoryHtml, briefRowsHtml, buildNodeRows, buildEditRows, buildBizRows, currentPeriod, configureReporter, preparePM, loadPageData, reportAttachmentScope, planningAIContext, BIZ_LINES, businessLinesForProject, myBizLines, canReportBizLine, lineStat, overviewFilterHtml, draftKey }; renderShell = function () {};')
   .replace(/\(async function boot\(\) \{[\s\S]*?\}\)\(\);/, '');
 
 function fixture(richText = false, modules = false) {
@@ -177,7 +177,7 @@ test('workbench original-report action carries its actual module and revoked mod
   assert.match(workbench, /App.fillProject\(&quot;p1&quot;,&quot;第42周&quot;,&quot;机电工程&quot;\)/);
   assert.doesNotMatch(workbench, /机电原事项/, 'monthly plan items are maintained in the reporting form rather than repeated in the node workbench');
   assert.match(f.viewMyProjects(), /全部商业模块（测试）/);
-  assert.match(f.viewPMCenter(), /全部商业模块（测试）/);
+  assert.match(f.viewReporterForm(), /测试账号 · 可切换商业模块/);
   assert.match(f.viewPMHistory(), /机电工程/);
   f.setHandler(op => ({data: op.table === 'projects' ? f.S.projects : op.table === 'reports' ? [report] : []}));
   await f.App.fillProject('p1', '第42周', '机电工程');
@@ -568,8 +568,8 @@ test('saving an earlier project keeps a newly selected project and only clears t
   let release;const removed=[];f.storage.removeItem=key=>removed.push(key);
   f.setHandler(operation=>operation.operation==='upsert'?new Promise(resolve=>{release=()=>resolve({data:[operation.values]});}):{data:[]});
   const pending=f.App.submitReport();await new Promise(resolve=>setImmediate(resolve));
-  f.S.pmProject='p2';f.S.view='center';release();await pending;
-  assert.equal(f.S.pmProject,'p2');assert.equal(f.S.view,'center');assert.equal(removed.length,1);assert.match(removed[0],/_p1_/);
+  f.S.pmProject='p2';f.S.view='mline';release();await pending;
+  assert.equal(f.S.pmProject,'p2');assert.equal(f.S.view,'mline');assert.equal(removed.length,1);assert.match(removed[0],/_p1_/);
 });
 
 

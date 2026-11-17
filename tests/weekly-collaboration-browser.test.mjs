@@ -314,16 +314,20 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   await fixture.admin.query("INSERT INTO public.profiles(user_id,name,role,status,project_id,biz_line) VALUES($1,'匿名协调承办人','pm','approved','hf','建筑结构设计')",[receiver]);
   await fixture.admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES($1,'hf','pm')",[receiver]);
   const followup = '协助核对匿名现场图纸交接';
+  const delegatedFollowup = '补充匿名图纸复核意见';
   // An earlier ISO reporting week can be submitted after this week begins.
   const [origin] = (await fixture.admin.query(
     `INSERT INTO public.reports(project_id,line,period,author_id,author_name,coord_items,submitted_at)
-     VALUES('hf','设计部',($1::date-7)::text,'design-pilot-lead','匿名设计提报人',$2::jsonb,
+     VALUES('hf','设计部',($1::date-14)::text,'design-pilot-lead','匿名设计提报人',$2::jsonb,
        ($1::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')
      RETURNING id::text AS id`,
-    [fixture.week, JSON.stringify([{ source_id:'browser-coord', who_id:'design-pilot-editor',
-      who:'匿名设计协作者', what:followup, by:fixture.week }])]
+    [fixture.week, JSON.stringify([
+      {source_id:'browser-coord',who_id:'design-pilot-editor',who:'匿名设计协作者',what:followup,by:fixture.week},
+      {source_id:'browser-delegated',who_id:'design-pilot-editor',who:'匿名设计协作者',what:delegatedFollowup,by:fixture.week}
+    ])]
   )).rows;
   const followupKey = 'coord:hf:' + origin.id + ':coord:browser-coord';
+  const delegatedKey = 'coord:hf:' + origin.id + ':coord:browser-delegated';
   const browser = await chromium.launch({channel:'msedge',headless:true});
   t.after(()=>browser.close());
   const errors=[], requests=[];
@@ -360,9 +364,9 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   assert.equal(savedCoordination.status(),200,JSON.stringify((await savedCoordination.json()).error));
   const savedRow = (await savedCoordination.json()).data.rows[0];
   await expect(lead.locator('[data-weekly-coordination] .ql-editor').first()).toContainText('请协助复核匿名现场图纸',{timeout:18000});
-  const followupRow = page => page.locator('[data-followup-key="' + followupKey + '"]');
+  const followupRow = (page,key=followupKey) => page.locator('[data-followup-key="' + key + '"]');
   await expect(followupRow(editor)).toContainText(followup);
-  await expect(followupRow(lead)).toHaveCount(0);
+  await expect(followupRow(lead)).toContainText('承办人 匿名设计协作者');
   const feedback = '已核对图纸并向对方反馈';
   await followupRow(editor).locator('.ql-editor').fill(feedback);
   const feedbackSaved = editor.waitForResponse(response => response.url().endsWith('/api/weekly-collaboration/followups'));
@@ -372,6 +376,7 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   await editor.reload();
   await openWorkspace(editor);
   await expect(followupRow(editor).locator('.ql-editor')).toHaveText(feedback);
+  await expect(followupRow(lead).locator('.ql-editor')).toHaveText(feedback,{timeout:18000});
   const leadPanel=lead.locator('[data-weekly-collaboration]');
   const editorPanel=editor.locator('[data-weekly-collaboration]');
   const add=editorPanel.getByRole('button',{name:'＋ 新增本周事项',exact:true});
@@ -409,10 +414,19 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   await expect(cell(lead,newId+':prog')).toHaveText('组员已完成复核',{timeout:18000});
   const publish=leadPanel.getByRole('button',{name:'提交专业周报',exact:true});
   await expect(publish).toBeEnabled({timeout:18000});
+  await publish.click();
+  await expect(leadPanel).toContainText('填写 1 项当周进展');
+  await cell(lead,original.source_id+':prog').fill('暂无进展，等待接口资料');
+  await expect(publish).toBeEnabled({timeout:18000});
+  await publish.click();
+  await expect(followupRow(lead,delegatedKey).locator('.ql-editor')).toBeFocused();
+  const delegatedFeedback='已代组员核对，待项目方会签';
+  await followupRow(lead,delegatedKey).locator('.ql-editor').fill(delegatedFeedback);
   const artifacts='.local/weekly-collaboration-browser';
   await mkdir(artifacts,{recursive:true});
   await leadPanel.screenshot({path:artifacts+'/weekly-supplement-desktop.png'});
   await lead.locator('[data-weekly-coordination]').screenshot({path:artifacts+'/weekly-coordination-desktop.png'});
+  await lead.locator('.reporter-followups').screenshot({path:artifacts+'/weekly-followups-delegation-desktop.png'});
   lead.once('dialog',async dialog=>{
     assert.match(dialog.message(),/同步至本月计划/);
     await dialog.accept();
@@ -423,8 +437,14 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   assert.equal(published.status(),200,JSON.stringify((await published.json()).error));
   const report=(await published.json()).data.report;
   const supplement=report.biz.items.find(item=>item.source_id===newId);
-  assert.deepEqual(report.biz.followups.map(row=>[row.source_key,row.owner_name,row.progress]),
-    [[followupKey,'匿名设计协作者',feedback]]);
+  const official=new Map(report.biz.followups.map(row=>[row.source_key,row]));
+  assert.equal(official.size,2);
+  assert.equal(official.get(followupKey).owner_name,'匿名设计协作者');
+  assert.equal(official.get(followupKey).progress,feedback);
+  assert.equal(official.get(followupKey).filled_by,'design-pilot-editor');
+  assert.equal(official.get(delegatedKey).owner_id,'design-pilot-editor');
+  assert.equal(official.get(delegatedKey).progress,delegatedFeedback);
+  assert.equal(official.get(delegatedKey).filled_by,'design-pilot-lead');
   assert.deepEqual(report.coord_items.map(row=>[row.source_id,row.who_id,row.what,row.by]),[
     [savedRow.source_id,receiver,outgoing,fixture.week]
   ]);
@@ -438,6 +458,22 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   assert.deepEqual(synced.items.slice(1).map(item=>[item.source_id,item.name,item.due]),[
     [newId,'临时补充现场图纸复核及会签',fixture.week]
   ]);
+  const lateFollowup='较早收到但正式周报尚未反馈的匿名事项';
+  const [lateReport]=(await fixture.admin.query(
+    `INSERT INTO public.reports(project_id,line,period,author_id,author_name,coord_items)
+     VALUES('hf','建筑结构设计',($1::date-7)::text,$2,'匿名提报人',$3::jsonb) RETURNING id::text AS id`,
+    [fixture.week,receiver,JSON.stringify([{source_id:'late-review',who_id:'design-pilot-editor',what:lateFollowup,by:fixture.week}])]
+  )).rows;
+  const lateKey='coord:hf:'+lateReport.id+':coord:late-review';
+  await expect(editor.locator('[data-collaboration-result]')).toBeVisible({timeout:18000});
+  await editor.getByRole('button',{name:'更新待办事项',exact:true}).click();
+  const pendingReview=followupRow(editor,lateKey);
+  await expect(pendingReview).toContainText(lateFollowup);
+  await expect(pendingReview).toContainText('待补填 · 未纳入已提交周报');
+  await expect(pendingReview.locator('.ql-editor')).toHaveCount(0);
+  await expect(followupRow(editor,delegatedKey)).toContainText('由 匿名设计提报人 代填');
+  const [unchanged]=(await fixture.admin.query('SELECT biz FROM public.reports WHERE id=$1',[report.id])).rows;
+  assert.deepEqual(unchanged.biz.followups,report.biz.followups);
   assert.deepEqual(errors,[]);
 });
 

@@ -35,12 +35,13 @@ async function fixture(role='viewer',cap=false){
       else if(body.view==='archive'){
         data.project_id=body.project_id || 'own';
         data.archive={project_master:[{project_id:data.project_id,fields:{city:data.project_id==='other'?'商业城市':'住宅城市',fitout:'建设标准',rich_text:{v:1,fields:{fitout:{ops:[{insert:'建设标准',attributes:{bold:true}}]}}}}}],project_phases:[],project_drawings:[],milestones:[]};
-      }else assert.equal(body.view,'projects');
+      }else if(body.view==='plans')data.month=body.month;
+      else assert.equal(body.view,'projects');
       return route.fulfill({contentType:'application/json',body:JSON.stringify({data})});
     }
     if(pathname==='/api/project-library/list')return route.fulfill({contentType:'application/json',body:JSON.stringify({data:{items:[{id:'file',title:'匿名资料',name:'anonymous.pdf',version:1,category:'计划资料',mime:'application/pdf',size:1024,uploaded_name:'匿名上传人',created_at:'2026-10-23T01:00:00Z',can_withdraw:true}],categories:['计划资料'],configured:true,unlocked:false,can_manage:true,can_upload:true}})});
     if(pathname==='/api/project-library/unlock')return route.fulfill({contentType:'application/json',body:JSON.stringify({data:{}})});
-    if(['/api/report-scopes/list','/api/commercial-module-grants','/api/project-reporting-grants','/api/monthly-summaries'].includes(pathname))return route.fulfill({contentType:'application/json',body:JSON.stringify({data:[]})});
+    if(['/api/report-scopes/list','/api/commercial-module-grants','/api/project-reporting-grants','/api/monthly-summaries','/api/personnel-directory'].includes(pathname))return route.fulfill({contentType:'application/json',body:JSON.stringify({data:[]})});
     assert.fail('unexpected isolated route: '+pathname);
   }
   await page.route('**/*',async route=>{
@@ -104,8 +105,11 @@ test('viewer login and real navigation expose only read-only tasks and project f
 test('PM capability keeps personal arrays, reporting scope and own library while the independent snapshot, meeting, archive and shared-library pages have no write actions',async()=>{
   const h=await fixture('pm',true);const {page}=h;
   try{
-    const before=await page.evaluate(()=>{const h=window.managementAudit,S=h.S;window.personalSnapshot=JSON.stringify([S.projects,S.pms,S.reports,S.reportScopes,S.reporterTasks,S.coordinationTasks,S.completions,S.pmProject,S.pmPeriod,S.pmLine]);return {keys:h.planningNavItems().map(x=>x.k),my:h.myProjects(),manager:h.isPlanningManager()};});
-    assert.deepEqual(before.keys.slice(0,8),['center','mline','coordination','history','form','professionalOverview','master','library']);assert.equal(before.my.length,1);assert.equal(before.manager,false);
+    const before=await page.evaluate(()=>{const h=window.managementAudit,S=h.S;window.personalSnapshot=JSON.stringify([S.projects,S.pms,S.reports,S.reportScopes,S.reporterTasks,S.coordinationTasks,S.completions,S.pmProject,S.pmPeriod,S.pmLine]);return {items:h.planningNavItems(),my:h.myProjects(),manager:h.isPlanningManager()};});
+    assert.deepEqual(before.items.slice(0,6).map(item=>[item.k,item.group]),[
+      ['form','form'],['professionalOverview','form'],['history','form'],['master','projects'],['mline','projects'],['library','projects']
+    ]);
+    assert.equal(before.my.length,1);assert.equal(before.manager,false);
     await page.evaluate(()=>window.managementAudit.showPage());
     await goto(h,'managementCompletion');await expect(page.locator('.management-reader')).toContainText('申报时快照与已保存审核记录');
     await expect(page.locator('.rt-red strong')).toHaveText('申报时原文');await expect(page.locator('.management-reader')).toContainText('原审核说明');

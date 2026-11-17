@@ -834,8 +834,16 @@
     async publish() {
       if (this.publishButton.disabled || this.closed || !this.state?.can_publish || this.queue.length || this.sending || this.savingItem
         || this.isComposing() || this.config.attachmentBusy?.()) return;
-      if (this.state.plan?.weekly_supplement_ids?.length
-        && !global.confirm('提交后，新增事项将同步至本月计划。是否提交专业周报？')) return;
+      const missing = (this.state.plan?.items || []).filter(item => {
+        const editor = this.editors.get(item.source_id + ':prog');
+        return !String(editor?.text.toString() ?? item.prog ?? '').trim();
+      });
+      if (missing.length) {
+        this.notice = '请在第二部分填写 ' + missing.length + ' 项当周进展。暂无进展时可以填写原因。';
+        this.paint();
+        this.editors.get(missing[0].source_id + ':prog')?.quill.focus();
+        return;
+      }
       this.publishing = true;
       this.error = '';
       this.notice = '';
@@ -850,6 +858,8 @@
           this.accept(await this.request('open',{},this.controller.signal),number);
         }
         if (this.closed || !this.state?.can_publish) return;
+        if (this.state.plan?.weekly_supplement_ids?.length
+          && !global.confirm('提交后，新增事项将同步至本月计划。是否提交专业周报？')) return;
         const planRevision=this.state.plan?.revision;
         if (!this.publishAttempt || this.publishAttempt.revision !== this.state.revision || this.publishAttempt.plan_id !== this.planId
           || this.publishAttempt.plan_revision!==planRevision) {
@@ -871,6 +881,9 @@
           this.publishAttempt = null;
           this.notice = error.message + ' 请核对最新协同稿后再提交。';
           this.reconnect();
+        } else if (error.status === 400) {
+          this.publishAttempt = null;
+          this.notice = error.message;
         } else this.failed(error);
       } finally {
         this.publishing = false;

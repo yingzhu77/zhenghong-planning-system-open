@@ -164,6 +164,11 @@ function contents(encoded) {
   } finally { doc.destroy(); }
 }
 
+function fillProgress(service,user,scope,plan,cell=progressCell) {
+  return service.change(user,{...scope,plan_id:plan.id,cell,
+    update:edit('本周暂未推进，等待前置工作完成'),operation_id:randomUUID()});
+}
+
 function standaloneReport(f,user,scope,plan,period=week) {
   const {report_scope_id,...identity} = scope;
   return executeDatabase(f.pool,user,{table:'reports',operation:'upsert',onConflict:'project_id,period,line',
@@ -257,7 +262,8 @@ test('本周负责人可撤回已提交周报，保留共享稿和附件，组�
   const oldPlan=oldMonth===month?plan:await confirmMonthlyPlan(f.pool,retailLead,{
     project_id:scope.project_id,line:scope.line,month:oldMonth,items:[{...item('已结束的报告周事项'),due:oldMonth+'-24'}]
   });
-  const oldDraft=await service.settings(operator,{...history,submitter_id:retailLead.id});
+  await service.settings(operator,{...history,submitter_id:retailLead.id});
+  const oldDraft=await fillProgress(service,retailLead,history,oldPlan);
   const oldReport=await service.publish(retailLead,{...history,plan_id:oldPlan.id,
     revision:oldDraft.revision,operation_id:randomUUID()});
   assert.equal(oldReport.can_withdraw,false);
@@ -279,7 +285,8 @@ test('已确认月计划保留原事项与历史周报，组员临时事项随�
   await settings(historical);
   const publishBody=(room,state)=>({...room,plan_id:state.plan.id,plan_revision:state.plan.revision,
     revision:state.revision,operation_id:randomUUID()});
-  const historicalReport=(await service.publish(retailLead,publishBody(historical,await service.open(retailLead,historical)))).report;
+  const historicalDraft=await fillProgress(service,retailLead,historical,plan,originalId+':prog');
+  const historicalReport=(await service.publish(retailLead,publishBody(historical,historicalDraft))).report;
   assert.deepEqual(historicalReport.biz.items.map(row=>row.source_id),[originalId]);
   const saveStandalone=(name,prog)=>executeDatabase(f.pool,retailLead,{table:'reports',operation:'upsert',
     onConflict:'project_id,period,line',values:{project_id:scope.project_id,line:scope.line,period:standaloneWeek,
@@ -317,6 +324,7 @@ test('已确认月计划保留原事项与历史周报，组员临时事项随�
   const removed=await service.items(retailPeer,{...request,action:'delete',item:undefined,source_id:temporary.operation_id,
     revision:extra.revision,operation_id:randomUUID()});
   assert.deepEqual(removed.plan.weekly_supplement_ids,[id]);
+  await fillProgress(service,retailPeer,scope,removed.plan,originalId+':prog');
   const edited=await service.change(retailPeer,{...scope,plan_id:removed.plan.id,cell:id+':prog',
     update:edit('组员补录临时进展'),operation_id:randomUUID()});
   assert.equal(contents((await service.open(retailLead,scope)).cells[id+':prog']),'组员补录临时进展');
@@ -378,6 +386,8 @@ test('合并项目临时事项受原月计划分期约束，发布后按原确�
   await assert.rejects(service.items(engineeringPeer,{...body,item:{...body.item,project_id:b.project_id}}),error=>error.status===400);
   await assert.rejects(service.items(engineeringPeer,{...body,plan_id:confirmed.plan.id}),conflict);
   const ready=await service.items(engineeringPeer,body);
+  await fillProgress(service,engineeringPeer,scope,ready.plan,ready.plan.items[0].source_id+':prog');
+  await fillProgress(service,engineeringPeer,scope,ready.plan,body.operation_id+':prog');
   const blocker=await service.change(engineeringPeer,{...scope,plan_id:ready.plan.id,cell:body.operation_id+':blocker',
     update:edit('一期临时工作卡点'),operation_id:randomUUID()});
   const published=await service.publish(engineering,{...scope,plan_id:blocker.plan.id,plan_revision:blocker.plan.revision,
@@ -392,7 +402,7 @@ test('合并项目临时事项受原月计划分期约束，发布后按原确�
   assert.deepEqual(refreshed.plan.items.map(row=>row.project_id),['zhx2','zhx1']);
 });
 
-test('商业协同的个人待办仅本人可保存，负责人提交后才归入正式周报', async t => {
+test('商业协同带入未销项待办，完整反馈和月计划进展为正式提交必填，负责人可以代填并留痕', async t => {
   const f = await fixture(t), { service } = f;
   const { current } = await currentWeekAndSiblings(f);
   const scope = inWeek(custom, current);
@@ -400,22 +410,39 @@ test('商业协同的个人待办仅本人可保存，负责人提交后才归�
     project_id: scope.project_id, line: scope.line, month: current.slice(0, 7),
     items: [item('本周计划')]
   });
-  const assigned = async (author, owner, line, title) => {
+  const assigned = async (author, owner, line, title, offset=-7) => {
     const [report] = (await f.admin.query(
       `INSERT INTO public.reports(project_id,period,author_id,author_name,line,coord_items)
-       VALUES($1,($2::date-7)::text,$3,$3,$4,$5::jsonb) RETURNING id::text AS id`,
+       VALUES($1,($2::date+$6::int)::text,$3,$3,$4,$5::jsonb) RETURNING id::text AS id`,
       [scope.project_id, current, author.id, line, JSON.stringify([
         { source_id: 'assigned', who_id: owner.id, who: owner.id, what: title, by: current }
-      ])]
+      ]),offset]
     )).rows;
     return 'coord:' + scope.project_id + ':' + report.id + ':coord:assigned';
   };
   const peerKey = await assigned(retailLead, retailPeer, '成本', '请协助核对一批匿名专项图纸');
+  const proxyKey = await assigned(retailLead, retailPeer, '招采', '请跟进尚未销项的协调工作', -21);
   const leadKey = await assigned(retailPeer, retailLead, '招采', '请确认匿名工程交接界面');
+  const closedKey = await assigned(retailLead, retailPeer, '成本', '正式销项后不再滚动', -14);
+  await assigned(retailLead, retailPeer, '成本', '未来报告周不提前进入待办', 7);
+  const completionSource=await previewCompletion(f.pool,retailPeer,{source_key:closedKey});
+  const closure=await requestCompletion(f.pool,retailPeer,{source_key:closedKey,
+    source_version:completionSource.source_version,completion_date:current,completion_note:'匿名完成核对'});
+  await reviewCompletion(f.pool,retailLead,{id:closure.id,expected_revision:closure.revision,decision:'approve'});
   await service.settings(operator, { ...scope, submitter_id: retailLead.id, member_ids: [retailPeer.id] });
   const initial = await service.open(retailPeer, scope);
   assert.equal(initial.my_followups_revision, 0);
   assert.deepEqual(initial.my_followups ?? [], []);
+  const beforeSubmission={...scope,plan_id:plan.id,revision:initial.revision,operation_id:randomUUID()};
+  await assert.rejects(service.publish(retailLead,beforeSubmission),error=>error.status===400 && /填写 1 项当周进展/.test(error.message));
+  const checked=await fillProgress(service,retailPeer,scope,plan);
+  const initialPending=await service.pendingFollowups(retailPeer,scope);
+  assert.equal(initialPending.people.length,1);
+  assert.equal(initialPending.people[0].owner_id,retailPeer.id);
+  assert.deepEqual(new Set(initialPending.people[0].rows.map(row=>row.source_key)),new Set([peerKey,proxyKey]));
+  assert.ok(initialPending.people[0].rows.every(row=>!row.saved && !row.submitted && row.progress===''));
+  await assert.rejects(service.publish(retailLead,{...beforeSubmission,revision:checked.revision}),
+    error=>error.status===400 && /第四部分/.test(error.message));
 
   const progress = '反馈已确认原样';
   const richProgress = { ops: [{ insert: progress, attributes: { bold: true } }] };
@@ -425,6 +452,7 @@ test('商业协同的个人待办仅本人可保存，负责人提交后才归�
       rich_text: { v: 1, fields: { progress: richProgress } } }]
   };
   await assert.rejects(service.followups(retailLead, feedback), denied);
+  await assert.rejects(service.followups(retailPeer,{...feedback,owner_id:retailLead.id}),denied);
   const saved = await service.followups(retailPeer, feedback);
   assert.equal(saved.feedback_revision, 1);
   assert.ok(saved.revision > initial.revision);
@@ -438,26 +466,35 @@ test('商业协同的个人待办仅本人可保存，负责人提交后才归�
   assert.deepEqual((await service.open(retailLead, scope)).my_followups ?? [], []);
   assert.equal((await service.open(retailPeer, scope)).my_followups[0].progress, progress);
   assert.equal((await service.open(retailPeer, scope)).report, null);
+  const proxy=await service.followups(retailLead,{...scope,owner_id:retailPeer.id,feedback_revision:saved.feedback_revision,
+    entries:[...feedback.entries,{source_key:proxyKey,status:'open',progress:'尚未开始，等待施工面释放'}]});
+  assert.deepEqual(proxy.rows.map(row=>row.filled_by),[retailPeer.id,retailLead.id]);
   const before = await service.followups(retailLead, {
-    ...scope, feedback_revision: 0, entries: [{ source_key: leadKey, status: 'open', progress: '' }]
+    ...scope, feedback_revision: 0, entries: [{ source_key: leadKey, status: 'open', progress: '本周先核对技术口径' }]
   });
   const submission = { ...scope, plan_id: plan.id, revision: before.revision, operation_id: randomUUID() };
   await assert.rejects(service.publish(retailPeer, submission), denied);
   await assert.rejects(service.publish(retailLead, { ...submission, revision: initial.revision }), conflict);
   const published = await service.publish(retailLead, submission);
   const rows = published.report.biz.followups;
-  assert.equal(rows.length, 2);
+  assert.equal(rows.length, 3);
   const peerIndex = rows.findIndex(row => row.source_key === peerKey);
   assert.ok(peerIndex >= 0);
   assert.deepEqual([rows[peerIndex].owner_id, rows[peerIndex].owner_name, rows[peerIndex].progress],
     [retailPeer.id, retailPeer.id, progress]);
   assert.equal(rows.find(row => row.source_key === leadKey).owner_id, retailLead.id);
+  assert.deepEqual(rows.filter(row=>row.owner_id===retailPeer.id).map(row=>row.filled_by).sort(),[retailLead.id,retailPeer.id].sort());
   assert.deepEqual(published.report.rich_text.fields['biz.followups.' + peerIndex + '.progress'], richProgress);
   assert.deepEqual((await service.open(retailPeer, scope)).report.biz.followups, rows);
   await assert.rejects(service.followups(retailPeer, {
     ...feedback, feedback_revision: saved.feedback_revision,
     entries: [{ source_key: peerKey, status: 'in_progress', progress: '正式提交后不能直接修改' }]
   }), conflict);
+  const lateKey=await assigned(retailLead,retailPeer,'成本','旧来源在报告提交后重新登记',-28);
+  const after=await service.pendingFollowups(retailPeer,scope);
+  assert.deepEqual(new Set(after.people[0].rows.filter(row=>row.submitted).map(row=>row.source_key)),new Set([peerKey,proxyKey]));
+  assert.deepEqual(after.people[0].rows.filter(row=>!row.submitted).map(row=>row.source_key),[lateKey]);
+  assert.deepEqual((await service.open(retailLead,scope)).report.biz.followups,rows);
 });
 
 test('合并住宅待办保留实际分期，其他项目事项与移出协同名单的草稿不纳入提交', async t => {
@@ -482,7 +519,7 @@ test('合并住宅待办保留实际分期，其他项目事项与移出协同�
   await service.followups(engineeringPeer, feedback(peerTask.source_key, '已核对一期交接资料'));
   await service.settings(operator, { ...scope, submitter_id: engineering.id, member_ids: [] });
   await assert.rejects(service.open(engineeringPeer, scope), denied);
-  const ready = await service.open(engineering, scope);
+  const ready = await fillProgress(service,engineering,scope,plan);
   const published = await service.publish(engineering, {
     ...scope, plan_id: plan.id, revision: ready.revision, operation_id: randomUUID()
   });
@@ -533,7 +570,7 @@ test('商业协同仅共享本周协调草稿，负责人提交后才正式指�
   assert.deepEqual(saved.rows[0].rich_text.fields.what,richWhat);
   assert.equal((await service.coordination(retailPeer,body([entry]))).revision,saved.revision);
   await assert.rejects(service.coordination(retailLead,body([])),conflict);
-  const ready = await service.open(retailLead,scope);
+  const ready = await fillProgress(service,retailLead,scope,plan);
   assert.equal(ready.coordination_revision,saved.coordination_revision);
   assert.deepEqual(ready.coordination_items,saved.rows);
   assert.equal(ready.report,null);
@@ -664,7 +701,7 @@ test('专业合并项目要求所有分期原授权，正式周报保留每条�
   await assert.rejects(service.open(engineering,inWeek({...merged,report_scope_id:null})),denied);
   await assert.rejects(service.open(engineering,inWeek({...merged,project_id:'zhx2'})),denied);
   await service.change(engineeringPeer,{...inWeek(merged),plan_id:plan.id,cell:blockerCell,update:edit('匿名二期机电问题'),operation_id:randomUUID()});
-  const room=await service.open(engineering,inWeek(merged));
+  const room=await fillProgress(service,engineering,inWeek(merged),plan);
   const saved=(await service.publish(engineering,{...inWeek(merged),plan_id:plan.id,revision:room.revision,operation_id:randomUUID()})).report;
   assert.equal(saved.project_id,'zhx1');
   assert.equal(saved.report_scope_id,merged.report_scope_id);

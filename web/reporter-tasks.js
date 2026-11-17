@@ -18,7 +18,10 @@
   function meetingKind(row) { return row && (row.meeting_kind === 'requirement' || row.meeting_kind === 'special') ? row.meeting_kind : 'legacy'; }
   function kindText(row) { return { requirement: '会议要求事项', special: '专项会议决议事项', legacy: '原会议事项（待分类）' }[meetingKind(row)]; }
   function displayTitle(row) { return String(row && row.title || '同步事项').replace(/^原会议事项（待分类）(?= · |$)/, '历史会议待办'); }
-  function pendingCategory(row) { return row.source_type === 'meeting' ? '会议事项要求' : '他人协调我的事项'; }
+  function pendingCategory(row) {
+    if (row.source_type === 'meeting') return '会议事项要求';
+    return row.owner_id && row.owner_id !== S.uid ? '他人协调组员的事项' : '他人协调我的事项';
+  }
   function pendingRow(row) { return row && ['meeting','coord'].includes(row.source_type) && !String(row.source_key || '').startsWith('leader:'); }
   function pendingProposer(row) {
     if (row.source_type === 'meeting') {
@@ -298,28 +301,43 @@
     return {source_key:row.source_key,progress:row.progress,status:state(row.status),
       ...(rich?{rich_text:{v:1,fields:{progress:doc}}}:{})};
   }
-  function collaborationEntries() {
+  function collaborationEntries(ownerId) {
+    if (ownerId) return inspectRows(S.followupRows || []).rows.filter(function(row){
+      return row.owner_id===ownerId && !row.submitted;
+    }).map(feedbackEntry).sort(function(a,b){return a.source_key.localeCompare(b.source_key);});
     var current=new Set(sources().filter(pendingRow).map(function(row){return row.source_key;}));
     return inspectRows(S.followupRows || []).rows.filter(function(row){
       return pendingRow(row) && !row.source_missing && current.has(row.source_key);
     }).map(feedbackEntry).sort(function(a,b){return a.source_key.localeCompare(b.source_key);});
   }
-  function mergeCollaborationRows(saved, baseline) {
-    var known=new Map(inspectRows(saved).rows.map(function(row){return [row.source_key,row];}));
-    var previous=new Map((baseline || []).map(function(row){return [row.source_key,row];})), conflict=false;
-    S.followupRows=inspectRows(S.followupRows || []).rows.map(function(row){
-      var latest=known.get(row.source_key);
-      if(!latest)return row;
-      var old=JSON.stringify(previous.get(row.source_key)), local=JSON.stringify(feedbackEntry(row)), remote=feedbackEntry(latest);
-      previous.set(row.source_key,remote);
-      if(!old || local===old)return withFeedback(row,latest);
-      if(local!==JSON.stringify(remote) && old!==JSON.stringify(remote))conflict=true;
-      return row;
-    });
-    return {baseline:Array.from(previous.values()),conflict:conflict};
+  function collaborationRowKey(row) {
+    return JSON.stringify([row.owner_id || S.uid,row.source_key]);
+  }
+  function mergeCollaborationRows(people, baseline, editable) {
+    var previous=new Map((baseline || []).map(function(row){return [collaborationRowKey(row),row];}));
+    var local=new Map(inspectRows(S.followupRows || []).rows.filter(function(row){return !row.submitted;})
+      .map(function(row){return [collaborationRowKey(row),row];}));
+    var nextBaseline=[], conflicts=new Set();
+    S.followupRows=people.flatMap(function(person){return inspectRows(person.rows).rows.map(function(source){
+      var latest=copy(source), key=collaborationRowKey(latest);
+      delete latest.rich_text;
+      var earlier=previous.get(key), input=local.get(key);
+      var remote=feedbackEntry(latest);
+      nextBaseline.push({...remote,owner_id:latest.owner_id});
+      if(!editable || !earlier || !input) return latest;
+      var old={...earlier};delete old.owner_id;
+      var here=feedbackEntry(input);
+      if(JSON.stringify(here)===JSON.stringify(old))return latest;
+      if(JSON.stringify(here)!==JSON.stringify(remote) && JSON.stringify(old)!==JSON.stringify(remote))conflicts.add(latest.owner_id);
+      return withFeedback(latest,input);
+    });});
+    return {baseline:nextBaseline,conflicts:Array.from(conflicts)};
   }
   function saveCollaborationFeedback() {
     if(typeof cfg.saveCollaborationFeedback==='function')return cfg.saveCollaborationFeedback();
+  }
+  function refreshCollaborationFeedback() {
+    if(typeof cfg.refreshCollaborationFeedback==='function')return cfg.refreshCollaborationFeedback();
   }
   async function refreshSources() {
     if (refreshing) return;
@@ -374,9 +392,8 @@
   function formHtml(collaboration) {
     var published=collaboration?.report, editable=!collaboration || collaboration.status==='ready';
     var items;
-    if(published){
-      if(global.ZHRichText)global.ZHRichText.attach(published);
-      items=inspectRows(published.biz?.followups || []).rows.filter(function(row){return ownFollowup(published,row);});
+    if(collaboration){
+      items=collaboration.people?inspectRows(S.followupRows || []).rows:[];
     } else {
       validationError();
       items=S.followupRows=inspectRows(S.followupRows || []).rows;
@@ -384,29 +401,37 @@
     var visible=items.map(function(row,index){return {row:row,index:index};}).filter(function(entry){return pendingRow(entry.row);});
     return '<section class="card reporter-followups'+(collaboration?' plan-form-section" data-personal-rich-editor':'"')+'><div class="cardhd'
       +(collaboration?' plan-section-head':'')+'"><h3>四、待处理事项清单</h3>'
-      + (editable?'<div class="reporter-row-actions"><button type="button" class="btn" onclick="ReporterTasks.refreshSources()"'
-        + (refreshing || collaboration?.saving ? ' disabled' : '') + '>' + (refreshing ? '更新中…' : '更新待办事项') + '</button>'
-        + (collaboration?'<button type="button" id="collaboration-feedback-save" class="btn primary" onclick="ReporterTasks.saveCollaborationFeedback()"'
-          + (!visible.length && !collaboration.rows?.length || collaboration.saving ? ' disabled' : '') + '>保存本期反馈</button>':'')+'</div>':'')+'</div>'
-      + (collaboration?'<p class="muted" role="status">'+esc(published?'以下是本人随周报提交的反馈。':editable?'本人填写并保存后，由负责人统一提交周报。':'协同状态读取后可填写本人反馈。')+'</p>':'')
+      + (editable || published?'<div class="reporter-row-actions"><button type="button" class="btn" onclick="ReporterTasks.'+(collaboration?'refreshCollaborationFeedback':'refreshSources')+'()"'
+        + (refreshing || collaboration?.saving || collaboration?.loading ? ' disabled' : '') + '>' + (refreshing || collaboration?.loading ? '更新中…' : '更新待办事项') + '</button>'
+        + (collaboration && editable?'<button type="button" id="collaboration-feedback-save" class="btn primary" onclick="ReporterTasks.saveCollaborationFeedback()"'
+          + (!visible.length || collaboration.saving || collaboration.loading || collaboration.error ? ' disabled' : '') + '>保存本期反馈</button>':'')+'</div>':'')+'</div>'
+      + (collaboration?'<p class="muted" role="status">'+esc(published?(collaboration.canWithdraw?'未纳入周报的待办，可在撤回后补填。':'已提交的反馈和仍待补填的事项。需补填时请联系本周负责人。')
+        :editable?(collaboration.isLead?'可代组员填写，系统记录实际填写人。填写齐全后统一提交。':'填写本人的状态和反馈，再由负责人统一提交周报。')
+        :'协同状态读取后可填写待办反馈。')+'</p>':'')
+      + (collaboration?.error?'<p class="reporter-source-note" role="alert">'+esc(collaboration.error)+'</p>':'')
       + (editable && collaboration?.conflict?'<p class="reporter-source-note" role="alert">其他窗口有更新，已保留本机输入。请核对后再保存。</p>':'')
-      + (dataIssue ? '<p class="reporter-source-note" role="alert">' + esc(dataIssue) + '</p>' : '')
+      + (!collaboration && dataIssue ? '<p class="reporter-source-note" role="alert">' + esc(dataIssue) + '</p>' : '')
       + '<div class="tablewrap reporter-followup-scroll"><table class="reporter-followup-table"><thead><tr><th>类别</th><th>提出人</th><th>事项内容</th><th>完成时间</th><th>本期进展</th></tr></thead><tbody>'
       + (visible.length ? visible.map(function (entry) {
         var row=entry.row,index=entry.index;
-        var effectiveDue=dueFor(row.source_key,row.due,S.uid);
+        var owner=row.owner_id || S.uid, canEdit=editable && !row.submitted;
+        var effectiveDue=row.effective_due || dueFor(row.source_key,row.due,owner);
         return '<tr data-followup-key="'+esc(row.source_key)+'" data-followup-index="'+index+'"><td data-label="类别"><b>' + esc(pendingCategory(row)) + '</b></td>'
           + '<td data-label="提出人">'+esc(pendingProposer(row))+'<div class="muted">'+origin(row)+'</div></td>'
           + '<td data-label="事项内容">' + cfg.richItem(row, 'what', '未填写事项内容') + reopenedHtml(row)
+          + (collaboration?.isLead && owner!==S.uid?'<p class="muted">承办人 '+esc(row.owner_name || '未记录')+'</p>':'')
           + (row.source_updated ? '<p class="reporter-source-note">来源已更新' + (row.source_missing ? '或已移除' : '') + '，保留此前事项与反馈供核对。</p>' : '') + '</td>'
           + '<td data-label="完成时间">' + esc(effectiveDue || '未设置') + (effectiveDue && effectiveDue!==row.due?'<div class="muted">原期限：'+esc(row.due || '未设置')+'</div>':'') + '</td>'
-          + '<td data-label="本期进展">'+(editable?'<label class="reporter-followup-status">处理状态<select id="followup_status_' + index + '" aria-label="同步事项处理状态">' + options(row.status) + '</select></label>'
-          + '<textarea id="followup_progress_' + index + '" data-rich rows="2" aria-label="同步事项本期进展" placeholder="填写本期进展、结果或待协调内容">' + esc(row.progress) + '</textarea>'
+          + '<td data-label="本期进展">'+(canEdit?'<label class="reporter-followup-status">处理状态<select id="followup_status_' + index + '" aria-label="同步事项处理状态">' + options(row.status) + '</select></label>'
+          + '<textarea id="followup_progress_' + index + '" data-rich rows="2" aria-label="同步事项本期进展" placeholder="填写本期进展、结果或暂无进展的原因">' + esc(row.progress) + '</textarea>'
           + (row.meeting_conflict ? '<div class="reporter-source-note" role="alert">其他入口已有更新，本机输入保留。<div class="reporter-conflict-actions"><button type="button" class="btn ghost sm" onclick="ReporterTasks.resolveMeeting('+index+',false)">采用最新进展</button><button type="button" class="btn ghost sm" onclick="ReporterTasks.resolveMeeting('+index+',true)">保留本机进展</button></div></div>' : '')
-          + '<div class="reporter-followup-actions">'+reviewAction(row.source_key)+'</div>'
-          :cfg.richItem(row,'progress','本期未填写')+'<div class="reporter-feedback-state">'+esc(statusText(row.status))+'</div>')+'</td>'
+          + (owner===S.uid?'<div class="reporter-followup-actions">'+reviewAction(row.source_key)+'</div>':'')
+          :published && !row.submitted?'<div class="reporter-feedback-state">待补填 · 未纳入已提交周报</div>'
+          :cfg.richItem(row,'progress','本期未填写')+'<div class="reporter-feedback-state">'+esc(statusText(row.status))+'</div>')
+          + (row.filled_by && row.filled_by!==owner?'<div class="muted">由 '+esc(row.filled_by_name || '本周负责人')+' 代填</div>':'')+'</td>'
           + '</tr>';
-      }).join('') : '<tr><td colspan="5" class="empty">' + (dataIssue ? '待办事项未能完整读取，请核对原记录。' : '本期暂无待处理事项。') + '</td></tr>') + '</tbody></table></div></section>';
+      }).join('') : '<tr><td colspan="5" class="empty">' + (collaboration?.error?'待办读取失败，请更新后重试。'
+        :collaboration && !collaboration.people?'正在读取本期待办…':!collaboration && dataIssue?'待办事项未能完整读取，请核对原记录。':'本期暂无待处理事项。') + '</td></tr>') + '</tbody></table></div></section>';
   }
   function meetingForm(pid) {
     if (!editing || editing.project_id !== pid) return '';
@@ -617,5 +642,6 @@
   }
   global.ReporterTasks = { configure: configure, pendingHtml:pendingHtml, displayTitle:displayTitle, feedbackFor:currentFeedback, openFeedback:openFeedback, workbenchHtml: workbenchHtml, requirementsHtml: requirementsHtml, renderAdmin: renderAdmin, filterProject: filterProject, filterKind: filterKind, setKind: setKind, loadPeople: loadPeople, retryPeople: retryPeople, formHtml: formHtml, prepare: prepare, capture: capture,
     rows: rows, prepareCoordination: prepareCoordination, syncMeetingRows:syncMeetingRows, syncSavedTask:syncSavedTask, resolveMeeting:resolveMeeting, sourceItems:function(){return sources().map(copy);}, snapshotHtml: snapshotHtml, binding: binding, edit: edit, save: save, cancel: cancel, refreshSources: refreshSources, validationError: validationError,
-    collaborationEntries:collaborationEntries,mergeCollaborationRows:mergeCollaborationRows,saveCollaborationFeedback:saveCollaborationFeedback };
+    collaborationEntries:collaborationEntries,mergeCollaborationRows:mergeCollaborationRows,saveCollaborationFeedback:saveCollaborationFeedback,
+    refreshCollaborationFeedback:refreshCollaborationFeedback };
 })(window);

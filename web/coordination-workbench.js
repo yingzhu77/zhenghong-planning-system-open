@@ -23,7 +23,8 @@
   }
   function allowed(pid) { return !!(S && S.uid && S.profile && S.profile.role === 'pm' && pid && (S.projects || []).some(function (project) { return project.id === pid; })); }
   function esc(value) { return cfg.esc(value == null ? '' : value); }
-  function current(pid, generation, view) { return generation === epoch && allowed(pid) && S.pmProject === pid && S.view === view; }
+  function currentProject() { return cfg?.projectId ? cfg.projectId() : S && S.pmProject; }
+  function current(pid, generation, view) { return generation === epoch && allowed(pid) && currentProject() === pid && S.view === view; }
   function check(result, label) {
     if (!result || result.error) {
       var detail = result && result.error || {}, error = new Error(detail.message || label);
@@ -82,7 +83,7 @@
     entry.peoplePending = task; return task;
   }
   async function load(projectId, force) {
-    var pid = typeof projectId === 'string' ? projectId : '', target = pid || S && S.pmProject;
+    var pid = typeof projectId === 'string' ? projectId : '', target = pid || currentProject();
     if (!allowed(target)) return { data: null, error: { message: '请先选择有权填报的项目' } };
     var results = await Promise.all([loadList(pid, force), loadPeople(target, force)]);
     return results[0].error ? results[0] : results[1].error ? { data: results[0].data, error: results[1].error } : results[0];
@@ -94,7 +95,7 @@
     try { pid = decodeURIComponent(match[1]); } catch (_) { return null; }
     if (!allowed(pid)) return null;
     var draft = state(pid).draft, generation = epoch, uid = S.uid, session = S.session, view = S.view, line = S.pmLine;
-    function live() { return generation === epoch && uid === S.uid && session === S.session && S.pmProject === pid
+    function live() { return generation === epoch && uid === S.uid && session === S.session && currentProject() === pid
       && view === S.view && line === S.pmLine && allowed(pid) && state(pid).draft === draft; }
     return { get: function () { return live() && global.ZHRichText ? global.ZHRichText.doc(draft, 'what') : null; },
       set: function (doc) {
@@ -110,7 +111,7 @@
     if(draft[field]!==next){draft[field] = next;draft.error = '';}
   }
   function capture(projectId) {
-    var pid = projectId || S && S.pmProject; if (!allowed(pid)) return;
+    var pid = projectId || currentProject(); if (!allowed(pid)) return;
     if(state(pid).draft.resetPending)return;
     ['owner_id', 'what', 'due'].forEach(function (field) {
       var input = global.document && global.document.getElementById(inputId(pid, field));
@@ -122,7 +123,7 @@
     return /^\d{4}-\d{2}-\d{2}$/.test(value) && !value.startsWith('0000') && Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
   }
   async function create(pid) {
-    pid = pid || S && S.pmProject; if (!allowed(pid)) return;
+    pid = pid || currentProject(); if (!allowed(pid)) return;
     var entry = state(pid), draft = entry.draft; if (draft.busy) return;
     if (cfg.flush) cfg.flush(); capture(pid);
     if (!draft.what.trim()) { draft.error = '请填写具体协调事项'; cfg.render(); return; }
@@ -143,7 +144,7 @@
       [entry, state('*')].forEach(function (scope) { scope.revision++; scope.pending = null; scope.ready = false; });
       mergeRows(pid, (S.coordinationTasks || []).filter(function (item) { return item.project_id === pid && item.id !== row.id; }).concat([row]));
       entry.draft = freshDraft(); entry.draft.resetPending = true;
-      if (current(pid, generation, view) && active.toast) active.toast(readonlyTarget?'协调事项已发起，对方可在协调需求中查看':'协调事项已发起，承办人可在工作台办理');
+      if (current(pid, generation, view) && active.toast) active.toast(readonlyTarget?'协调事项已发起，对方可在协调需求中查看':'协调事项已发起，承办人可在本期填报的待处理事项清单办理');
       try { if (active.afterCreated) await active.afterCreated(row); }
       catch (_) { if (current(pid, generation, view) && active.toast) active.toast('协调事项已发起，关联列表刷新失败，请手动刷新；无需再次发起', 'err'); }
     } catch (error) {
@@ -153,7 +154,7 @@
     }
   }
   async function refresh(pid) {
-    pid = pid || S && S.pmProject; if (!allowed(pid)) return;
+    pid = pid || currentProject(); if (!allowed(pid)) return;
     if (cfg.flush) cfg.flush(); capture(pid);
     var generation = epoch, view = S.view, entry = state(pid);
     if(entry.refreshing)return;
@@ -180,7 +181,7 @@
   }
   function reset(){epoch++;states=Object.create(null);identity=null;sessionIdentity=null;}
   function render(options) {
-    var pid = typeof options === 'string' ? options : options && options.project_id || S && S.pmProject;
+    var pid = typeof options === 'string' ? options : options && options.project_id || currentProject();
     if (!allowed(pid)) return '';
     var entry = state(pid), draft = entry.draft, disabled = draft.busy ? ' disabled' : '';
     var readOnlyRecipient=entry.people.some(function(person){return person.user_id===draft.owner_id && person.role==='viewer';});
@@ -189,7 +190,7 @@
     var rows = (S.coordinationTasks || []).filter(function (row) { return row.project_id === pid && row.author_id === S.uid; });
     var clickPid = esc(JSON.stringify(pid));
     return '<section class="card coordination-workbench" data-coordination-project="' + esc(pid) + '"><div class="cardhd"><h3>协调申请</h3><button type="button" class="btn" onclick="CoordinationWorkbench.refresh(' + clickPid + ')"' + (entry.pending || entry.peoplePending || entry.refreshing ? ' disabled' : '') + '>刷新协调事项</button></div>'
-      + '<p class="muted">'+(readOnlyRecipient?'所选对象仅有查看权限，收到的事项可在其协调需求中查看，不开放完成或延期申报。':'选择本项目承办人直接发起。事项会送到承办人的工作台，由你确认完成与延期申请。')+'</p>'
+      + '<p class="muted">'+(readOnlyRecipient?'所选对象仅有查看权限，收到的事项可在其协调需求中查看。':'发起后立即送达承办人。完成与延期申请由你审核。')+'</p>'
       + (entry.error || state('*').error ? '<p class="completion-error" role="alert">' + esc(entry.error || state('*').error) + '；已加载记录保留。</p>' : '')
       + (entry.peopleError ? '<p class="completion-error" role="alert">' + esc(entry.peopleError) + '</p>' : '')
       + '<div class="completion-filters"><label>承办人<select id="' + esc(inputId(pid, 'owner_id')) + '" onchange="CoordinationWorkbench.change(' + clickPid + ',\'owner_id\',this.value)"' + peopleDisabled + '><option value="">选择实名承办人</option>'

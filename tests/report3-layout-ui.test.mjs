@@ -11,7 +11,7 @@ const app = fs.readFileSync(new URL('app.js', web), 'utf8')
   .replace(/\(async function boot\(\) \{[\s\S]*?\}\)\(\);/, '');
 const artifacts = process.env.REPORT3_ARTIFACT_DIR || path.join(os.tmpdir(), 'report3-layout-artifacts');
 
-test('personal reporting renders compact desktop and mobile tables, shared formatting and a complete separate coordination page', async () => {
+test('personal reporting renders compact desktop and mobile tables, shared formatting and an embedded coordination panel', async () => {
   const browser = await chromium.launch({channel: 'msedge', headless: true});
   fs.mkdirSync(artifacts, {recursive: true});
   const errors = [], requests = [];
@@ -136,19 +136,22 @@ test('personal reporting renders compact desktop and mobile tables, shared forma
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2), 'mobile form must not require horizontal page scrolling');
     await page.screenshot({path: path.join(artifacts, 'report3-form-mobile.png'), fullPage: true});
     await page.setViewportSize({width: 1600, height: 1100});
-    await page.evaluate(() => window.App.view('coordination'));
+    await expect(page.getByRole('button',{name:'工作台',exact:true})).toHaveCount(0);
+    await page.locator('[data-immediate-coordination] > summary').click();
     await expect(page.locator('.coordination-workbench')).toContainText('独立发起协调事项需保留');
     await expect(page.locator('main')).toContainText('旧报告协调事项需保留');
     await expect(page.locator('.completion-initiated')).toContainText('我发起的协调事项审核');
     await expect(page.locator('.coordination-workbench select')).toHaveCount(1);
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({path: path.join(artifacts, 'report3-coordination-desktop.png'), fullPage: true});
-    await page.evaluate(() => window.App.view('center'));
+    await page.locator('[data-immediate-coordination] > summary').click();
+    await page.getByText('个人概览',{exact:false}).first().click();
     await expect(page.locator('main')).toContainText('待处理事项清单');
     await expect(page.locator('main')).not.toContainText('本期其他跨专业需求');
     await expect(page.locator('main')).not.toContainText('未指定给本人的需求不应显示');
-    await expect(page.locator('.coordination-workbench')).toHaveCount(0);
-    await expect(page.locator('.completion-initiated')).toHaveCount(0);
+    await expect(page.locator('.coordination-workbench')).toBeHidden();
+    await expect(page.locator('.completion-initiated')).toBeHidden();
+    await expect(page.locator('.reporter-followups')).toHaveCount(1);
     await expect(page.locator('.completion-work-items')).toHaveCount(0);
     await expect(page.locator('main')).not.toContainText('计划事项办理');
     await expect(page.locator('[data-plan-section="items"]')).toHaveCount(0);
@@ -160,7 +163,11 @@ test('personal reporting renders compact desktop and mobile tables, shared forma
     await page.setViewportSize({width:390,height:844});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
     await page.screenshot({path:path.join(artifacts,'report3-workbench-mobile.png'),fullPage:true});
-    await page.evaluate(() => window.App.view('form'));
+    await page.getByRole('button',{name:'项目资料',exact:true}).click();
+    await page.getByRole('button',{name:'项目计划',exact:true}).click();
+    await expect(page.locator('.personal-nodes')).toContainText('我负责的节点');
+    await page.getByRole('button',{name:'本期填报',exact:true}).first().click();
+    await page.getByRole('button',{name:'本期填报',exact:true}).last().click();
     assert.ok(await narrativeCells.evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign==='left')));
     await expect(page.locator('[data-rich-editor-for="bi_pg_0"] .ql-editor strong')).toContainText('第二部分新进展保持原来源');
     await expect(page.locator('.report3-monthly-table').getByRole('button',{name:'完成／延期申报',exact:true})).toHaveCount(1);

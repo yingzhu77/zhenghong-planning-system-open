@@ -544,7 +544,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     let html = root.innerHTML;
     ok(identityRole(html) === '提报人' && DB.profiles[0].role === 'pm', '住宅场景账号应使用统一提报人身份和原 pm 角色');
     const n = nav(html);
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料']), 'PM 主导航应为三个整合入口');
+    ok(navLabels(html, ['本期填报', '项目资料']), 'PM 主导航应整合为本期填报和项目资料');
     ok(!has(nav(html), '批量导入计划') && !has(main(html), 'App.openAdminPlans'), '住宅提报人不能看到管理员代填导入入口');
     ok(!has(n, '节点基线'), 'PM 导航仍残留独立「节点基线」页签');
     ok(!has(n, '成员权限') && !has(n, '项目分析'), 'PM 主导航混入管理入口');
@@ -572,7 +572,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     ok(has(html, '提交本期直报') && has(html, 'plan-form-actions') && has(html, '本周基准节点 <b>0 项</b>') && has(html, '当月计划事项 <b>1 项</b>'), '住宅填报缺少提交操作或未分配专业的项目快览统计不符');
 
     await App.view('mine'); html = root.innerHTML;
-    ok(!has(nav(html), '项目列表') && has(main(html), '我的工作台'), '已撤销项目列表入口应回落工作台');
+    ok(!has(nav(html), '项目列表') && has(main(html), '个人概览'), '已撤销项目列表入口应回落含个人概览的本期填报');
     ok(!has(main(html), '节点基线 · 示例住宅一号'), '住宅工作台仍重复内嵌已撤节点基线展示');
     noReporterPageHeading(html, '住宅撤销项目列表入口');
     ok(!has(main(html), 'App.msSet('), '项目资料基线应只读，不能重复编辑工作台的预计完成时间');
@@ -584,8 +584,8 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     /* 个人中心（住宅）：研判节点偏差 + 下周重点 + 协调 */
     await App.view('center'); html = root.innerHTML;
     noReporterPageHeading(html, '住宅个人概览');
-    ok(navLabels(html, ['条线节点', '个人概览', '协调申请'], '子导航'), 'PM 工作台未保留条线节点、个人概览和协调申请');
-    ok(has(html, '我的工作台'), '住宅个人中心标题缺失');
+    ok(has(nav(html), '项目计划') && !has(nav(html), '工作台'), '住宅项目计划应进入项目资料');
+    ok(has(main(html), '个人概览') && has(main(html), '即时协调'), '本期填报应包含个人概览和即时协调');
     ok(has(html, '工作进展统计'), '住宅个人中心缺少进展统计');
     ok(has(html, '研判节点与偏差（按优先级）'), '住宅个人中心缺少优先级节点表');
     ok(has(html, 'P0 紧急'), '住宅个人中心未按偏差分级出 P0');
@@ -597,7 +597,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     /* 2026-10-14 新增：我的条线（住宅 PM 未设条线 → 项目经理视角看全部节点） */
     await App.view('mline'); html = root.innerHTML;
     noReporterPageHeading(html, '住宅条线节点');
-    ok(has(main(html), '我的条线：') && has(main(html), '项目全专业（项目经理视角）') && has(main(html), 'id="reporter-line-project"'), '住宅条线节点应保留正文的本人视角和项目筛选');
+    ok(has(main(html), '项目计划 ·') && has(main(html), '项目全专业（项目经理视角）') && has(main(html), 'id="reporter-line-project"'), '住宅项目计划应保留正文的本人视角和项目筛选');
     ok(has(html, '已逾期未完成') && has(html, '未来 30 天到期') && has(html, '关键节点（未到期）'), '我的条线缺少三段必盯清单');
     ok(has(html, '我负责的节点') && has(html, 'data-milestone="1"') && !has(html, 'ml_fc_1') && !has(html, 'ml_note_1'), '我的条线应保留节点原文和来源，不重复提供已撤直接编辑入口');
     ok(!has(html, '专业流水线') && !has(html, 'reporter-flow-stages'), '我的条线仍显示已撤销的专业流水线');
@@ -620,8 +620,8 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     noCameraUi(html, '住宅 PM 项目档案');
     await App.view('cams'); html = root.innerHTML;
     noCameraUi(html, '住宅 PM 访问已撤销的监控页');
-    ok(has(main(html), '我的工作台') && has(main(html), '住宅项目') && has(main(html), '幕墙分包进场'), '住宅 PM 访问已撤销的监控页应回落本人的个人概览');
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料']), '撤销监控入口影响了住宅 PM 三项主导航');
+    ok(has(main(html), '个人概览') && has(main(html), '住宅项目') && has(main(html), '幕墙分包进场'), '住宅 PM 访问已撤销的监控页应回落本期填报且保留本人节点');
+    ok(navLabels(html, ['本期填报', '项目资料']), '撤销监控入口影响了住宅 PM 主导航');
     console.log('PM render OK');
   }
 
@@ -642,7 +642,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     let html = root.innerHTML;
     ok(identityRole(html) === '提报人' && DB.profiles[0].role === 'pm', '商业场景账号应使用统一提报人身份和原 pm 角色');
     const formHtml = html;   /* 商业填报页快照（供 DUMP 用） */
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料']), '商业 PM 主导航应保留三个整合入口');
+    ok(navLabels(html, ['本期填报', '项目资料']), '商业 PM 主导航应整合为本期填报和项目资料');
     ok(!has(nav(html), '批量导入计划') && !has(main(html), 'App.openAdminPlans'), '商业提报人不能看到管理员代填导入入口');
     noCameraUi(html, '商业 PM 填报页');
     noReporterPageHeading(html, '商业填报');
@@ -681,7 +681,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     noReporterPageHeading(html, '商业已撤项目列表入口');
     ok(!has(main(html), 'App.msSet('), '商业项目资料基线仍可重复编辑');
     noCameraUi(html, '商业 PM 已撤项目列表入口');
-    ok(!has(nav(html), '项目列表') && has(main(html), '我的工作台') && has(main(html), '事项进展状态统计'), '商业旧项目列表入口未回落本人工作台');
+    ok(!has(nav(html), '项目列表') && has(main(html), '个人概览') && has(main(html), '事项进展状态统计'), '商业旧项目列表入口应回落本人填报');
     await App.view('form'); html = root.innerHTML;
     ok(has(main(html), '土建工程（东地块）') && has(main(html), 'bi_nm_0'), '商业当前填报入口未保留本人模块与事项');
 
@@ -693,7 +693,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     /* 2026-10-14 新增：我的条线按本人专业条线过滤（示例土建负责人 = 工程） */
     await App.view('mline'); html = root.innerHTML;
     noReporterPageHeading(html, '商业条线节点');
-    ok(has(main(html), '我的条线：') && has(main(html), 'id="reporter-line-project"') && has(main(html), '工程'), '商业条线应保留正文项目筛选和本人专业范围');
+    ok(has(main(html), '项目计划 ·') && has(main(html), 'id="reporter-line-project"') && has(main(html), '工程'), '商业项目计划应保留正文项目筛选和本人专业范围');
     ok(has(html, '只看本专业的节点'), '商业 PM 我的条线未标注条线口径');
     ok(has(html, '东地块地上主体结构封顶'), '我的条线未列出本专业节点');
     ok(!has(html, '正式开业'), '我的条线混入其它条线（商管运营）的节点');
@@ -701,18 +701,18 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     /* 个人中心（商业）：倒计时 + 状态统计 + 优先级 + 四块（移交为可登记卡） */
     await App.view('center'); html = root.innerHTML;
     noReporterPageHeading(html, '商业个人概览');
-    ok(has(html, '我的工作台') && has(html, '示例土建负责人'), '商业个人中心标题缺失');
+    ok(has(html, '个人概览') && has(html, '示例土建负责人'), '商业本期填报缺少本人概览');
     ok(has(html, '距 2027-09-30'), '商业个人中心缺少开业倒计时');
     ok(has(html, '事项进展状态统计'), '商业个人中心缺少状态统计');
     ok(has(html, '待处理事项清单') && has(html, '类别') && has(html, '提出人') && has(html, '事项申报'), '商业个人中心缺少统一待办列和事项申报入口');
     ok(has(html, '2020-01-01') && has(html, '完成／延期申报'), '商业待办应保留原到期时间和逐项申报，不因取消优先级重复表丢失办理入口');
-    const pendingWork = main(html).slice(main(html).indexOf('<h3>待处理事项'));
+    const pendingWork = main(html).match(/四、待处理事项清单[\s\S]*?<\/section>/)?.[0] || '';
     ok(has(pendingWork, '<b>实名会议重点</b>') && has(pendingWork, '会议推进中') && has(pendingWork, '确认西地块土建工作面移交时间'), '商业待处理事项应显示实名会议与他人需求并保留格式和进展');
     ok(!has(pendingWork, '幕墙材料封样') && !has(pendingWork, '景观-西地块定标配合') && !has(pendingWork, '东地块地上主体结构封顶'), '商业待处理事项不应重复汇总月度计划和基准节点');
     ok(!has(html, '当月到期事项') && !has(html, '月度计划事项') && !has(html, '其他专业需协调'), '商业个人中心右栏仍残留三块只读汇总卡');
     /* 2026-10-14：右栏整体取消（移交登记 / 发起协调 / 近期台账），页面单栏铺满 */
     ok(!has(html, '工作面移交登记') && !has(html, '保存移交登记'), '商业个人中心右栏仍残留移交登记卡');
-    ok(!has(html, '<aside') && !has(html, '保存协调') && has(html,'我的事项申请'), '商业个人中心应保留本人申请并撤销旧右栏录入卡');
+    ok(!has(html, '<aside') && !has(html, '保存协调') && has(html,'历史记录'), '商业个人概览应保留历史记录入口');
     ok(!has(html, '我的近期台账'), '商业个人中心右栏仍残留近期台账');
     ok(!has(html, 'bh_what_0'), '商业个人中心右栏仍残留移交登记行');
     ok(!has(html, 'class="rail"'), '商业个人中心仍渲染右栏容器');
@@ -727,14 +727,14 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     ok(!has(html, '总裁交代 · 本周需关注的工作') && has(html, '会议事项要求'), '商业个人中心应按会议要求分类，不重新引入旧总裁交代分区');
     ok(!has(html, '项目总安排 · 本周工作安排') && has(html, '他人协调我的事项'), '商业个人中心应按他人协调分类，不重新引入旧项目总安排分区');
     await App.view('coordination');
-    ok(has(main(root.innerHTML), '我发起的协调事项审核') && has(main(root.innerHTML), '协调申请'), '发起协调及审核应继续在独立协调申请入口办理');
+    ok(has(main(root.innerHTML), '我发起的协调事项审核') && has(main(root.innerHTML), '即时协调') && has(main(root.innerHTML), '三、需要协调事项'), '即时协调和发起人审核应在本期填报保留独立操作');
     await App.view('center'); html = root.innerHTML;
     noCameraUi(html, '商业 PM 工作台');
     const centerHtml = html;
     await App.view('cams'); html = root.innerHTML;
     noCameraUi(html, '商业 PM 访问已撤销的监控页');
-    ok(has(main(html), '我的工作台') && has(main(html), '示例土建负责人') && has(main(html), '实名会议重点') && !has(main(html), '西地块总包清单编制'), '商业 PM 访问已撤销的监控页应回落本人的个人概览，保留本人关键事项且不混入他人台账');
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料']), '撤销监控入口影响了商业 PM 三项主导航');
+    ok(has(main(html), '个人概览') && has(main(html), '示例土建负责人') && has(main(html), '实名会议重点') && !has(main(html), '西地块总包清单编制'), '商业 PM 访问已撤销的监控页应回落本人填报并按原权限显示');
+    ok(navLabels(html, ['本期填报', '项目资料']), '撤销监控入口影响了商业 PM 主导航');
     await App.openProjectDetail('p3'); await App.detailTab('history'); html = root.innerHTML;
     ok(has(main(html), '幕墙材料封样') && has(main(html), '景观-西地块定标配合') && has(main(html), '示例供应商调整铝型材合同，卡在招采'), '工作台收敛后月度计划正文和进展仍应完整保留在项目历史');
     ok(has(main(html), '<span class="mk-red">屋面临近完成</span>'), '旧手填节点的标红反馈仍应完整保留在原报告历史');

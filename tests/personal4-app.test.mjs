@@ -222,7 +222,7 @@ test('blocker formatting binds to the original item and remains rich in report h
   assert.match(h.reportSnapshotHtml(report), /<strong>原模块<\/strong>/);
 });
 
-test('the actual desktop and mobile shell opens the original feedback editor while keeping nodes read-only', async () => {
+test('desktop and mobile reporting use a single feedback editor while keeping project plans read-only', async () => {
   const browser = await chromium.launch({channel: 'msedge', headless: true});
   const artifacts = process.env.PERSONAL4_APP_ARTIFACT_DIR || path.join(os.tmpdir(), 'personal4-app-artifacts');
   mkdirSync(artifacts, {recursive: true});
@@ -254,7 +254,7 @@ test('the actual desktop and mobile shell opens the original feedback editor whi
         reporterTasks: [{id: 'original-id', project_id: 'p1', owner_id: 'anonymous', owner_name: '匿名填报人', title: '原任务', what: '原任务正文', due: '2026-12-01', status: 'open', progress: '源新进展', created_at: '2026-09-01T01:00:00Z', revision: 1}],
         followupRows: [{source_key: key, source_type: 'meeting', source_id: 'original-id', title: '原会议事项（待分类）', what: '原任务正文', due: '2026-12-01', status: 'in_progress', progress: '本期草稿进展'}],
         bizItems: [{source_id: 'preserved-item', name: '原事项', prog: '草稿内容', blocker: '原卡点'}]});
-      h.setPage(async () => {S.pmScopeTransition = null; h.renderShell(); return true;});
+      h.setPage(async () => {S.pmScopeTransition = null; window.ReporterTasks.prepareCoordination(); h.renderShell(); return true;});
       h.renderShell();
     });
     await expect(page.locator('[data-milestone="17"]')).toHaveCount(1);
@@ -266,27 +266,29 @@ test('the actual desktop and mobile shell opens the original feedback editor whi
       S.reports=[{id:77,project_id:'p1',author_id:'other',author_name:'其他填报人',period:window.audit.currentPeriod(),coord_items:[{source_id:'need-original',who:'匿名填报人',what:'待回复正文',by:'2026-12-01'}]}];
     });
     await page.evaluate(() => window.App.view('center'));
-    await expect(page.locator('.reporter-pending')).toHaveCount(1);
-    for(const category of ['会议事项要求','他人协调我的事项'])await expect(page.locator('.reporter-pending')).toContainText(category);
-    await expect(page.locator('.reporter-pending table')).toHaveCount(1);
-    await expect(page.locator('.reporter-pending tbody tr')).toHaveCount(2);
-    await expect(page.locator('.reporter-pending')).not.toContainText('领导安排正文');
-    await expect(page.locator('.reporter-pending')).not.toContainText('本期进展从');
+    await expect(page.locator('.reporter-pending')).toHaveCount(0);
+    const followups=page.locator('.reporter-followups');
+    for(const category of ['会议事项要求','他人协调我的事项'])await expect(followups).toContainText(category);
+    await expect(followups.locator('table')).toHaveCount(1);
+    await expect(followups.locator('tbody tr')).toHaveCount(2);
+    await expect(followups).not.toContainText('领导安排正文');
+    await expect(followups).not.toContainText('本期进展从');
 
     await expect(page.locator('.personal-priority-summary,.reporter-legacy-meetings,.reporter-special-meetings,.reporter-requirements')).toHaveCount(0);
-    await expect(page.locator('.reporter-pending')).toContainText('本期草稿进展');
+    const originalEditor=page.locator('[data-followup-key="meeting:p1:original-id"] .ql-editor');
+    await expect(originalEditor).toContainText('本期草稿进展');
     await page.screenshot({path: path.join(artifacts, 'desktop-overview.png'), fullPage: true});
-    await page.locator('.reporter-pending tr').filter({hasText:'原任务正文'}).getByRole('button', {name: '填写本期反馈'}).click();
-    await expect(page.locator('[data-followup-key="meeting:p1:original-id"] .ql-editor')).toBeFocused();
+    await originalEditor.click();
+    await expect(originalEditor).toBeFocused();
     await expect(page.locator('#followup_progress_0')).toHaveValue('本期草稿进展');
     assert.equal(await page.evaluate(() => window.audit.S.followupRows[0].source_key), 'meeting:p1:original-id');
     await page.setViewportSize({width: 390, height: 844});
     await page.evaluate(() => window.App.view('center'));
-    await expect(page.locator('.reporter-pending')).toContainText('本期草稿进展');
+    await expect(originalEditor).toContainText('本期草稿进展');
     await page.screenshot({path: path.join(artifacts, 'mobile-overview.png'), fullPage: true});
-    await page.locator('.reporter-pending tr').filter({hasText:'原任务正文'}).getByRole('button', {name: '填写本期反馈'}).click();
-    await expect(page.locator('[data-followup-key="meeting:p1:original-id"] .ql-editor')).toBeFocused();
-    await expect(page.locator('[data-followup-key="meeting:p1:original-id"] .ql-editor')).toBeInViewport({ratio: 0.5});
+    await originalEditor.click();
+    await expect(originalEditor).toBeFocused();
+    await expect(originalEditor).toBeInViewport({ratio: 0.5});
     await page.screenshot({path: path.join(artifacts, 'mobile-feedback.png'), fullPage: true});
     await page.screenshot({path: path.join(artifacts, 'mobile-feedback-viewport.png')});
     assert.deepEqual(errors, []);
