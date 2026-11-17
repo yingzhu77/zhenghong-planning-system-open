@@ -432,6 +432,7 @@
       if (!next.report && Array.isArray(next.withdrawn_attachment_ids) && next.withdrawn_revision != null) {
         this.config.onWithdrawn?.(next.withdrawn_revision, next.withdrawn_attachment_ids, previousReport);
       }
+      this.config.onFollowupsState?.(next);
       this.schedulePlanResize();
       this.paint();
     }
@@ -837,19 +838,26 @@
       this.publishing = true;
       this.error = '';
       this.notice = '';
-      const planRevision=this.state.plan?.revision;
-      if (!this.publishAttempt || this.publishAttempt.revision !== this.state.revision || this.publishAttempt.plan_id !== this.planId
-        || this.publishAttempt.plan_revision!==planRevision) {
-        this.publishAttempt = {plan_id:this.planId, revision:this.state.revision, operation_id:uuid()};
-        if(planRevision!==undefined)this.publishAttempt.plan_revision=planRevision;
-        const ids = this.config.attachmentIds?.() || [];
-        if (ids.length || this.state.withdrawn_revision != null) {
-          Object.assign(this.publishAttempt, {attachment_ids:ids, period:this.config.period});
-        }
-      }
-      const number = ++this.requestNumber;
       this.paint();
       try {
+        const feedback=await this.config.flushFollowups?.();
+        if (this.closed || feedback===false) return;
+        if (feedback?.revision>this.state.revision) {
+          const number=++this.requestNumber;
+          this.accept(await this.request('open',{},this.controller.signal),number);
+        }
+        if (this.closed || !this.state?.can_publish) return;
+        const planRevision=this.state.plan?.revision;
+        if (!this.publishAttempt || this.publishAttempt.revision !== this.state.revision || this.publishAttempt.plan_id !== this.planId
+          || this.publishAttempt.plan_revision!==planRevision) {
+          this.publishAttempt = {plan_id:this.planId, revision:this.state.revision, operation_id:uuid()};
+          if(planRevision!==undefined)this.publishAttempt.plan_revision=planRevision;
+          const ids = this.config.attachmentIds?.() || [];
+          if (ids.length || this.state.withdrawn_revision != null) {
+            Object.assign(this.publishAttempt, {attachment_ids:ids, period:this.config.period});
+          }
+        }
+        const number=++this.requestNumber;
         const next = await this.request('publish', this.publishAttempt, this.controller.signal);
         if (this.closed) return;
         this.accept(next, number);

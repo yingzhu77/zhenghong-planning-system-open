@@ -336,6 +336,7 @@
 !/db/043-personnel-directory.sql
 !/db/044-weekly-report-withdrawal.sql
 !/db/045-weekly-collaboration-supplements.sql
+!/db/046-weekly-collaboration-followups.sql
 !/tests/materials-only-viewers.test.mjs
 
 !/scripts/enable-weekly-collaboration.mjs

@@ -472,6 +472,7 @@
         next: [valIf('nx-0', prevNext[0]), valIf('nx-1', prevNext[1]), valIf('nx-2', prevNext[2])]
       };
       if(S.withdrawnAttachmentKey)payload.withdrawnAttachmentKey=S.withdrawnAttachmentKey;
+      if(S.inlineFollowups?.scope===followupDraftScope() && S.followupSync?.scope===S.inlineFollowups.scope)payload.followupSync=S.followupSync;
       if(window.MonthlyPlans && window.MonthlyPlans.planReferences){var monthlyReferences=window.MonthlyPlans.planReferences();if(Object.keys(monthlyReferences).length)payload.monthlyPlanReferences=monthlyReferences;}
       /* 内容没变就不写：否则每次进个人中心都会刷新草稿时间戳 */
       var rawPrev = null;
@@ -1328,7 +1329,8 @@
       toast:toast,render:function(){renderShell(true);},reloadTasks:async function(){if(!await loadData(['reporterTasks','completions'],true))throw new Error('会议事项列表读取失败');},request:reporterRequest,
       reloadSources:async function(){if(!await loadData(['leaderNotes','reports','reporterTasks','coordinationTasks','completions'],true))throw new Error('同步来源读取失败，请重试');},
       loadPeople:function(pid){return reporterRequest('/api/project-people/list',{project_id:pid});},
-      saveDraft:saveDraft,flush:snapDraft,openFeedback:function(key){return App.openFollowup(key);}});
+      saveDraft:saveDraft,flush:snapDraft,openFeedback:function(key){return App.openFollowup(key);},
+      saveCollaborationFeedback:function(){return saveWeeklyFollowups(true);}});
   }
   function attachmentBusy() {
     if (S.pmScopeTransition) { toast('正在切换填报页面，请稍候。','err'); return true; }
@@ -1514,7 +1516,7 @@
     S.reportingProfessionProject='';S.projectReportingGrants=[];
     S.memberDirectoryUI={search:'',selection:null,open:new Set()};
     S.personnelAdminProjects=[];
-    S.followupRows = []; S.monthlyUnmatchedItems=[];S.meetingDraft = null; S.mlineDraft = {}; S.reporterArchiveTab = 'knowledge'; S.submittingReport = null;
+    S.followupRows = []; S.followupSync=null; S.inlineFollowups=null; S.monthlyUnmatchedItems=[];S.meetingDraft = null; S.mlineDraft = {}; S.reporterArchiveTab = 'knowledge'; S.submittingReport = null;
     S.attachmentIds = []; S.completionQuery = null; S.completionMeta = {}; S.completionQueueIds = [];
   }
   function pageDataKeys() {
@@ -1775,9 +1777,14 @@
     buildEditRows();
     buildBizRows();
     if (window.ReporterTasks) window.ReporterTasks.prepare();
+    var followupScope=followupDraftScope();
+    S.followupSync={scope:followupScope,baseline:window.ReporterTasks?.collaborationEntries?.() || [],conflict:false};
     if (window.ReportAttachments) window.ReportAttachments.prepare();
     restoreDraft();
+    if(S.draft?.followupSync?.scope===followupScope && Array.isArray(S.draft.followupSync.baseline))S.followupSync=S.draft.followupSync;
     if(window.ReporterTasks && window.ReporterTasks.syncMeetingRows)window.ReporterTasks.syncMeetingRows(true);
+    if(S.inlineFollowups?.scope===followupScope && S.inlineFollowups.status==='ready')
+      mergeWeeklyFollowups(S.inlineFollowups.rows);
     prepareWindowNodes();
     if(window.MonthlyPlans)window.MonthlyPlans.prepare();
   }
@@ -1833,7 +1840,7 @@
     if (Array.isArray(d.planningAIEntries)) S.planningAIEntries = d.planningAIEntries;
     if (Array.isArray(d.bizHand)) S.bizHand = d.bizHand;
     if(Array.isArray(d.monthlyUnmatchedItems))S.monthlyUnmatchedItems=d.monthlyUnmatchedItems;
-    if (Array.isArray(d.followupRows)) S.followupRows = d.followupRows;
+    if (Array.isArray(d.followupRows) && (!d.followupSync || d.followupSync.scope===followupDraftScope())) S.followupRows = d.followupRows;
     if (Array.isArray(d.attachmentIds)) S.attachmentIds = d.attachmentIds;
     if (!isCom(S.pmProject) && !Array.isArray(d.bizNodes) && Array.isArray(d.nodeRows)) S.bizNodes = d.nodeRows.concat(d.myRows || []).map(function (n) {return richCopy(n,{name:n.name || '',plan:n.plan || '',forecast:n.forecast || '',prog:n.reason || '',custom:!!n.custom},{prog:'reason',name:'name'});});
     if(d.richFields) S.formRich={_rich:d.richFields};
@@ -2006,6 +2013,90 @@
     var room=S.inlineCollaboration;
     return S.view==='form' && room && room.key===inlineCollaborationKey()?room.mode:null;
   }
+  function followupDraftScope() {
+    var week=window.PlanningWindows?.periodStart(S.pmPeriod) || S.pmPeriod;
+    return JSON.stringify([S.uid,S.pmProject,S.pmLine,S.pmScopeId,week]);
+  }
+  function focusFollowup(key) {
+    var row=Array.from(document.querySelectorAll('[data-followup-key]')).find(function(element){return element.getAttribute('data-followup-key')===String(key);});
+    if(!row)return false;
+    row.scrollIntoView({behavior:'smooth',block:'center'});
+    var editor=row.querySelector('.ql-editor') || row.querySelector('textarea');
+    if(editor)editor.focus({preventScroll:true});
+    return true;
+  }
+  function mergeWeeklyFollowups(rows,baseline) {
+    if(!window.ReporterTasks || !rows?.length || !S.followupSync)return;
+    var merged=window.ReporterTasks.mergeCollaborationRows(rows,baseline || S.followupSync.baseline);
+    S.followupSync.baseline=merged.baseline;
+    S.followupSync.conflict=S.followupSync.conflict || merged.conflict;
+  }
+  function observeWeeklyFollowups(contextKey,next) {
+    if(S.view!=='form' || contextKey!==inlineCollaborationKey() || !window.ReporterTasks)return;
+    var scope=followupDraftScope(), previous=S.inlineFollowups;
+    if(previous?.scope!==scope)previous=null;
+    var status=next?.can_edit?'ready':next?.report?'published':'unavailable';
+    var ownRevision=next?.my_followups_revision ?? 0;
+    var rows=Array.isArray(next?.my_followups)?next.my_followups:[];
+    var room=previous || {scope:scope};
+    if(previous?.ownRevision>ownRevision && status==='ready')return;
+    var changed=!previous || previous.status!==status || previous.report?.id!==next?.report?.id || previous.ownRevision!==ownRevision;
+    room.roomRevision=Math.max(room.roomRevision || 0,next?.revision || 0);
+    if(!changed)return;
+    if(previous?.status==='ready')snapDraft(true);
+    Object.assign(room,{status:status,ownRevision:ownRevision,report:next?.report || null,rows:rows});
+    S.inlineFollowups=room;
+    if(status==='ready')mergeWeeklyFollowups(rows);
+    if(previous)saveDraft(true);
+    renderShell(true);
+    if(status==='ready' && S.focusFollowup?.scope===scope){
+      focusFollowup(S.focusFollowup.key);
+      S.focusFollowup=null;
+    }
+  }
+  function saveWeeklyFollowups(explicit) {
+    var room=S.inlineFollowups, scope=weeklyCollaborationScope(), tasks=window.ReporterTasks;
+    if(!room || room.scope!==followupDraftScope() || room.status!=='ready' || inlineCollaborationMode()!=='member' || !scope || !tasks)return Promise.resolve(false);
+    if(room.saving)return room.saving.then(function(result){return result && !explicit ? saveWeeklyFollowups(false):result;});
+    snapDraft(true);
+    var error=tasks.validationError();
+    if(error){toast(error,'err');return Promise.resolve(false);}
+    var entries=tasks.collaborationEntries(), signature=JSON.stringify(entries);
+    if((!entries.length && !room.rows?.length) || !explicit && signature===room.savedSignature)return Promise.resolve({revision:room.roomRevision});
+    if(S.followupSync?.conflict){
+      if(!explicit){toast('其他窗口已更新反馈，请先在待处理事项清单核对并保存本机反馈。','warn');return Promise.resolve(false);}
+      if(!window.confirm('其他窗口已更新反馈。是否使用本机所填的内容？'))return Promise.resolve(false);
+    }
+    var button=document.getElementById('collaboration-feedback-save');
+    if(button)button.disabled=true;
+    var key=inlineCollaborationKey(), week=window.PlanningWindows.periodStart(S.pmPeriod);
+    function active(){return S.view==='form' && key===inlineCollaborationKey() && S.inlineFollowups===room;}
+    room.saving=(async function(){
+      try{
+        var result=await reporterRequest('/api/weekly-collaboration/followups',{...scope,week:week,entries:entries,feedback_revision:room.ownRevision});
+        if(!active())return false;
+        if(result.error || !Array.isArray(result.data?.rows)){
+          snapDraft();toast(result.error?.message || '本期反馈保存失败，已保留本机内容。','err');return false;
+        }
+        snapDraft(true);
+        if(result.data.feedback_revision>=room.ownRevision){
+          room.ownRevision=result.data.feedback_revision;
+          room.roomRevision=Math.max(room.roomRevision,result.data.revision);
+          room.rows=result.data.rows;
+          if(S.followupSync)S.followupSync.conflict=false;
+          mergeWeeklyFollowups(room.rows,entries);
+          room.savedSignature=signature;
+        }
+        saveDraft(true);
+        if(explicit)toast('本期反馈已保存');
+        return result.data;
+      } finally{
+        room.saving=null;
+        if(active())renderShell(true);
+      }
+    })();
+    return room.saving;
+  }
   async function loadInlineCollaboration() {
     if(S.view!=='form')return;
     var scope=weeklyCollaborationScope(),week=window.PlanningWindows?.periodStart(S.pmPeriod);
@@ -2039,6 +2130,8 @@
       week:week,
       attachmentIds:function(){return window.ReportAttachments ? window.ReportAttachments.ids() : [];},
       attachmentBusy:attachmentBusy,
+      onFollowupsState:function(next){observeWeeklyFollowups(key,next);},
+      flushFollowups:function(){return saveWeeklyFollowups(false);},
       onWithdrawn:function(revision,attachmentIds,report){
         if(S.view!=='form' || key!==inlineCollaborationKey())return;
         var selectionKey=JSON.stringify([scope.project_id,scope.line,scope.report_scope_id,week,revision]);
@@ -2242,6 +2335,8 @@
       +(collaboration==='member'?corePlanHtml
         +'<div data-weekly-collaboration data-inline-key="'+esc(inlineCollaborationKey())+'"></div>'
         +(window.ReportAttachments?window.ReportAttachments.formHtml('三'):'')
+        +(window.ReporterTasks?window.ReporterTasks.formHtml(S.inlineFollowups?.scope===followupDraftScope()
+          ?{...S.inlineFollowups,conflict:S.followupSync?.conflict}:{status:'loading'}):'')
         :'<p class="notice" role="status">'+(collaboration==='futureUnavailable'?'该项目专业尚未开放这周的协同填报，请切换项目、专业或报告周期。'
           :collaboration==='excluded'?'本周由管理员指定的协同人员填报。':'本周填报权限读取失败，请刷新重试。')+'</p>')
       +'</div></div>';
@@ -5017,14 +5112,9 @@
       if (!S.profile || S.profile.role !== 'pm' || attachmentBusy()) return;
       await App.view('form');
       if (S.view !== 'form') return;
-      var row=Array.from(document.querySelectorAll('[data-followup-key]')).find(function(element){return element.getAttribute('data-followup-key')===String(key);});
-      if (!row) return toast('本期暂无这条同步事项，请刷新数据后重试','warn');
-      row.scrollIntoView({behavior:'smooth',block:'center'});
-      var editor=row.querySelector('.ql-editor') || row.querySelector('textarea');
-      if (editor) {
-        if(editor.scrollIntoView)editor.scrollIntoView({behavior:'smooth',block:'center',inline:'nearest'});
-        editor.focus({preventScroll:true});
-      }
+      var scope=followupDraftScope(),room=S.inlineFollowups;
+      if(inlineCollaborationMode()==='member' && room?.scope!==scope)S.focusFollowup={scope:scope,key:key};
+      if(!focusFollowup(key))return toast('本期暂无这条同步事项，请刷新数据后重试','warn');
     },
     period: async function (p) {
       if (attachmentBusy()) return;

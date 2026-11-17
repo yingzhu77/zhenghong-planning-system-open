@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import * as Y from 'yjs';
 import { previewCompletion, requestCompletion, reviewCompletion } from '../server/completions.mjs';
+import { createCoordinationTask } from '../server/coordination-tasks.mjs';
 import { executeDatabase, withIdentity } from '../server/database.mjs';
 import { confirmMonthlyPlan, withdrawMonthlyPlan } from '../server/monthly-plans.mjs';
 import { listReportAttachments } from '../server/report-attachments.mjs';
@@ -33,7 +34,7 @@ const denied = error => error.status === 403;
 const conflict = error => error.status === 409;
 const collaborationGuard = error => error.code === 'P3801' || error.status === 409;
 
-async function fixture(t, through = 45) {
+async function fixture(t, through = 46) {
   const database = await initializedDatabase({through:38});
   t.after(() => database.close());
   const admin = testPool(database, null);
@@ -91,7 +92,12 @@ async function fixture(t, through = 45) {
     await database.exec(await readFile(new URL('../db/045-weekly-collaboration-supplements.sql',import.meta.url),'utf8'));
   };
   if (through >= 45) await upgradeSupplements();
-  return { database, admin, pool, upgrade, upgradeItems, upgradeMonths, upgradeWithdrawals, upgradeSupplements,
+  const upgradeFollowups = async () => {
+    await database.exec('RESET ROLE');
+    await database.exec(await readFile(new URL('../db/046-weekly-collaboration-followups.sql',import.meta.url),'utf8'));
+  };
+  if (through >= 46) await upgradeFollowups();
+  return { database, admin, pool, upgrade, upgradeItems, upgradeMonths, upgradeWithdrawals, upgradeSupplements, upgradeFollowups,
     service:createWeeklyCollaboration(pool) };
 }
 
@@ -380,6 +386,108 @@ test('合并项目临时事项受原月计划分期约束，发布后按原确�
   assert.deepEqual(refreshed.plan.items.map(row=>row.project_id),['zhx2','zhx1']);
 });
 
+test('商业协同的个人待办仅本人可保存，负责人提交后才归入正式周报', async t => {
+  const f = await fixture(t), { service } = f;
+  const { current } = await currentWeekAndSiblings(f);
+  const scope = inWeek(custom, current);
+  const plan = await confirmMonthlyPlan(f.pool, retailLead, {
+    project_id: scope.project_id, line: scope.line, month: current.slice(0, 7),
+    items: [item('本周计划')]
+  });
+  const assigned = async (author, owner, line, title) => {
+    const [report] = (await f.admin.query(
+      `INSERT INTO public.reports(project_id,period,author_id,author_name,line,coord_items)
+       VALUES($1,($2::date-7)::text,$3,$3,$4,$5::jsonb) RETURNING id::text AS id`,
+      [scope.project_id, current, author.id, line, JSON.stringify([
+        { source_id: 'assigned', who_id: owner.id, who: owner.id, what: title, by: current }
+      ])]
+    )).rows;
+    return 'coord:' + scope.project_id + ':' + report.id + ':coord:assigned';
+  };
+  const peerKey = await assigned(retailLead, retailPeer, '成本', '请协助核对一批匿名专项图纸');
+  const leadKey = await assigned(retailPeer, retailLead, '招采', '请确认匿名工程交接界面');
+  await service.settings(operator, { ...scope, submitter_id: retailLead.id, member_ids: [retailPeer.id] });
+  const initial = await service.open(retailPeer, scope);
+  assert.equal(initial.my_followups_revision, 0);
+  assert.deepEqual(initial.my_followups ?? [], []);
+
+  const progress = '反馈已确认原样';
+  const richProgress = { ops: [{ insert: progress, attributes: { bold: true } }] };
+  const feedback = {
+    ...scope, feedback_revision: 0,
+    entries: [{ source_key: peerKey, progress, status: 'in_progress',
+      rich_text: { v: 1, fields: { progress: richProgress } } }]
+  };
+  await assert.rejects(service.followups(retailLead, feedback), denied);
+  const saved = await service.followups(retailPeer, feedback);
+  assert.equal(saved.feedback_revision, 1);
+  assert.ok(saved.revision > initial.revision);
+  assert.equal(saved.rows[0].source_key, peerKey);
+  assert.equal(saved.rows[0].what, '请协助核对一批匿名专项图纸');
+  assert.deepEqual(saved.rows[0].rich_text.fields.progress, richProgress);
+  assert.equal((await service.followups(retailPeer, feedback)).revision, saved.revision);
+  await assert.rejects(service.followups(retailPeer, {
+    ...feedback, entries: [{ source_key: peerKey, status: 'open', progress: '另一端的旧版草稿' }]
+  }), conflict);
+  assert.deepEqual((await service.open(retailLead, scope)).my_followups ?? [], []);
+  assert.equal((await service.open(retailPeer, scope)).my_followups[0].progress, progress);
+  assert.equal((await service.open(retailPeer, scope)).report, null);
+  const before = await service.followups(retailLead, {
+    ...scope, feedback_revision: 0, entries: [{ source_key: leadKey, status: 'open', progress: '' }]
+  });
+  const submission = { ...scope, plan_id: plan.id, revision: before.revision, operation_id: randomUUID() };
+  await assert.rejects(service.publish(retailPeer, submission), denied);
+  await assert.rejects(service.publish(retailLead, { ...submission, revision: initial.revision }), conflict);
+  const published = await service.publish(retailLead, submission);
+  const rows = published.report.biz.followups;
+  assert.equal(rows.length, 2);
+  const peerIndex = rows.findIndex(row => row.source_key === peerKey);
+  assert.ok(peerIndex >= 0);
+  assert.deepEqual([rows[peerIndex].owner_id, rows[peerIndex].owner_name, rows[peerIndex].progress],
+    [retailPeer.id, retailPeer.id, progress]);
+  assert.equal(rows.find(row => row.source_key === leadKey).owner_id, retailLead.id);
+  assert.deepEqual(published.report.rich_text.fields['biz.followups.' + peerIndex + '.progress'], richProgress);
+  assert.deepEqual((await service.open(retailPeer, scope)).report.biz.followups, rows);
+  await assert.rejects(service.followups(retailPeer, {
+    ...feedback, feedback_revision: saved.feedback_revision,
+    entries: [{ source_key: peerKey, status: 'in_progress', progress: '正式提交后不能直接修改' }]
+  }), conflict);
+});
+
+test('合并住宅待办保留实际分期，其他项目事项与移出协同名单的草稿不纳入提交', async t => {
+  const f = await fixture(t), { service } = f;
+  const { current } = await currentWeekAndSiblings(f);
+  const scope = inWeek(merged, current);
+  const plan = await confirmMonthlyPlan(f.pool, engineering, {
+    ...merged, month: current.slice(0, 7), items: [item('本周分期计划', 'zhx2')]
+  });
+  const assigned = (projectId, author, owner, what) => createCoordinationTask(f.pool, author, {
+    id: randomUUID(), project_id: projectId, owner_id: owner.id, what, due: current
+  });
+  const leadTask = await assigned('zhx2', engineeringPeer, engineering, '请核对住宅二期材料清单');
+  const peerTask = await assigned('zhx1', engineering, engineeringPeer, '请核对住宅一期交接资料');
+  const otherProject = await assigned(independent.project_id, engineeringPeer, engineering, '另一个住宅项目的专属事项');
+  await service.settings(operator, { ...scope, submitter_id: engineering.id, member_ids: [engineeringPeer.id] });
+  const feedback = (source_key, progress) => ({
+    ...scope, feedback_revision: 0, entries: [{ source_key, progress, status: 'in_progress' }]
+  });
+  await assert.rejects(service.followups(engineering, feedback(otherProject.source_key, '不可跨范围同步')), denied);
+  await service.followups(engineering, feedback(leadTask.source_key, '已核对二期材料清单'));
+  await service.followups(engineeringPeer, feedback(peerTask.source_key, '已核对一期交接资料'));
+  await service.settings(operator, { ...scope, submitter_id: engineering.id, member_ids: [] });
+  await assert.rejects(service.open(engineeringPeer, scope), denied);
+  const ready = await service.open(engineering, scope);
+  const published = await service.publish(engineering, {
+    ...scope, plan_id: plan.id, revision: ready.revision, operation_id: randomUUID()
+  });
+  const rows = published.report.biz.followups;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].project_id, 'zhx2');
+  assert.equal(rows[0].source_key, leadTask.source_key);
+  assert.equal(rows[0].owner_id, engineering.id);
+  assert.equal(rows[0].progress, '已核对二期材料清单');
+});
+
 test('运营可以给不同项目和专业分别指定负责人，同周同一事项标识也不会混稿',async t=>{
   const f=await fixture(t), service=f.service;
   const {projects}=await service.catalog(operator,{week});
@@ -508,7 +616,9 @@ test('038 的活动草稿、操作历史及已发布周报经过 039 重复迁�
   await f.upgradeMonths();
   await f.upgradeWithdrawals();
   await f.upgradeSupplements();
-  assert.deepEqual((await f.admin.query(`SELECT to_jsonb(d)-'project_id'-'line'-'report_scope_id'-'unplanned_items'-'member_ids'-'shared_monthly_plan_id'-'supplement_items' row
+  await f.upgradeFollowups();
+  await f.upgradeFollowups();
+  assert.deepEqual((await f.admin.query(`SELECT to_jsonb(d)-'project_id'-'line'-'report_scope_id'-'unplanned_items'-'member_ids'-'shared_monthly_plan_id'-'supplement_items'-'followup_feedback' row
     FROM app_private.weekly_collaboration_drafts d WHERE project_id='hf' AND line='设计部' ORDER BY week`)).rows,oldDrafts);
   assert.deepEqual((await f.admin.query(`SELECT to_jsonb(o)-'project_id'-'line' row
     FROM app_private.weekly_collaboration_operations o WHERE project_id='hf' AND line='设计部' ORDER BY week`)).rows,oldOperations);
@@ -727,6 +837,7 @@ test('042 保留 041 已保存的独立周稿、编辑和操作回执',async t=>
   await f.upgradeMonths();
   await f.upgradeWithdrawals();
   await f.upgradeSupplements();
+  await f.upgradeFollowups();
   const legacy=await f.service.open(engineeringPeer,scope);
   assert.equal(legacy.plan.shared,false);
   assert.equal(legacy.plan.id,null);

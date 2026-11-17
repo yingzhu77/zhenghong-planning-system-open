@@ -140,13 +140,13 @@
     });});
     var plans=[],coords=[],followups=[],legacy=[],issues=[];
     planReports.forEach(function(report){
-      function sourceFor(row){
+      function sourceFor(row,ownerName){
         var line=report.line || '综合',refs=Array.isArray(report.biz && report.biz.monthly_plan_ids)?report.biz.monthly_plan_ids:[];
         var plan=row && row.monthly_plan_id && refs.includes(row.monthly_plan_id) && (model.plans || []).find(function(entry){
           return entry.id===row.monthly_plan_id && entry.report_scope_id===report.report_scope_id;
         });
         if(plan)line=plan.line;
-        return esc(row && row.project_id?projectName(model,row.project_id):report.report_scope_id?'统一范围 · 未明确子项目':projectName(model,report.project_id))+'<small>'+esc(report.author_name || '未记录填报人')+' · '+esc(line)+'</small>';
+        return esc(row && row.project_id?projectName(model,row.project_id):report.report_scope_id?'统一范围 · 未明确子项目':projectName(model,report.project_id))+'<small>'+esc(ownerName || report.author_name || '未记录填报人')+' · '+esc(line)+'</small>';
       }
       var source=sourceFor(null),biz=report.biz || {};
       ['items','handover','followups'].forEach(function(key){if(Object.hasOwn(biz,key) && !Array.isArray(biz[key]))issues.push('部分已保存事项格式异常，请在原报告核对。');});
@@ -162,7 +162,14 @@
       (Array.isArray(report.coord_items)?report.coord_items:[]).forEach(function(row){coords.push([sourceFor(row),esc(row.who || '未指定'),rich(row,'what'),esc(row.by || '未设置')]);});
       if((!Array.isArray(report.coord_items) || !report.coord_items.length) && report.coord && report.coord!=='无')coords.push([source,'未指定',rich(report,'coord'),'未设置']);
       (Array.isArray(biz.handover)?biz.handover:[]).forEach(function(row){coords.push([sourceFor(row),'移交给 '+esc(row.to || '未指定'),rich(row,'what'),esc(row.due || '未设置')]);});
-      (Array.isArray(biz.followups)?biz.followups:[]).forEach(function(row){followups.push([sourceFor(row),esc(row.source_type==='leader'?'领导安排事项':row.source_type==='meeting'?'会议要求事项':'待回事宜'),rich(row,'what'),esc(row.due || '未设置')+(row.effective_due && row.effective_due!==row.due?'<small>执行期限 '+esc(row.effective_due)+'</small>':''),rich(row,'progress','未填写')+'<small>'+esc({open:'待处理',in_progress:'推进中',completed:'本人反馈完成（以审核为准）'}[row.status] || '未记录状态')+'</small>']);});
+      (Array.isArray(biz.followups)?biz.followups:[]).forEach(function(row){
+        var projects=report.report_scope_id?report.scope_project_ids || []:[report.project_id];
+        if(!row || row.project_id && (!projects.includes(row.project_id) || !selection.projectIds.includes(row.project_id)))return;
+        var category={leader:'领导安排事项',meeting:'会议要求事项',coord:'他人协调事项'}[row.source_type] || '待办事项';
+        var due=esc(row.due || '未设置')+(row.effective_due && row.effective_due!==row.due?'<small>执行期限 '+esc(row.effective_due)+'</small>':'');
+        var status={open:'待处理',in_progress:'推进中',completed:'本人反馈完成（以审核为准）'}[row.status] || '未记录状态';
+        followups.push([sourceFor(row,biz.weekly_collaboration && row.owner_name),esc(category),rich(row,'what'),due,rich(row,'progress','未填写')+'<small>'+esc(status)+'</small>']);
+      });
       var extra=['change_text','dev_text','projection','impact'].filter(function(key){return report[key];}).map(function(key){return '<p><b>'+esc({change_text:'本周实质变化',dev_text:'风险说明',projection:'影响与对策',impact:'影响'}[key])+'：</b>'+rich(report,key)+'</p>';}).join('');
       [['speed_items','提速对策','gain'],['effect_items','效果保障','target']].forEach(function(spec){var items=report[spec[0]];if(Array.isArray(items) && items.length)extra+='<h3>'+spec[1]+'</h3>'+items.map(function(row){return '<p>'+rich(row,'act')+' · '+rich(row,spec[2])+'</p>';}).join('');});
       if(Array.isArray(report.next_items) && report.next_items.length)extra+='<h3>下周必须完成</h3>'+report.next_items.map(function(text,index){return '<p>'+rich(report,'next_items.'+index,text)+'</p>';}).join('');
@@ -178,6 +185,7 @@
     var summaryContent=model.monthlySummaryError?'<p class="meeting-data-issue" role="alert">月度汇总读取失败：'+esc(model.monthlySummaryError)+'</p>'
       : global.MonthlySummaries?global.MonthlySummaries.html(model.monthlySummaries || [],{projectIds:selection.projectIds,projects:model.projects,month:selectedMonths.summary,line:selection.line,projection:true,referenceDate:selectedMonths.plan+'-01'})
       : (model.monthlySummaries || []).length?'<p class="meeting-data-issue" role="alert">月度汇总组件读取失败，请重新打开投影。</p>':'';
+    var followupTable=followups.length || !legacy.length?table(['项目／承办人','类别','事项','完成时间','反馈'],followups):'';
     if(monthly){
       var planIds=new Set(),confirmed=selectedPlans(model.plans || [],selection.projectIds).filter(function(plan){if(plan.id && planIds.has(plan.id))return false;if(plan.id)planIds.add(plan.id);return String(plan.plan_month || '').slice(0,7)===selectedMonths.plan && (!selection.line || plan.line===selection.line);}),monthlyPlans=[];
       confirmed.forEach(function(plan){
@@ -192,14 +200,16 @@
         });
         groups.forEach(function(group){monthlyPlans.push(table(['模块','事项','完成时间','进展'],group.rows,group.source,group.items));});
       });
-      return head+'<div class="meeting-month-stack"><section class="meeting-section" data-projection-section="monthly-summary"><h2>'+esc(monthLabel(selectedMonths.summary))+'工作总结</h2>'+summaryContent+'</section><section class="meeting-section" data-projection-section="monthly-plans"><h2>'+esc(monthLabel(selectedMonths.plan))+'工作计划</h2>'+(monthlyPlans.join('') || '<p class="meeting-empty">所选月份和专业暂无已确认月计划。</p>')+'</section></div>';
+      var currentFollowups=selection.type==='res' && followups.length
+        ?'<section class="meeting-section" data-projection-section="followups"><h2>待处理事项清单</h2><p class="muted">报告周期：'+esc(selection.period)+'</p>'+followupTable+'</section>':'';
+      return head+'<div class="meeting-month-stack"><section class="meeting-section" data-projection-section="monthly-summary"><h2>'+esc(monthLabel(selectedMonths.summary))+'工作总结</h2>'+summaryContent+'</section><section class="meeting-section" data-projection-section="monthly-plans"><h2>'+esc(monthLabel(selectedMonths.plan))+'工作计划</h2>'+(monthlyPlans.join('') || '<p class="meeting-empty">所选月份和专业暂无已确认月计划。</p>')+'</section>'+currentFollowups+'</div>';
     }
     var hasSummaries=model.monthlySummaryError || summaryRows.length;
     var body=(nodes.length || selection.section!=='all'?section('nodes','一、核心节点',table(['实际项目／专业','节点','原计划完成日','预计完成日'],nodes),selection):'')
       +(plans.length || selection.section!=='all'?section('plans','二、当月计划',plans.join('') || '<p class="meeting-empty">所选范围暂无记录。</p>',selection):'')
       +(hasSummaries || selection.section==='summaries'?section('summaries','本月计划完成情况（月度汇总）',summaryContent,selection):'')
       +(coords.length || selection.section!=='all'?section('coord','三、需要协调',table(['来源','协调对象','事项','最晚时间'],coords),selection):'')
-      +(followups.length || legacy.length || selection.section!=='all'?section('followups','四、待办反馈',(followups.length || !legacy.length?table(['来源','类别','事项','完成时间','反馈'],followups):'')+legacy.join(''),selection):'')
+      +(followups.length || legacy.length || selection.section!=='all'?section('followups','四、待处理事项清单',followupTable+legacy.join(''),selection):'')
       +(media || selection.section!=='all'?section('media','项目总图与附件',media || '<p class="meeting-empty">所选范围暂无总图或报告附件。</p>',selection):'');
     return head+(issues.length?'<p class="meeting-data-issue" role="alert">'+esc(issues[0])+'</p>':'')+(body || '<p class="meeting-empty">所选范围暂无可展示内容。</p>');
   }

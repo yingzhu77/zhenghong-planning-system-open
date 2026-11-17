@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { isDeepStrictEqual } from 'node:util';
 import * as Y from 'yjs';
 import { getProfile, lockWeeklyCollaborationWrite, reportDelay, reportStatus, reportWeekStart, withIdentity } from './database.mjs';
 import { businessModulesForProject } from './commercial-modules.mjs';
+import { reportCoordinationSourceItem, resolveCompletionSource } from './completion-sources.mjs';
 import { HttpError } from './errors.mjs';
 import { confirmMonthlyPlanInTransaction, normalizeMonthlyPlanItems } from './monthly-plans.mjs';
 import { validateReportAttachmentReferences } from './report-attachments.mjs';
@@ -183,6 +185,60 @@ function reportFields(draft, plan, scoped) {
   return {items, fields};
 }
 
+function ownFeedback(draft, userId) {
+  return draft?.followup_feedback && Object.hasOwn(draft.followup_feedback,userId)
+    ? draft.followup_feedback[userId] : {revision:0,rows:[]};
+}
+
+async function followupSource(client, user, scope, projectIds, key, cache) {
+  if (typeof key!=='string' || !/^(coord|meeting):/.test(key) || !projectIds.includes(key.split(':')[1]))
+    fail(403,'只能填写本项目范围内分配给本人的待处理事项。');
+  const source=await resolveCompletionSource(client,user,key,{cache});
+  if (source.report_id) {
+    if (source.source_snapshot.author_id===user.id) fail(403,'只能填写其他人指派给本人的待处理事项。');
+    const report=(await client.query(`SELECT coord_items,biz FROM public.reports WHERE id=$1
+      AND app_private.weekly_collaboration_existing_report_week(period,submitted_at)<=$2::date`,[source.report_id,scope.week])).rows[0];
+    if (!report) fail(409,'事项来源超出所选报告周，请更新待办事项。');
+    const item=reportCoordinationSourceItem(report,source.source_snapshot.group,source.source_id);
+    if (item.project_id && !projectIds.includes(item.project_id))
+      fail(403,'待办事项的实际项目不在本报告范围内。');
+    return {...source,actual_project_id:item.project_id || source.project_id};
+  }
+  return source;
+}
+
+async function normalizeFollowups(client,user,scope,projectIds,entries,ownerName) {
+  const rows=[],keys=new Set(),cache=new Map();
+  for (const input of entries) {
+    if (!input || typeof input!=='object' || typeof input.progress!=='string' || input.progress.length>10000
+      || input.progress.includes('\u0000') || !['open','in_progress','completed'].includes(input.status))
+      fail(400,'待办事项的进展内容或处理状态不正确。');
+    const source=await followupSource(client,user,scope,projectIds,input.source_key,cache);
+    if (keys.has(source.source_key)) fail(400,'待办事项不能重复。');
+    keys.add(source.source_key);
+    const row={
+      source_key:source.source_key,source_type:source.kind,source_id:source.source_id,
+      source_version:source.source_version,
+      project_id:source.actual_project_id || source.project_id,title:source.title,what:source.what,due:source.original_due,
+      effective_due:source.effective_due,source_author:source.source_snapshot.author_name || '',
+      source_period:source.source_snapshot.period || '',status:input.status,progress:input.progress,
+      owner_id:user.id,owner_name:ownerName
+    };
+    if (input.rich_text!==undefined && (input.rich_text?.v!==1 || !input.rich_text.fields?.progress
+      || Object.keys(input.rich_text.fields).some(key=>key!=='progress')))
+      fail(400,'待办反馈只支持填写进展的文字格式。');
+    const fields={};
+    if (source.rich_text?.fields?.what) fields['biz.followups.0.what']=source.rich_text.fields.what;
+    if (input.rich_text?.fields?.progress) fields['biz.followups.0.progress']=input.rich_text.fields.progress;
+    if (Object.keys(fields).length) {
+      const formatted=validateRichText('reports',{v:1,fields},{biz:{followups:[row]}});
+      row.rich_text={v:1,fields:Object.fromEntries(Object.entries(formatted.fields).map(([key,value])=>[key.split('.').at(-1),value]))};
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
 export function createWeeklyCollaboration(pool) {
   const events = new EventEmitter().setMaxListeners(0);
   const presence = new Map();
@@ -312,6 +368,7 @@ export function createWeeklyCollaboration(pool) {
     const last = !settings && draft && (await client.query(`SELECT actor_name,recorded_at AS at,cell
       FROM app_private.weekly_collaboration_operations WHERE ${weekFilter} AND kind='edit' ORDER BY revision DESC LIMIT 1`,scope.weekValues)).rows[0];
     const revision = draft?.revision || 0;
+    const feedback = settings?{revision:0,rows:[]}:ownFeedback(draft,user.id);
     return {
       week:scope.week, project_id:scope.projectId,line:scope.line,report_scope_id:scope.scopeId,status,revision,
       cursor:digest([revision,status,plan?.id,...Object.values(monthPlans || {}).map(value=>[
@@ -326,7 +383,8 @@ export function createWeeklyCollaboration(pool) {
       can_configure:settings && !(await ownerIsLocked(client,scope,draft)),
       eligible:settings ? eligible : [], member_ids:settings ? draft?.member_ids ?? null : undefined, plan:settings || status !== 'ready' ? null : plan,
       month_plans:settings ? undefined : monthPlans,
-      cells:!settings && status === 'ready' ? draft.cells : {}, report, last_change:last || null, presence:online
+      cells:!settings && status === 'ready' ? draft.cells : {}, report, last_change:last || null, presence:online,
+      my_followups:feedback.rows,my_followups_revision:feedback.revision
     };
   }
 
@@ -616,6 +674,73 @@ export function createWeeklyCollaboration(pool) {
   const confirmMonth=(user,body)=>writeMonth(user,body,'confirm');
   const withdrawMonth=(user,body)=>writeMonth(user,body,'withdraw');
 
+  async function followupProjectIds(client,scope) {
+    if (!scope.scopeId) return [scope.projectId];
+    const configured=(await client.query('SELECT project_ids FROM app_private.report_scopes WHERE id=$1',[scope.scopeId])).rows[0];
+    if (!configured) fail(403,'当前账号没有统一填报范围的权限。');
+    return configured.project_ids;
+  }
+
+  async function followups(user,body) {
+    const scope=scopeOf(body),{entries,feedback_revision:expected}=body;
+    if (!Array.isArray(entries) || entries.length>500 || !Number.isSafeInteger(expected) || expected<0)
+      fail(400,'待办反馈列表或版本不正确。');
+    const result=await withIdentity(pool,user.id,async client=>{
+      await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
+      if (await roomAccess(client,user,scope)!=='member') fail(403,'当前账号没有该项目专业的协同权限。');
+      const current=await state(client,user,scope,false);
+      if (!current.can_edit) fail(409,'本周周报当前不能编辑待办反馈。');
+      const projectIds=await followupProjectIds(client,scope);
+      const owner=(await getProfile(client,user.id)).name;
+      const rows=await normalizeFollowups(client,user,scope,projectIds,entries,owner);
+      const draft=await readWeek(client,scope),previous=ownFeedback(draft,user.id);
+      if (isDeepStrictEqual(previous.rows,rows))
+        return {rows,revision:draft.revision,feedback_revision:previous.revision};
+      if (previous.revision!==expected) fail(409,'本人的待办反馈已在其他窗口保存，请刷新后核对。');
+      const feedback_revision=expected+1,revision=draft.revision+1;
+      const aggregate={...draft.followup_feedback,[user.id]:{rows,revision:feedback_revision}};
+      if (Buffer.byteLength(JSON.stringify(aggregate))>maxDraftBytes) fail(400,'本周待办反馈累计内容已达上限。');
+      await client.query(`UPDATE app_private.weekly_collaboration_drafts SET followup_feedback=$4::jsonb,revision=$5
+        WHERE ${weekFilter}`,[...scope.weekValues,JSON.stringify(aggregate),revision]);
+      return {rows,revision,feedback_revision};
+    });
+    notify(scope);
+    return result;
+  }
+
+  async function officialFollowups(client,user,scope,draft,fields) {
+    if (!Object.keys(draft.followup_feedback ?? {}).length) return [];
+    const people=(await client.query('SELECT user_id,name FROM app_private.weekly_collaboration_participants($1,$2,$3)',scope.eligibility)).rows;
+    const projectIds=await followupProjectIds(client,scope),result=[];
+    for (const person of people) {
+      if (draft.member_ids!==null && person.user_id!==user.id && !draft.member_ids.includes(person.user_id)) continue;
+      const entries=ownFeedback(draft,person.user_id).rows;
+      if (!entries.length) continue;
+      if (result.length+entries.length>500) fail(400,'本周正式待办反馈最多保存 500 项。');
+      // Validate each response as its actual assignee under the source table ACLs.
+      await client.query("SELECT set_config('app.current_user_id',$1,true)",[person.user_id]);
+      let rows;
+      try {
+        const input=entries.map(row=>({source_key:row.source_key,progress:row.progress,status:row.status,
+          ...(row.rich_text?.fields.progress?{rich_text:{v:1,fields:{progress:row.rich_text.fields.progress}}}:{})}));
+        rows=await normalizeFollowups(client,{id:person.user_id},scope,projectIds,input,person.name);
+        if (rows.some((row,index)=>row.source_version!==entries[index].source_version))
+          fail(409,'待办来源已更新。');
+      } catch (error) {
+        if (error instanceof HttpError && [403,404,409].includes(error.status))
+          fail(409,'有待办来源发生变化，请由填报人更新待办后重新保存。');
+        throw error;
+      }
+      for (const {rich_text,source_version,...row} of rows) {
+        for (const [key,value] of Object.entries(rich_text?.fields || {}))
+          fields['biz.followups.'+result.length+'.'+key]=value;
+        result.push(row);
+      }
+    }
+    await client.query("SELECT set_config('app.current_user_id',$1,true)",[user.id]);
+    return result;
+  }
+
   async function change(user,body) {
     const scope=scopeOf(body);
     const operation = operationOf(body);
@@ -680,11 +805,12 @@ export function createWeeklyCollaboration(pool) {
       const normalized = (await client.query('SELECT app_private.report_week_start($1,now())::text AS week',[period])).rows[0].week;
       if (normalized !== week) fail(400,'附件周期与本周协同稿不一致。');
       const {items,fields}=reportFields(current,current.plan,Boolean(scopeId));
+      const submittedFollowups=await officialFollowups(client,user,scope,draft,fields);
       const profile = await getProfile(client,user.id);
       const row = {project_id:projectId,period,line,...(scopeId?{report_scope_id:scopeId}:{}),biz:{
         ...(current.plan.confirmed_id?{...(scopeId?{monthly_plan_ids:[current.plan.confirmed_id]}:{monthly_plan_id:current.plan.confirmed_id}),
           monthly_plan_month:current.plan.month}:{}),
-        items,attachments,
+        items,attachments,...(submittedFollowups.length?{followups:submittedFollowups}:{}),
         weekly_collaboration:{week,revision:current.revision}
       }};
       await resolveReportScope(client,user,row,null,period,projectId);
@@ -758,5 +884,5 @@ export function createWeeklyCollaboration(pool) {
     return result;
   }
 
-  return {open,poll,mode,nextWeek,catalog,settings,items,monthItems,confirmMonth,withdrawMonth,change,publish,withdraw};
+  return {open,poll,mode,nextWeek,catalog,settings,items,monthItems,confirmMonth,withdrawMonth,change,followups,publish,withdraw};
 }

@@ -74,6 +74,8 @@
     return !!(text && ((name.length >= 2 && text.indexOf(name) >= 0) || lines.some(function (module) { return text.indexOf(module) >= 0; })));
   }
   function periodDate(period, reference) {
+    var start=global.PlanningWindows?.periodStart(period,reference);
+    if(start)return Date.parse(start+'T00:00:00Z');
     var week = cfg.weekNo(period), ref = new Date(reference || Date.now());
     if (!Number.isFinite(ref.getTime())) ref = new Date();
     if (!week) return ref.getTime();
@@ -104,6 +106,9 @@
     return (h >>> 0).toString(36);
   }
   function richSource(source, row) { return cfg.richCopy(source, row, { what: 'what', progress: 'progress' }); }
+  function ownFollowup(report, row) {
+    return report.biz?.weekly_collaboration && row.owner_id ? row.owner_id===S.uid : mine(report);
+  }
   function sources() {
     var selected = selectedDate(), out = [];
     (S.reports || []).forEach(function (r) {
@@ -145,13 +150,14 @@
   function feedback() {
     var selected = selectedDate(), latest = Object.create(null), commercial = cfg.isCommercial && cfg.isCommercial();
     (S.reports || []).filter(function (r) {
-      return r.project_id === S.pmProject && (r.report_scope_id || '') === reportScopeId() && mine(r) && (!(commercial || professionalScope()) || (r.line || '综合') === S.pmLine)
+      return r.project_id === S.pmProject && (r.report_scope_id || '') === reportScopeId()
+        && (mine(r) || r.biz?.weekly_collaboration) && (!(commercial || professionalScope()) || (r.line || '综合') === S.pmLine)
         && sourceDate(r) < selected && r.biz && Object.prototype.hasOwnProperty.call(r.biz, 'followups');
     }).sort(function (a, b) { return sourceDate(a) - sourceDate(b) || String(a.updated_at || '').localeCompare(String(b.updated_at || '')); })
       .forEach(function (r) {
         var checked = inspectRows(r.biz.followups);
         if (checked.issue) dataIssue = INVALID_ROWS;
-        checked.rows.filter(pendingRow).forEach(function (row) {
+        checked.rows.filter(function(row){return pendingRow(row) && ownFollowup(r,row);}).forEach(function (row) {
           var saved = copy(row);
           Object.defineProperty(saved, '_feedbackSavedAt', { value: new Date(r.updated_at || r.submitted_at || r.created_at || '').getTime() });
           Object.defineProperty(saved, '_feedbackPeriod', { value: r.period });
@@ -201,7 +207,7 @@
     if (biz && Object.prototype.hasOwnProperty.call(biz, 'followups')) {
       var checked = inspectRows(biz.followups);
       if (checked.issue) dataIssue = INVALID_ROWS;
-      S.followupRows = checked.rows.map(copy);
+      S.followupRows = checked.rows.filter(function(row){return !biz.weekly_collaboration || ownFollowup(S.pmReport,row);}).map(copy);
     } else S.followupRows = merge(feedback(), false);
     if(!dataIssue)syncMeetingRows(false);
     prepareCoordination();
@@ -287,6 +293,34 @@
     }
   }
   function rows() { capture(); return inspectRows(S.followupRows || []).rows.map(copy); }
+  function feedbackEntry(row) {
+    var doc=progressDoc(row), rich=doc && doc.ops.some(function(op){return !!op.attributes;});
+    return {source_key:row.source_key,progress:row.progress,status:state(row.status),
+      ...(rich?{rich_text:{v:1,fields:{progress:doc}}}:{})};
+  }
+  function collaborationEntries() {
+    var current=new Set(sources().filter(pendingRow).map(function(row){return row.source_key;}));
+    return inspectRows(S.followupRows || []).rows.filter(function(row){
+      return pendingRow(row) && !row.source_missing && current.has(row.source_key);
+    }).map(feedbackEntry).sort(function(a,b){return a.source_key.localeCompare(b.source_key);});
+  }
+  function mergeCollaborationRows(saved, baseline) {
+    var known=new Map(inspectRows(saved).rows.map(function(row){return [row.source_key,row];}));
+    var previous=new Map((baseline || []).map(function(row){return [row.source_key,row];})), conflict=false;
+    S.followupRows=inspectRows(S.followupRows || []).rows.map(function(row){
+      var latest=known.get(row.source_key);
+      if(!latest)return row;
+      var old=JSON.stringify(previous.get(row.source_key)), local=JSON.stringify(feedbackEntry(row)), remote=feedbackEntry(latest);
+      previous.set(row.source_key,remote);
+      if(!old || local===old)return withFeedback(row,latest);
+      if(local!==JSON.stringify(remote) && old!==JSON.stringify(remote))conflict=true;
+      return row;
+    });
+    return {baseline:Array.from(previous.values()),conflict:conflict};
+  }
+  function saveCollaborationFeedback() {
+    if(typeof cfg.saveCollaborationFeedback==='function')return cfg.saveCollaborationFeedback();
+  }
   async function refreshSources() {
     if (refreshing) return;
     if (cfg.flush) cfg.flush(); capture();
@@ -337,12 +371,25 @@
   function feedbackLink(key) {
     return '<button type="button" class="btn ghost sm reporter-feedback-link" onclick="' + esc('ReporterTasks.openFeedback('+JSON.stringify(key)+')') + '">填写本期反馈</button>';
   }
-  function formHtml() {
-    validationError();
-    S.followupRows = inspectRows(S.followupRows || []).rows;
-    var visible=S.followupRows.map(function(row,index){return {row:row,index:index};}).filter(function(entry){return pendingRow(entry.row);});
-    return '<section class="card reporter-followups"><div class="cardhd"><h3>四、待处理事项清单</h3>'
-      + '<button type="button" class="btn" onclick="ReporterTasks.refreshSources()"' + (refreshing ? ' disabled' : '') + '>' + (refreshing ? '更新中…' : '更新待办事项') + '</button></div>'
+  function formHtml(collaboration) {
+    var published=collaboration?.report, editable=!collaboration || collaboration.status==='ready';
+    var items;
+    if(published){
+      if(global.ZHRichText)global.ZHRichText.attach(published);
+      items=inspectRows(published.biz?.followups || []).rows.filter(function(row){return ownFollowup(published,row);});
+    } else {
+      validationError();
+      items=S.followupRows=inspectRows(S.followupRows || []).rows;
+    }
+    var visible=items.map(function(row,index){return {row:row,index:index};}).filter(function(entry){return pendingRow(entry.row);});
+    return '<section class="card reporter-followups'+(collaboration?' plan-form-section" data-personal-rich-editor':'"')+'><div class="cardhd'
+      +(collaboration?' plan-section-head':'')+'"><h3>四、待处理事项清单</h3>'
+      + (editable?'<div class="reporter-row-actions"><button type="button" class="btn" onclick="ReporterTasks.refreshSources()"'
+        + (refreshing || collaboration?.saving ? ' disabled' : '') + '>' + (refreshing ? '更新中…' : '更新待办事项') + '</button>'
+        + (collaboration?'<button type="button" id="collaboration-feedback-save" class="btn primary" onclick="ReporterTasks.saveCollaborationFeedback()"'
+          + (!visible.length && !collaboration.rows?.length || collaboration.saving ? ' disabled' : '') + '>保存本期反馈</button>':'')+'</div>':'')+'</div>'
+      + (collaboration?'<p class="muted" role="status">'+esc(published?'以下是本人随周报提交的反馈。':editable?'本人填写并保存后，由负责人统一提交周报。':'协同状态读取后可填写本人反馈。')+'</p>':'')
+      + (editable && collaboration?.conflict?'<p class="reporter-source-note" role="alert">其他窗口有更新，已保留本机输入。请核对后再保存。</p>':'')
       + (dataIssue ? '<p class="reporter-source-note" role="alert">' + esc(dataIssue) + '</p>' : '')
       + '<div class="tablewrap reporter-followup-scroll"><table class="reporter-followup-table"><thead><tr><th>类别</th><th>提出人</th><th>事项内容</th><th>完成时间</th><th>本期进展</th></tr></thead><tbody>'
       + (visible.length ? visible.map(function (entry) {
@@ -353,10 +400,11 @@
           + '<td data-label="事项内容">' + cfg.richItem(row, 'what', '未填写事项内容') + reopenedHtml(row)
           + (row.source_updated ? '<p class="reporter-source-note">来源已更新' + (row.source_missing ? '或已移除' : '') + '，保留此前事项与反馈供核对。</p>' : '') + '</td>'
           + '<td data-label="完成时间">' + esc(effectiveDue || '未设置') + (effectiveDue && effectiveDue!==row.due?'<div class="muted">原期限：'+esc(row.due || '未设置')+'</div>':'') + '</td>'
-          + '<td data-label="本期进展"><label class="reporter-followup-status">处理状态<select id="followup_status_' + index + '" aria-label="同步事项处理状态">' + options(row.status) + '</select></label>'
+          + '<td data-label="本期进展">'+(editable?'<label class="reporter-followup-status">处理状态<select id="followup_status_' + index + '" aria-label="同步事项处理状态">' + options(row.status) + '</select></label>'
           + '<textarea id="followup_progress_' + index + '" data-rich rows="2" aria-label="同步事项本期进展" placeholder="填写本期进展、结果或待协调内容">' + esc(row.progress) + '</textarea>'
           + (row.meeting_conflict ? '<div class="reporter-source-note" role="alert">其他入口已有更新，本机输入保留。<div class="reporter-conflict-actions"><button type="button" class="btn ghost sm" onclick="ReporterTasks.resolveMeeting('+index+',false)">采用最新进展</button><button type="button" class="btn ghost sm" onclick="ReporterTasks.resolveMeeting('+index+',true)">保留本机进展</button></div></div>' : '')
-          + '<div class="reporter-followup-actions">'+reviewAction(row.source_key)+'</div></td>'
+          + '<div class="reporter-followup-actions">'+reviewAction(row.source_key)+'</div>'
+          :cfg.richItem(row,'progress','本期未填写')+'<div class="reporter-feedback-state">'+esc(statusText(row.status))+'</div>')+'</td>'
           + '</tr>';
       }).join('') : '<tr><td colspan="5" class="empty">' + (dataIssue ? '待办事项未能完整读取，请核对原记录。' : '本期暂无待处理事项。') + '</td></tr>') + '</tbody></table></div></section>';
   }
@@ -568,5 +616,6 @@
     }).join('') + '</section>';
   }
   global.ReporterTasks = { configure: configure, pendingHtml:pendingHtml, displayTitle:displayTitle, feedbackFor:currentFeedback, openFeedback:openFeedback, workbenchHtml: workbenchHtml, requirementsHtml: requirementsHtml, renderAdmin: renderAdmin, filterProject: filterProject, filterKind: filterKind, setKind: setKind, loadPeople: loadPeople, retryPeople: retryPeople, formHtml: formHtml, prepare: prepare, capture: capture,
-    rows: rows, prepareCoordination: prepareCoordination, syncMeetingRows:syncMeetingRows, syncSavedTask:syncSavedTask, resolveMeeting:resolveMeeting, sourceItems:function(){return sources().map(copy);}, snapshotHtml: snapshotHtml, binding: binding, edit: edit, save: save, cancel: cancel, refreshSources: refreshSources, validationError: validationError };
+    rows: rows, prepareCoordination: prepareCoordination, syncMeetingRows:syncMeetingRows, syncSavedTask:syncSavedTask, resolveMeeting:resolveMeeting, sourceItems:function(){return sources().map(copy);}, snapshotHtml: snapshotHtml, binding: binding, edit: edit, save: save, cancel: cancel, refreshSources: refreshSources, validationError: validationError,
+    collaborationEntries:collaborationEntries,mergeCollaborationRows:mergeCollaborationRows,saveCollaborationFeedback:saveCollaborationFeedback };
 })(window);

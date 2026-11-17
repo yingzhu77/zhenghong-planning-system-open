@@ -107,6 +107,18 @@ test('projection selectors reject invalid payloads and display escapes source te
   model.projects.push({id:'res-b',name:'二期'});model.reports[0].report_scope_id='group';model.reports[0].scope_project_ids=['res-a','res-b'];
   model.reports[0].biz.items=[{project_id:'res-b',name:'原二期事项'},{name:'没有实际项目的原事项'}];
   const grouped=api.html(model);assert.match(grouped,/二期<small>/);assert.match(grouped,/统一范围 · 未明确子项目/);
+  model.target=api.target({...valid,type:'com',section:'followups'});
+  model.reports[0].biz.weekly_collaboration={week:'2026-11-02',revision:1};
+  model.reports[0].biz.followups=[
+    {project_id:'res-a',owner_name:'真实承办人<iframe>',source_type:'coord',what:'需要核对<script>',progress:'已反馈',status:'in_progress'},
+    {project_id:'res-b',owner_name:'不在投影范围的承办人',what:'不在投影范围的事项'}
+  ];
+  const followups=api.html(model);
+  assert.match(followups,/四、待处理事项清单/);
+  assert.match(followups,/真实承办人&lt;iframe&gt;/);
+  assert.match(followups,/需要核对&lt;script&gt;/);
+  assert.match(followups,/已反馈/);
+  assert.doesNotMatch(followups,/<script|<iframe|人员&lt;iframe&gt;|不在投影范围/);
 });
 
 test('weekly projection centers plan headers and merged modules and balances real progress across display sizes',async t=>{
@@ -189,8 +201,11 @@ async function fixture(t){
   await admin.query("INSERT INTO app_private.auth_users(user_id,email,password_hash) VALUES($1,'meeting-owner@example.invalid','disposable-directory-only'),($2,'meeting-leader@example.invalid','disposable-directory-only')",[owner,leader]);
   await admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES($1,'meeting-a','pm'),($1,'meeting-b','pm')",[owner]);
   for(const pid of ['meeting-a','meeting-b'])await executeDatabase(runtime.pool,{id:owner},{table:'reports',operation:'upsert',onConflict:'project_id,period,line',values:{project_id:pid,period:runtime.scope.period,line:'综合',
-    biz:{form_version:2,nodes:[],items:[{source_id:'meeting-item',mod:'工程',name:pid==='meeting-a'?'甲项目已提交事项':'乙项目已提交事项',due:runtime.scope.week,prog:'原进展需要保留'}],handover:[]},
-    rich_text:{v:1,fields:{'biz.items.0.prog':{ops:[{insert:'原进展需要保留',attributes:{bold:true,color:'#d81e06'}}]}}}}});
+    biz:{form_version:2,nodes:[],items:[{source_id:'meeting-item',mod:'工程',name:pid==='meeting-a'?'甲项目已提交事项':'乙项目已提交事项',due:runtime.scope.week,prog:'原进展需要保留'}],handover:[],
+      followups:[{project_id:pid,source_key:'coord:'+pid+':2d023ae3-95ec-4bab-8d28-df43eb07263c',source_type:'coord',
+        what:pid==='meeting-a'?'甲项目原协调事项':'乙项目原协调事项',owner_name:'示例协同组员',progress:'协调进展已提交',status:'in_progress'}]},
+    rich_text:{v:1,fields:{'biz.items.0.prog':{ops:[{insert:'原进展需要保留',attributes:{bold:true,color:'#d81e06'}}]},
+      'biz.followups.0.progress':{ops:[{insert:'协调进展已提交',attributes:{bold:true}}]}}}}});
   for(const [pid,name] of [['meeting-a','甲项目已确认事项'],['meeting-b','乙项目已确认事项']]){
     await confirmMonthlyPlan(runtime.pool,{id:owner},{project_id:pid,line:'工程',month:runtime.scope.month,
       items:[{source_id:'meeting-plan-item',mod:'工程',name,due:runtime.scope.week}],
@@ -220,6 +235,13 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
   await expect(mode).toBeDisabled();await expect(mode.locator('option')).toHaveCount(1);await expect(mode).toHaveValue('monthly');
   await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   await expect(display.locator('#meeting-screen')).not.toContainText('甲项目已提交事项');
+  const followups=display.locator('[data-projection-section="followups"]');
+  await expect(followups).toContainText('待处理事项清单');
+  await expect(followups).toContainText('甲项目原协调事项');
+  await expect(followups).toContainText('示例工程负责人');
+  await expect(followups).not.toContainText('示例协同组员');
+  await expect(followups.locator('strong')).toHaveText('协调进展已提交');
+  await expect(followups).not.toContainText('乙项目原协调事项');
   await expect(page.locator('.meeting-control')).toContainText('跟随中');
   await expect(display.locator('input,textarea,select:not(#meeting-profession),[contenteditable]')).toHaveCount(0);
   await expect(display.getByRole('combobox',{name:'投影专业'})).toBeEnabled();
@@ -239,6 +261,8 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
   await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   assert.equal(await display.locator('#meeting-screen').innerHTML(),untouched);
   await page.locator('[data-meeting-toggle]').click();await expect(display.locator('#meeting-screen')).toContainText('乙项目已确认事项');
+  await expect(followups).toContainText('乙项目原协调事项');
+  await expect(followups).not.toContainText('甲项目原协调事项');
   await page.locator('[data-meeting-toggle]').click();await page.locator('#overviewFilter').selectOption('示例住宅甲');
   await expect(draft.locator('.ql-editor')).toContainText('尚未保存的领导要求');
   await expect(draft.locator('.ql-editor strong')).toContainText('尚未保存的领导要求');

@@ -79,7 +79,7 @@ async function openWorkspace(page, projectId = 'hf') {
 async function expectSharedReportLayout(page) {
   const form = page.locator('.report3-compact-form');
   await expect(form.locator('.plan-section-head h3')).toHaveText([
-    '一、本周核心节点计划', '二、当月计划填报', '三、附件资料'
+    '一、本周核心节点计划', '二、当月计划填报', '三、附件资料', '四、待处理事项清单'
   ]);
   await expect(form.locator('.report-attachment-upload')).toBeVisible();
   await expect(form.locator('#report-attachment-upload')).toBeEnabled();
@@ -307,6 +307,17 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
 
 test('已确认月计划下两人可补充本周事项，负责人提交后同步到原月计划', {timeout: 90000}, async t => {
   const fixture = await createFixture(t);
+  const followup = '协助核对匿名现场图纸交接';
+  // An earlier ISO reporting week can be submitted after this week begins.
+  const [origin] = (await fixture.admin.query(
+    `INSERT INTO public.reports(project_id,line,period,author_id,author_name,coord_items,submitted_at)
+     VALUES('hf','设计部',($1::date-7)::text,'design-pilot-lead','匿名设计提报人',$2::jsonb,
+       ($1::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')
+     RETURNING id::text AS id`,
+    [fixture.week, JSON.stringify([{ source_id:'browser-coord', who_id:'design-pilot-editor',
+      who:'匿名设计协作者', what:followup, by:fixture.week }])]
+  )).rows;
+  const followupKey = 'coord:hf:' + origin.id + ':coord:browser-coord';
   const browser = await chromium.launch({channel:'msedge',headless:true});
   t.after(()=>browser.close());
   const errors=[], requests=[];
@@ -329,6 +340,18 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   });
   assert.equal(settings.status(),200,JSON.stringify((await settings.json()).error));
   await Promise.all([openWorkspace(lead),openWorkspace(editor)]);
+  const followupRow = page => page.locator('[data-followup-key="' + followupKey + '"]');
+  await expect(followupRow(editor)).toContainText(followup);
+  await expect(followupRow(lead)).toHaveCount(0);
+  const feedback = '已核对图纸并向对方反馈';
+  await followupRow(editor).locator('.ql-editor').fill(feedback);
+  const feedbackSaved = editor.waitForResponse(response => response.url().endsWith('/api/weekly-collaboration/followups'));
+  await editor.getByRole('button', {name:'保存本期反馈', exact:true}).click();
+  const feedbackResponse = await feedbackSaved;
+  assert.equal(feedbackResponse.status(),200,JSON.stringify((await feedbackResponse.json()).error));
+  await editor.reload();
+  await openWorkspace(editor);
+  await expect(followupRow(editor).locator('.ql-editor')).toHaveText(feedback);
   const leadPanel=lead.locator('[data-weekly-collaboration]');
   const editorPanel=editor.locator('[data-weekly-collaboration]');
   const add=editorPanel.getByRole('button',{name:'＋ 新增本周事项',exact:true});
@@ -379,6 +402,8 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   assert.equal(published.status(),200,JSON.stringify((await published.json()).error));
   const report=(await published.json()).data.report;
   const supplement=report.biz.items.find(item=>item.source_id===newId);
+  assert.deepEqual(report.biz.followups.map(row=>[row.source_key,row.owner_name,row.progress]),
+    [[followupKey,'匿名设计协作者',feedback]]);
   assert.equal(supplement.prog,'组员已完成复核');
   assert.equal(report.biz.monthly_plan_id,planId);
   const after=await lead.request.post(fixture.base+'/api/monthly-plans/list',{headers,data:planRequest});
