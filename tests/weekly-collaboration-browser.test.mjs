@@ -79,7 +79,8 @@ async function openWorkspace(page, projectId = 'hf') {
 async function expectSharedReportLayout(page) {
   const form = page.locator('.report3-compact-form');
   await expect(form.locator('.plan-section-head h3')).toHaveText([
-    '一、本周核心节点计划', '二、当月计划填报', '三、附件资料', '四、待处理事项清单'
+    '一、本周核心节点计划', '二、当月计划填报', '三、需要协调事项',
+    '四、待处理事项清单', '五、附件资料'
   ]);
   await expect(form.locator('.report-attachment-upload')).toBeVisible();
   await expect(form.locator('#report-attachment-upload')).toBeEnabled();
@@ -307,6 +308,11 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
 
 test('已确认月计划下两人可补充本周事项，负责人提交后同步到原月计划', {timeout: 90000}, async t => {
   const fixture = await createFixture(t);
+  const receiver = 'design-pilot-coordination-receiver';
+  await fixture.admin.query('INSERT INTO app_private.auth_users(user_id,email,password_hash) VALUES($1,$2,$3)',
+    [receiver,receiver+'@example.invalid','unused-anonymous-fixture']);
+  await fixture.admin.query("INSERT INTO public.profiles(user_id,name,role,status,project_id,biz_line) VALUES($1,'匿名协调承办人','pm','approved','hf','建筑结构设计')",[receiver]);
+  await fixture.admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES($1,'hf','pm')",[receiver]);
   const followup = '协助核对匿名现场图纸交接';
   // An earlier ISO reporting week can be submitted after this week begins.
   const [origin] = (await fixture.admin.query(
@@ -340,6 +346,20 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   });
   assert.equal(settings.status(),200,JSON.stringify((await settings.json()).error));
   await Promise.all([openWorkspace(lead),openWorkspace(editor)]);
+  await expectSharedReportLayout(editor);
+  const outgoing = '请协助复核匿名现场图纸';
+  const draftCoordination = editor.locator('[data-weekly-coordination]');
+  const firstRecipient = draftCoordination.locator('#wc_who_0');
+  await expect(firstRecipient).toBeEnabled();
+  await firstRecipient.selectOption(receiver);
+  await draftCoordination.locator('.ql-editor').first().fill(outgoing);
+  await draftCoordination.locator('#wc_by_0').fill(fixture.week);
+  const coordinationSaved = editor.waitForResponse(response=>response.url().endsWith('/api/weekly-collaboration/coordination'));
+  await draftCoordination.getByRole('button',{name:'保存协调事项',exact:true}).click();
+  const savedCoordination = await coordinationSaved;
+  assert.equal(savedCoordination.status(),200,JSON.stringify((await savedCoordination.json()).error));
+  const savedRow = (await savedCoordination.json()).data.rows[0];
+  await expect(lead.locator('[data-weekly-coordination] .ql-editor').first()).toContainText('请协助复核匿名现场图纸',{timeout:18000});
   const followupRow = page => page.locator('[data-followup-key="' + followupKey + '"]');
   await expect(followupRow(editor)).toContainText(followup);
   await expect(followupRow(lead)).toHaveCount(0);
@@ -392,6 +412,7 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   const artifacts='.local/weekly-collaboration-browser';
   await mkdir(artifacts,{recursive:true});
   await leadPanel.screenshot({path:artifacts+'/weekly-supplement-desktop.png'});
+  await lead.locator('[data-weekly-coordination]').screenshot({path:artifacts+'/weekly-coordination-desktop.png'});
   lead.once('dialog',async dialog=>{
     assert.match(dialog.message(),/同步至本月计划/);
     await dialog.accept();
@@ -404,6 +425,9 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   const supplement=report.biz.items.find(item=>item.source_id===newId);
   assert.deepEqual(report.biz.followups.map(row=>[row.source_key,row.owner_name,row.progress]),
     [[followupKey,'匿名设计协作者',feedback]]);
+  assert.deepEqual(report.coord_items.map(row=>[row.source_id,row.who_id,row.what,row.by]),[
+    [savedRow.source_id,receiver,outgoing,fixture.week]
+  ]);
   assert.equal(supplement.prog,'组员已完成复核');
   assert.equal(report.biz.monthly_plan_id,planId);
   const after=await lead.request.post(fixture.base+'/api/monthly-plans/list',{headers,data:planRequest});

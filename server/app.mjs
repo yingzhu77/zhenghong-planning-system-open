@@ -113,8 +113,8 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
     res.json({data:await listReportScopes(pool,req.user,req.body || {}),error:null});
   }));
   for (const [route,action] of Object.entries({open:'open',mode:'mode','next-week':'nextWeek',items:'items','month-items':'monthItems',
-    'confirm-month':'confirmMonth','withdraw-month':'withdrawMonth',change:'change',followups:'followups',publish:'publish',withdraw:'withdraw',settings:'settings',catalog:'catalog'})) {
-    app.post('/api/weekly-collaboration/' + route, auth.requireUser, express.json({ limit: ['change','followups'].includes(route) ? '256kb' : '16kb' }), asyncRoute(async (req, res) => {
+    'confirm-month':'confirmMonth','withdraw-month':'withdrawMonth',change:'change',followups:'followups',coordination:'coordination',publish:'publish',withdraw:'withdraw',settings:'settings',catalog:'catalog'})) {
+    app.post('/api/weekly-collaboration/' + route, auth.requireUser, express.json({ limit: ['change','followups','coordination'].includes(route) ? '256kb' : '16kb' }), asyncRoute(async (req, res) => {
       const data = await weeklyCollaboration[action](req.user, req.body ?? {});
       res.json({ data, error: null });
     }));

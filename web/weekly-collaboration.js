@@ -433,6 +433,7 @@
         this.config.onWithdrawn?.(next.withdrawn_revision, next.withdrawn_attachment_ids, previousReport);
       }
       this.config.onFollowupsState?.(next);
+      this.config.onCoordinationState?.(next);
       this.schedulePlanResize();
       this.paint();
     }
@@ -842,7 +843,9 @@
       try {
         const feedback=await this.config.flushFollowups?.();
         if (this.closed || feedback===false) return;
-        if (feedback?.revision>this.state.revision) {
+        const coordination=await this.config.flushCoordination?.();
+        if (this.closed || coordination===false) return;
+        if (Math.max(feedback?.revision ?? 0,coordination?.revision ?? 0)>this.state.revision) {
           const number=++this.requestNumber;
           this.accept(await this.request('open',{},this.controller.signal),number);
         }

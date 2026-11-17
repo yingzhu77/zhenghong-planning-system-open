@@ -216,7 +216,7 @@
     if(roots[id]) {owner=S.formRich || (S.formRich={});key=roots[id];}
     else if((m=/^nx-(\d+)$/.exec(id))) {owner=S.formRich || (S.formRich={});key='next_'+m[1];}
     else {
-      var specs=[['my_nm_',S.myRows,'name'],['my_rs_',S.myRows,'reason'],['nd_rs_',S.nodeRows,'reason'],['co_what_',S.coordRows,'what'],['sp_act_',S.speedRows,'act'],['ef_act_',S.effectRows,'act'],['bn_pg_',S.bizNodes,'prog'],['bi_mod_',S.bizItems,'mod'],['bi_nm_',S.bizItems,'name'],['bi_pg_',S.bizItems,'prog'],['bi_blocker_',S.bizItems,'blocker'],['bh_what_',S.bizHand,'what']];
+      var specs=[['my_nm_',S.myRows,'name'],['my_rs_',S.myRows,'reason'],['nd_rs_',S.nodeRows,'reason'],['co_what_',S.coordRows,'what'],['wc_what_',S.inlineCoordination?.rows,'what'],['sp_act_',S.speedRows,'act'],['ef_act_',S.effectRows,'act'],['bn_pg_',S.bizNodes,'prog'],['bi_mod_',S.bizItems,'mod'],['bi_nm_',S.bizItems,'name'],['bi_pg_',S.bizItems,'prog'],['bi_blocker_',S.bizItems,'blocker'],['bh_what_',S.bizHand,'what']];
       specs.some(function(spec){if(id.indexOf(spec[0])===0){owner=(spec[1] || [])[Number(id.slice(spec[0].length))];key=spec[2];return true;}});
       if(!owner && (m=/^(ceonote_|pzonote_)(.+)$/.exec(id))) {
         var kind=m[1]==='ceonote_'?'ceo':'pzo', draftKey=kind+':'+m[2];
@@ -228,7 +228,16 @@
       if(!owner && (m=/^ml_note_(.+)$/.exec(id))) {owner=S.milestones.filter(function(row){return String(row.id)===m[1];})[0];key='note';}
     }
     if(!owner || !key) return null;
-    return {get:function(){return owner._rich && owner._rich[key] || (window.ZHRichText && window.ZHRichText.doc(owner,key));},set:function(doc){owner._rich=owner._rich || {};owner._rich[key]=doc;if(/^(ceonote_|pzonote_)/.test(id) && window.ZHRichText)owner.note=window.ZHRichText.text(doc);}};
+    return {get:function(){return owner._rich && owner._rich[key] || (window.ZHRichText && window.ZHRichText.doc(owner,key));},set:function(doc){
+      owner._rich=owner._rich || {};
+      if(id.startsWith('wc_what_')){
+        var before=owner._rich[key];
+        var hasFormat=function(value){return value?.ops?.some(function(op){return !!op.attributes;});};
+        if((hasFormat(before) || hasFormat(doc)) && JSON.stringify(before)!==JSON.stringify(doc))S.inlineCoordination.dirty=true;
+      }
+      owner._rich[key]=doc;
+      if(/^(ceonote_|pzonote_)/.test(id) && window.ZHRichText)owner.note=window.ZHRichText.text(doc);
+    }};
   }
   function richInputRow(row,id,key) {
     var link=richBinding(id), doc=link && link.get();
@@ -473,6 +482,9 @@
       };
       if(S.withdrawnAttachmentKey)payload.withdrawnAttachmentKey=S.withdrawnAttachmentKey;
       if(S.inlineFollowups?.scope===followupDraftScope() && S.followupSync?.scope===S.inlineFollowups.scope)payload.followupSync=S.followupSync;
+      var coordination=activeWeeklyCoordination();
+      if(coordination?.dirty)payload.weeklyCoordination={scope:coordination.scope,rows:coordination.rows,revision:coordination.baseRevision};
+      else if(!coordination && prev.weeklyCoordination?.scope===followupDraftScope())payload.weeklyCoordination=prev.weeklyCoordination;
       if(window.MonthlyPlans && window.MonthlyPlans.planReferences){var monthlyReferences=window.MonthlyPlans.planReferences();if(Object.keys(monthlyReferences).length)payload.monthlyPlanReferences=monthlyReferences;}
       /* 内容没变就不写：否则每次进个人中心都会刷新草稿时间戳 */
       var rawPrev = null;
@@ -1516,7 +1528,7 @@
     S.reportingProfessionProject='';S.projectReportingGrants=[];
     S.memberDirectoryUI={search:'',selection:null,open:new Set()};
     S.personnelAdminProjects=[];
-    S.followupRows = []; S.followupSync=null; S.inlineFollowups=null; S.monthlyUnmatchedItems=[];S.meetingDraft = null; S.mlineDraft = {}; S.reporterArchiveTab = 'knowledge'; S.submittingReport = null;
+    S.followupRows = []; S.followupSync=null; S.inlineFollowups=null; S.inlineCoordination=null; S.monthlyUnmatchedItems=[];S.meetingDraft = null; S.mlineDraft = {}; S.reporterArchiveTab = 'knowledge'; S.submittingReport = null;
     S.attachmentIds = []; S.completionQuery = null; S.completionMeta = {}; S.completionQueueIds = [];
   }
   function pageDataKeys() {
@@ -1908,6 +1920,7 @@
     if(window.CoordinationWorkbench)window.CoordinationWorkbench.capture();
     if (!canCapturePMDraft()) return;
     if(window.ZHRichEditor) window.ZHRichEditor.flush();
+    captureWeeklyCoordination();
     if (window.ReporterTasks) window.ReporterTasks.capture();
     if (window.ReportAttachments) window.ReportAttachments.capture();
     S.nodeRows.forEach(function (r, i) {
@@ -2016,6 +2029,181 @@
   function followupDraftScope() {
     var week=window.PlanningWindows?.periodStart(S.pmPeriod) || S.pmPeriod;
     return JSON.stringify([S.uid,S.pmProject,S.pmLine,S.pmScopeId,week]);
+  }
+  function activeWeeklyCoordination() {
+    var room=S.inlineCoordination;
+    return inlineCollaborationMode()==='member' && room?.scope===followupDraftScope()?room:null;
+  }
+  function coordinationRows(rows) {
+    var result=(rows || []).map(function(row){
+      var copy=richCopy(row,{...row},{what:'what'});
+      delete copy.rich_text;
+      return copy;
+    });
+    while(result.length<2)result.push({});
+    return result;
+  }
+  function captureWeeklyCoordination() {
+    var room=activeWeeklyCoordination();
+    if(room?.status!=='ready')return;
+    room.rows.forEach(function(row,i){
+      var who=document.getElementById('wc_who_'+i),what=document.getElementById('wc_what_'+i),by=document.getElementById('wc_by_'+i);
+      var project=document.getElementById('wc_project_'+i);
+      if(!who || !what || !by)return;
+      var projectId=project?.value || row.project_id || (!project?S.pmProject:'');
+      if(project && !project.value)projectId='';
+      var id=who.value;
+      if(project && projectId!==row.project_id)id='';
+      if((row.who_id || '')!==id || (row.what || '')!==what.value || (row.by || '')!==by.value
+        || project && projectId!==(row.project_id || ''))room.dirty=true;
+      row.project_id=projectId;
+      row.who_id=id;
+      row.who=id?(weeklyCoordinationPeople(room,projectId).find(function(p){return p.user_id===id;})?.name || row.who || ''):'';
+      row.what=what.value;
+      row.by=by.value;
+      if(!row.source_id && (id || row.what || row.by))row.source_id=reporterSourceId();
+    });
+  }
+  function weeklyCoordinationPeople(room,pid) {
+    return pid===S.pmProject?S.projectPeople || []:room.people[pid] || [];
+  }
+  function loadWeeklyCoordinationPeople(room) {
+    pmScopeProjectIds().filter(function(pid){return pid!==S.pmProject;}).forEach(function(pid){
+      if(Object.prototype.hasOwnProperty.call(room.people,pid))return;
+      room.people[pid]=null;
+      reporterRequest('/api/project-people/list',{project_id:pid}).then(function(result){
+        if(activeWeeklyCoordination()!==room)return;
+        snapDraft(true);
+        if(result.error)room.peopleLoadError=true;
+        room.people[pid]=Array.isArray(result.data)?result.data:[];
+        renderShell(true);
+      });
+    });
+  }
+  function observeWeeklyCoordination(contextKey,next) {
+    if(S.view!=='form' || contextKey!==inlineCollaborationKey())return;
+    var previous=activeWeeklyCoordination(),scope=followupDraftScope();
+    var status=next?.can_edit?'ready':next?.report?'published':'unavailable';
+    var revision=next?.coordination_revision ?? 0;
+    var rows=Array.isArray(next?.coordination_items)?next.coordination_items:[];
+    var changed=!previous || previous.status!==status || previous.remoteRevision!==revision || previous.report?.id!==next?.report?.id;
+    var room=previous || {scope:scope,people:Object.create(null)};
+    room.roomRevision=Math.max(room.roomRevision || 0,next?.revision || 0);
+    if(!changed || previous && previous.remoteRevision>revision && status==='ready')return;
+    if(previous?.status==='ready')snapDraft(true);
+    room.status=status;
+    room.submitter=next?.submitter_id;
+    room.remoteRevision=revision;
+    room.remoteRows=rows;
+    room.report=next?.report || null;
+    if(!previous){
+      var local=S.draft?.weeklyCoordination;
+      if(local?.scope===scope && Array.isArray(local.rows) && Number.isSafeInteger(local.revision)){
+        room.rows=coordinationRows(local.rows);
+        room.baseRevision=local.revision;
+        room.dirty=true;
+      }
+    }
+    if(!room.dirty){
+      room.rows=coordinationRows(rows);
+      room.baseRevision=revision;
+    }
+    S.inlineCoordination=room;
+    if(status==='ready')loadWeeklyCoordinationPeople(room);
+    renderShell(true);
+  }
+  function renderWeeklyCoordination() {
+    var room=activeWeeklyCoordination();
+    var ready=room?.status==='ready',published=room?.status==='published';
+    var html='<section class="card plan-form-section" data-weekly-coordination data-personal-rich-editor><div class="cardhd plan-section-head"><h3>三、需要协调事项</h3></div>';
+    if(published){
+      var report=room.report;
+      if(window.ZHRichText)window.ZHRichText.attach(report);
+      var items=Array.isArray(report.coord_items)?report.coord_items:[];
+      var rows=items.map(function(row){
+        var phase=pmScopeProjectIds().length>1 && row.project_id?'<div class="muted">'+esc(projName(row.project_id))+'</div>':'';
+        return '<tr><td data-label="协调对象">'+esc(row.who || '—')+phase+'</td><td data-label="协调事项">'+richItem(row,'what')+'</td>'
+          +'<td data-label="协调最晚时间">'+esc(sd(row.by))+'</td></tr>';
+      }).join('');
+      return html+(rows?'<div class="tablewrap"><table class="plan-form-table"><thead><tr><th>协调对象</th><th>协调事项</th><th>协调最晚时间</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+        :'<p class="muted">本周周报未提交协调事项。</p>')+'</section>';
+    }
+    if(!ready)return html+'<p class="muted" role="status">'+(room?'本周暂不可编辑协调事项。':'正在读取本周协调事项…')+'</p></section>';
+    html+='<p class="muted">保存后同步给协同成员。负责人提交周报后，协调对象可在待处理事项中查看。</p>';
+    if(room.peopleLoadError)html+='<p class="notice warn" role="status">部分分期的协调对象暂时无法读取，请重新加载页面后重试。</p>';
+    var projects=pmScopeProjectIds(),scoped=projects.length>1,disabled=room.saving?' disabled':'';
+    if(room.dirty && room.baseRevision!==room.remoteRevision)html+='<p class="notice warn" role="status">其他成员已更新协调草稿，本机修改已保留。'
+      +'<button type="button" class="btn ghost sm" onclick="App.useLatestWeeklyCoordination()">采用服务器草稿</button></p>';
+    html+=room.rows.map(function(row,i){
+      var pid=row.project_id || (!scoped?S.pmProject:''),people=weeklyCoordinationPeople(room,pid).filter(function(p){
+        return p.user_id!==room.submitter && (!scoped || projects.every(function(id){
+          return id===pid || weeklyCoordinationPeople(room,id).some(function(person){return person.user_id===p.user_id;});
+        }));
+      });
+      var options='<option value="">'+(scoped && !pid?'请先选择分期':'选择协调对象')+'</option>';
+      if(row.who_id && !people.some(function(p){return p.user_id===row.who_id;}))
+        options+='<option value="'+esc(row.who_id)+'" selected>'+esc((row.who || row.who_id)+'（待核对）')+'</option>';
+      options+=people.map(function(p){
+        var detail=p.role==='viewer'?'只读协调对象':p.discipline || p.biz_line || ROLE_LABEL[p.role] || '';
+        return '<option value="'+esc(p.user_id)+'"'+(p.user_id===row.who_id?' selected':'')+'>'+esc(p.name+(detail?'（'+detail+'）':''))+'</option>';
+      }).join('');
+      var phases=scoped?'<select id="wc_project_'+i+'" aria-label="协调事项分期" onchange="App.weeklyCoordinationProject()"'+disabled+'>'
+        +'<option value="">请选择分期</option>'+projects.map(function(id){return '<option value="'+esc(id)+'"'+(id===pid?' selected':'')+'>'+esc(projName(id))+'</option>';}).join('')+'</select>':'';
+      return '<div class="nextitem plan-coord-row" data-row>'+phases+'<select id="wc_who_'+i+'" aria-label="协调对象" onchange="App.captureWeeklyCoordination()"'+disabled+'>'+options+'</select>'
+        +'<textarea id="wc_what_'+i+'" rows="1" data-grow data-rich aria-label="协调内容" oninput="App.grow(this);App.captureWeeklyCoordination()" placeholder="需要对方做什么"'+disabled+'>'+esc(row.what || '')+'</textarea>'
+        +'<input type="date" id="wc_by_'+i+'" aria-label="协调最晚时间" value="'+esc(row.by || '')+'" onchange="App.captureWeeklyCoordination()"'+disabled+'>'
+        +'<button type="button" class="rowdel" title="移除这一行" aria-label="移除这一行" onclick="App.removeWeeklyCoordination('+i+')"'+disabled+'>✕</button></div>';
+    }).join('');
+    return html+'<div class="plan-row-actions reporter-row-actions"><button type="button" class="btn ghost sm" onclick="App.addWeeklyCoordination()"'+disabled+'>＋ 增加一行</button>'
+      +'<button type="button" class="btn ghost sm" onclick="App.saveWeeklyCoordination()"'+disabled+'>'+(room.saving?'正在保存…':'保存协调事项')+'</button></div></section>';
+  }
+  function saveWeeklyCoordination(explicit) {
+    var room=activeWeeklyCoordination(),scope=weeklyCollaborationScope();
+    if(room?.status!=='ready' || !scope)return Promise.resolve(false);
+    if(room.saving)return room.saving;
+    snapDraft(true);
+    if(!room.dirty)return Promise.resolve({revision:room.roomRevision});
+    saveDraft(true);
+    if(room.baseRevision!==room.remoteRevision){
+      toast('其他成员已保存更新，请核对协调草稿后再提交。','warn');return Promise.resolve(false);
+    }
+    var entries=room.rows.filter(function(row){return row.who_id || (row.what || '').trim() || row.by;});
+    if(entries.some(function(row){return !row.project_id || !row.who_id || !(row.what || '').trim();})){
+      toast('请选择实际项目和协调对象，并填写需要对方做什么。','warn');return Promise.resolve(false);
+    }
+    entries=entries.map(function(row){
+      var entry=richCollect(richCopy(row,{source_id:row.source_id || reporterSourceId(),project_id:row.project_id,
+        who_id:row.who_id,what:row.what.trim(),by:row.by || ''},{what:'what'}));
+      if(!entry.rich_text?.fields?.what?.ops?.some(function(op){return !!op.attributes;}))delete entry.rich_text;
+      return entry;
+    });
+    var week=window.PlanningWindows.periodStart(S.pmPeriod),key=inlineCollaborationKey();
+    function active(){return activeWeeklyCoordination()===room && key===inlineCollaborationKey();}
+    room.saving=(async function(){
+      try{
+        var result=await reporterRequest('/api/weekly-collaboration/coordination',{
+          ...scope,week:week,coordination_revision:room.baseRevision,entries:entries});
+        if(!active())return false;
+        if(result.error || !Array.isArray(result.data?.rows)){
+          toast(result.error?.message || '协调事项保存失败，已保留本机内容。','err');return false;
+        }
+        var data=result.data;
+        room.roomRevision=Math.max(room.roomRevision,data.revision);
+        if(data.coordination_revision>=room.remoteRevision){
+          room.remoteRows=data.rows;room.remoteRevision=data.coordination_revision;
+        }
+        room.baseRevision=data.coordination_revision;room.dirty=false;room.rows=coordinationRows(room.remoteRows);
+        room.baseRevision=room.remoteRevision;
+        saveDraft(true);
+        if(explicit)toast('本周协调事项草稿已保存');
+        return data;
+      } finally {
+        room.saving=null;
+        if(active())renderShell(true);
+      }
+    })();
+    renderShell(true);
+    return room.saving;
   }
   function focusFollowup(key) {
     var row=Array.from(document.querySelectorAll('[data-followup-key]')).find(function(element){return element.getAttribute('data-followup-key')===String(key);});
@@ -2130,6 +2318,8 @@
       week:week,
       attachmentIds:function(){return window.ReportAttachments ? window.ReportAttachments.ids() : [];},
       attachmentBusy:attachmentBusy,
+      onCoordinationState:function(next){observeWeeklyCoordination(key,next);},
+      flushCoordination:function(){return saveWeeklyCoordination(false);},
       onFollowupsState:function(next){observeWeeklyFollowups(key,next);},
       flushFollowups:function(){return saveWeeklyFollowups(false);},
       onWithdrawn:function(revision,attachmentIds,report){
@@ -2334,9 +2524,10 @@
       +planFormContext(pid,cur,moduleHtml,commercial)
       +(collaboration==='member'?corePlanHtml
         +'<div data-weekly-collaboration data-inline-key="'+esc(inlineCollaborationKey())+'"></div>'
-        +(window.ReportAttachments?window.ReportAttachments.formHtml('三'):'')
+        +renderWeeklyCoordination()
         +(window.ReporterTasks?window.ReporterTasks.formHtml(S.inlineFollowups?.scope===followupDraftScope()
           ?{...S.inlineFollowups,conflict:S.followupSync?.conflict}:{status:'loading'}):'')
+        +(window.ReportAttachments?window.ReportAttachments.formHtml():'')
         :'<p class="notice" role="status">'+(collaboration==='futureUnavailable'?'该项目专业尚未开放这周的协同填报，请切换项目、专业或报告周期。'
           :collaboration==='excluded'?'本周由管理员指定的协同人员填报。':'本周填报权限读取失败，请刷新重试。')+'</p>')
       +'</div></div>';
@@ -4715,27 +4906,42 @@
 
   /* ================= 外壳 ================= */
 
-  /* 报告周期下拉：近 12 周 + 本项目已填报过的历史周期。
-     原为自由文本输入，一旦写错格式（如漏掉括号）weekNo() 取不到值，
-     该期数据就会脱离主流程，故改为下拉选择。 */
-  function periodList() {
-    var set = {};
+  /* 报告周期按星期一归并。显示周次，选择值仍沿用现有报告的周期文本。 */
+  function periodList(early) {
+    var choices=new Map();
+    function add(period, reference, priority) {
+      if(!period)return;
+      var monday=window.PlanningWindows?.periodStart(period,reference) || '';
+      var key=monday || 'raw:'+period;
+      var choice=choices.get(key);
+      if(choice && choice.priority>=priority)return;
+      choices.set(key,{period:period,monday:monday,priority:priority});
+    }
     for (var i = 0; i < 12; i++) {
       var d = calendarToday(); d.setDate(d.getDate() - i * 7);
-      set['第' + isoWeek(d) + '周（' + weekRange(d) + '）'] = true;
+      add('第' + isoWeek(d) + '周（' + weekRange(d) + '）',d,1);
     }
-    pmHistoryReports().forEach(function (r) { if (r.period) set[r.period] = true; });
-    var list = Object.keys(set).sort(function (a, b) { return (weekNo(b) || 0) - (weekNo(a) || 0); });
-    if (S.pmPeriod && list.indexOf(S.pmPeriod) < 0) list.unshift(S.pmPeriod);
-    return list;
+    pmHistoryReports().forEach(function (r) {
+      var own=r.author_id===S.uid && r.project_id===S.pmProject && (r.line || LINE_ALL)===S.pmLine
+        && (r.report_scope_id || null)===(S.pmScopeId || null);
+      add(r.period,r.scope_week || r.submitted_at || r.created_at,own?2:0);
+    });
+    add(early,null,1);
+    var selectedReport=S.pmReport?.period===S.pmPeriod?S.pmReport:null;
+    add(S.pmPeriod,selectedReport?.scope_week || selectedReport?.submitted_at || selectedReport?.created_at,3);
+    return Array.from(choices.values()).sort(function (a,b) {
+      return (b.monday || '').localeCompare(a.monday || '') || (weekNo(b.period) || 0)-(weekNo(a.period) || 0);
+    });
   }
   function periodOptionsHtml() {
-    var next=S.nextCollaboration?.week,periods=periodList();
+    var next=S.nextCollaboration?.week;
     var date=S.view==='form' && next && futureReportWeek(next) && earlyCollaborationRooms(next).length ? new Date(next+'T12:00:00') : null;
     var early=date?'第'+isoWeek(date)+'周（'+weekRange(date)+'）':'';
-    if(early && periods.indexOf(early)<0)periods.unshift(early);
-    return periods.map(function (p) {
-      return '<option value="' + esc(p) + '"' + (S.pmPeriod === p ? ' selected' : '') + '>' + esc(p) + (p===early?' · 已开放协同':'') + '</option>';
+    return periodList(early).map(function (choice) {
+      var start=choice.monday?new Date(choice.monday+'T12:00:00'):null;
+      var label=start?'第'+isoWeek(start)+'周（'+weekRange(start)+'）':choice.period;
+      return '<option value="' + esc(choice.period) + '"' + (choice.priority===3?' selected':'') + '>' + esc(label)
+        + (early && (choice.monday===next || choice.period===early)?' · 已开放协同':'') + '</option>';
     }).join('');
   }
 
@@ -5560,6 +5766,38 @@
     },
 
     addCoord: function () { snapDraft(); S.coordRows.push({}); renderShell(true); saveDraft(true); },
+
+    captureWeeklyCoordination:captureWeeklyCoordination,
+    weeklyCoordinationProject:function(){
+      snapDraft(true);renderShell(true);saveDraft(true);
+    },
+    addWeeklyCoordination:function(){
+      var room=activeWeeklyCoordination();
+      if(room?.status!=='ready' || room.saving)return;
+      if(room.rows.length>=500)return toast('本周协调事项最多可添加 500 行。','warn');
+      snapDraft(true);room.rows.push({});renderShell(true);
+      document.getElementById('wc_project_'+(room.rows.length-1))?.focus();
+      if(!document.getElementById('wc_project_'+(room.rows.length-1)))document.getElementById('wc_who_'+(room.rows.length-1))?.focus();
+    },
+    removeWeeklyCoordination:function(index){
+      var room=activeWeeklyCoordination();
+      if(room?.status!=='ready' || room.saving)return;
+      snapDraft(true);
+      var row=room.rows[index];
+      if(!row)return;
+      if((row.who_id || row.what || row.by) && !window.confirm('确认移除这条协调草稿？'))return;
+      if(row.who_id || row.what || row.by)room.dirty=true;
+      room.rows.splice(index,1);room.rows=coordinationRows(room.rows);
+      renderShell(true);saveDraft(true);
+    },
+    saveWeeklyCoordination:function(){return saveWeeklyCoordination(true);},
+    useLatestWeeklyCoordination:function(){
+      var room=activeWeeklyCoordination();
+      if(room?.status!=='ready' || room.saving || !window.confirm('采用服务器草稿会放弃当前窗口未保存的协调修改，继续吗？'))return;
+      snapDraft(true);
+      room.rows=coordinationRows(room.remoteRows);room.baseRevision=room.remoteRevision;room.dirty=false;
+      renderShell(true);saveDraft(true);
+    },
 
     delCoord: function (i) {
       snapDraft();

@@ -751,6 +751,36 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     console.log('PM 商业 render OK');
   }
 
+  /* 周次标签和已提交的 ISO 周期指向同一周，历史选项仍能读回原报告。 */
+  {
+    const original = DB.reports;
+    const monday = new Date(SHANGHAI_TODAY);
+    monday.setDate(monday.getDate() + 1 - (monday.getDay() || 7));
+    const priorMonday = new Date(monday);
+    priorMonday.setDate(priorMonday.getDate() - 7);
+    const dateText = date => date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate());
+    const weekLabel = date => '第' + isoWeek(date) + '周（' + weekRange(date) + '）';
+    const other = original.find(row => row.id === 'r3b');
+    const own = original.find(row => row.id === 'r3a');
+    DB.reports = original.concat(
+      { ...other, id: 'r3b-iso', period: dateText(monday) },
+      { ...own, id: 'r3a-iso-prior', period: dateText(priorMonday),
+        biz: { ...own.biz, items: [{ mod: '工程', name: 'ISO 历史报告事项', due: dateText(priorMonday) }] } }
+    );
+    try {
+      const { App, root } = await run('pm-com');
+      const picker = html => html.match(/<select id="pmPeriod"[^>]*>(.*?)<\/select>/s)?.[1] || '';
+      const options = picker(root.innerHTML);
+      ok(options.split('>' + PERIOD + '</option>').length === 2 && !options.includes('value="' + dateText(monday) + '"'), '周期下拉应归并同周的 ISO 与周次标签');
+      ok(options.includes('value="' + dateText(priorMonday) + '">' + weekLabel(priorMonday)), '历史周次应保留本人报告的原周期值');
+      await App.period(dateText(priorMonday));
+      ok(picker(root.innerHTML).includes('value="' + dateText(priorMonday) + '" selected'), '切换历史周次后应保留原周期选中状态');
+      ok(has(main(root.innerHTML), 'ISO 历史报告事项'), '归并后仍应按原周期值读回本人历史报告');
+    } finally {
+      DB.reports = original;
+    }
+  }
+
   /* 仅负责商业的项目总只显示商业总览，详情不新增填报、主数据或总裁写入能力。 */
   {
     const originalNotes = DB.leader_notes;
