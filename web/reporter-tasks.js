@@ -333,9 +333,6 @@
     });});
     return {baseline:nextBaseline,conflicts:Array.from(conflicts)};
   }
-  function saveCollaborationFeedback() {
-    if(typeof cfg.saveCollaborationFeedback==='function')return cfg.saveCollaborationFeedback();
-  }
   function refreshCollaborationFeedback() {
     if(typeof cfg.refreshCollaborationFeedback==='function')return cfg.refreshCollaborationFeedback();
   }
@@ -402,9 +399,7 @@
     return '<section class="card reporter-followups'+(collaboration?' plan-form-section" data-personal-rich-editor':'"')+'><div class="cardhd'
       +(collaboration?' plan-section-head':'')+'"><h3>四、待处理事项清单</h3>'
       + (editable || published?'<div class="reporter-row-actions"><button type="button" class="btn" onclick="ReporterTasks.'+(collaboration?'refreshCollaborationFeedback':'refreshSources')+'()"'
-        + (refreshing || collaboration?.saving || collaboration?.loading ? ' disabled' : '') + '>' + (refreshing || collaboration?.loading ? '更新中…' : '更新待办事项') + '</button>'
-        + (collaboration && editable?'<button type="button" id="collaboration-feedback-save" class="btn primary" onclick="ReporterTasks.saveCollaborationFeedback()"'
-          + (!visible.length || collaboration.saving || collaboration.loading || collaboration.error ? ' disabled' : '') + '>保存本期反馈</button>':'')+'</div>':'')+'</div>'
+        + (refreshing || collaboration?.saving || collaboration?.loading ? ' disabled' : '') + '>' + (refreshing || collaboration?.loading ? '更新中…' : '更新待办事项') + '</button></div>':'')+'</div>'
       + (collaboration?'<p class="muted" role="status">'+esc(published?(collaboration.canWithdraw?'未纳入周报的待办，可在撤回后补填。':'已提交的反馈和仍待补填的事项。需补填时请联系本周负责人。')
         :editable?(collaboration.isLead?'可代组员填写，系统记录实际填写人。填写齐全后统一提交。':'填写本人的状态和反馈，再由负责人统一提交周报。')
         :'协同状态读取后可填写待办反馈。')+'</p>':'')
@@ -642,6 +637,6 @@
   }
   global.ReporterTasks = { configure: configure, pendingHtml:pendingHtml, displayTitle:displayTitle, feedbackFor:currentFeedback, openFeedback:openFeedback, workbenchHtml: workbenchHtml, requirementsHtml: requirementsHtml, renderAdmin: renderAdmin, filterProject: filterProject, filterKind: filterKind, setKind: setKind, loadPeople: loadPeople, retryPeople: retryPeople, formHtml: formHtml, prepare: prepare, capture: capture,
     rows: rows, prepareCoordination: prepareCoordination, syncMeetingRows:syncMeetingRows, syncSavedTask:syncSavedTask, resolveMeeting:resolveMeeting, sourceItems:function(){return sources().map(copy);}, snapshotHtml: snapshotHtml, binding: binding, edit: edit, save: save, cancel: cancel, refreshSources: refreshSources, validationError: validationError,
-    collaborationEntries:collaborationEntries,mergeCollaborationRows:mergeCollaborationRows,saveCollaborationFeedback:saveCollaborationFeedback,
+    collaborationEntries:collaborationEntries,mergeCollaborationRows:mergeCollaborationRows,
     refreshCollaborationFeedback:refreshCollaborationFeedback };
 })(window);

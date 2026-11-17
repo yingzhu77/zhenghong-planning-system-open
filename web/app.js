@@ -898,7 +898,8 @@
     if (window.ZHRichEditor) window.ZHRichEditor.mount(rootEl,richBinding);
     if (window.WeeklyCollaboration && rootEl.querySelector) {
       var collaboration = rootEl.querySelector('[data-weekly-collaboration]');
-      window.WeeklyCollaboration.mount(collaboration, collaboration && weeklyCollaborationContext());
+      window.WeeklyCollaboration.mount(collaboration, collaboration && weeklyCollaborationContext(),
+        rootEl.querySelector('[data-weekly-collaboration-footer]'));
     }
     if (window.PlanningAI) window.PlanningAI.refresh();
     if (window.ReportReference) window.ReportReference.refresh();
@@ -1350,7 +1351,6 @@
       reloadSources:async function(){if(!await loadData(['leaderNotes','reports','reporterTasks','coordinationTasks','completions'],true))throw new Error('同步来源读取失败，请重试');},
       loadPeople:function(pid){return reporterRequest('/api/project-people/list',{project_id:pid});},
       saveDraft:saveDraft,flush:snapDraft,openFeedback:function(key){return App.openFollowup(key);},
-      saveCollaborationFeedback:function(){return saveWeeklyFollowups(true);},
       refreshCollaborationFeedback:refreshWeeklyFollowups});
   }
   function attachmentBusy() {
@@ -2307,13 +2307,9 @@
       return concurrent && !explicit ? saveWeeklyFollowups(false):concurrent;
     }
     snapDraft(true);
-    if(!explicit){
+    function savedFeedback(){
       var missing=(S.followupRows || []).find(function(row){return !row.submitted && !String(row.progress || '').trim();});
-      if(missing){
-        toast('待处理事项需填写本期反馈。暂无进展时可以填写原因。','warn');
-        focusFollowup(missing.source_key);
-        return false;
-      }
+      return {revision:room.roomRevision,missingKey:missing?.source_key};
     }
     var baseline=new Map();
     (S.followupSync?.baseline || []).forEach(function(row){
@@ -2330,14 +2326,11 @@
       });
     if(!changes.length){
       if(explicit)toast('本期反馈已是最新。');
-      return {revision:room.roomRevision};
+      return savedFeedback();
     }
     if(changes.some(function(change){return S.followupSync?.conflicts?.includes(change.person.owner_id);})){
-      if(!explicit){toast('其他窗口已更新反馈，请核对并保存本机反馈。','warn');return false;}
       if(!window.confirm('其他窗口已更新反馈。是否使用本机所填的内容？'))return false;
     }
-    var button=document.getElementById('collaboration-feedback-save');
-    if(button)button.disabled=true;
     var week=window.PlanningWindows.periodStart(S.pmPeriod);
     room.saving=(async function(){
       try{
@@ -2360,7 +2353,7 @@
         }
         if(!await loadWeeklyFollowups(room))return false;
         if(explicit)toast('本期反馈已保存');
-        return {revision:room.roomRevision};
+        return savedFeedback();
       } finally{
         room.saving=null;
         if(activeWeeklyFollowupRoom(room))renderShell(true);
@@ -2405,6 +2398,16 @@
       flushCoordination:function(){return saveWeeklyCoordination(false);},
       onFollowupsState:function(next){observeWeeklyFollowups(key,next);},
       flushFollowups:function(){return saveWeeklyFollowups(false);},
+      saveFollowups:function(){return saveWeeklyFollowups(true);},
+      canSaveFollowups:function(){
+        var room=S.inlineFollowups;
+        return Boolean(room?.scope===followupDraftScope() && room.status==='ready' && !room.loading && !room.saving
+          && !room.error && room.people?.some(function(person){return person.rows.length;}));
+      },
+      showMissingFollowup:function(sourceKey){
+        toast('待处理事项需填写本期反馈。暂无进展时可以填写原因。','warn');
+        focusFollowup(sourceKey);
+      },
       onWithdrawn:function(revision,attachmentIds,report){
         if(S.view!=='form' || key!==inlineCollaborationKey())return;
         var selectionKey=JSON.stringify([scope.project_id,scope.line,scope.report_scope_id,week,revision]);
@@ -2632,6 +2635,7 @@
         +(window.ReporterTasks?window.ReporterTasks.formHtml(S.inlineFollowups?.scope===followupDraftScope()
           ?{...S.inlineFollowups,conflict:Boolean(S.followupSync?.conflicts?.length)}:{status:'loading'}):'')
         +(window.ReportAttachments?window.ReportAttachments.formHtml():'')
+        +'<div data-weekly-collaboration-footer></div>'
         :'<p class="notice" role="status">'+(collaboration==='futureUnavailable'?'该项目专业尚未开放这周的协同填报，请切换项目、专业或报告周期。'
           :collaboration==='excluded'?'本周由管理员指定的协同人员填报。':'本周填报权限读取失败，请刷新重试。')+'</p>')
       +'</div></div>';

@@ -138,8 +138,8 @@
   justify-content: flex-end;
   margin-top: 12px;
 }
-.collaboration-entry .collaboration-footer {
-  z-index: 3;
+[data-weekly-collaboration-footer] .collaboration-footer {
+  position: static;
 }
 .collaboration-entry .monthly-plan-toolbar {
   margin-bottom: 8px;

@@ -370,7 +370,8 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   const feedback = '已核对图纸并向对方反馈';
   await followupRow(editor).locator('.ql-editor').fill(feedback);
   const feedbackSaved = editor.waitForResponse(response => response.url().endsWith('/api/weekly-collaboration/followups'));
-  await editor.getByRole('button', {name:'保存本期反馈', exact:true}).click();
+  const editorFooter=editor.locator('[data-weekly-collaboration-footer]');
+  await editorFooter.getByRole('button', {name:'保存本期反馈', exact:true}).click();
   const feedbackResponse = await feedbackSaved;
   assert.equal(feedbackResponse.status(),200,JSON.stringify((await feedbackResponse.json()).error));
   await editor.reload();
@@ -382,7 +383,7 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   const add=editorPanel.getByRole('button',{name:'＋ 新增本周事项',exact:true});
   await expect(add).toBeEnabled();
   await expect(leadPanel.getByRole('row').filter({hasText:original.name}).getByRole('button',{name:'修改事项',exact:true})).toHaveCount(0);
-  await expect(editorPanel.locator('[data-collaboration-publish]')).toBeHidden();
+  await expect(editorFooter.locator('[data-collaboration-publish]')).toBeHidden();
 
   await add.click();
   await expect(editorPanel.getByText('负责人提交周报后同步至本月计划。',{exact:false})).toBeVisible();
@@ -412,7 +413,11 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   await expect(editorPanel.getByRole('row').filter({hasText:'临时补充现场图纸复核及会签'})).toBeVisible({timeout:18000});
   await cell(editor,newId+':prog').fill('组员已完成复核');
   await expect(cell(lead,newId+':prog')).toHaveText('组员已完成复核',{timeout:18000});
-  const publish=leadPanel.getByRole('button',{name:'提交专业周报',exact:true});
+  const leadFooter=lead.locator('[data-weekly-collaboration-footer]');
+  await expect(lead.locator('#report-attachments + [data-weekly-collaboration-footer]')).toHaveCount(1);
+  await expect(lead.getByRole('button',{name:'保存本期反馈',exact:true})).toHaveCount(0);
+  await expect(leadPanel.locator('[data-collaboration-publish]')).toHaveCount(0);
+  const publish=leadFooter.getByRole('button',{name:'保存并提交专业周报',exact:true});
   await expect(publish).toBeEnabled({timeout:18000});
   await publish.click();
   await expect(leadPanel).toContainText('填写 1 项当周进展');
@@ -427,6 +432,7 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   await leadPanel.screenshot({path:artifacts+'/weekly-supplement-desktop.png'});
   await lead.locator('[data-weekly-coordination]').screenshot({path:artifacts+'/weekly-coordination-desktop.png'});
   await lead.locator('.reporter-followups').screenshot({path:artifacts+'/weekly-followups-delegation-desktop.png'});
+  await leadFooter.screenshot({path:artifacts+'/weekly-report-footer-desktop.png'});
   lead.once('dialog',async dialog=>{
     assert.match(dialog.message(),/同步至本月计划/);
     await dialog.accept();
@@ -536,7 +542,7 @@ test('独立住宅保留同周旧综合报告，仍可选择本人专业协同�
   await expect(progress).not.toBeVisible();
   await workspace.getByRole('button',{name:/^本月 /}).click();
   await expect(progress).toHaveText('住宅工程匿名进展');
-  await expect(workspace.locator('[data-collaboration-publish]')).toBeEnabled();
+  await expect(housing.locator('[data-weekly-collaboration-footer] [data-collaboration-publish]')).toBeEnabled();
   await housing.evaluate(()=>window.scrollTo(0,0));
   await housing.screenshot({path:'.local/weekly-collaboration-browser/shared-month-desktop.png',fullPage:true});
   await housing.setViewportSize({width:390,height:844});
@@ -552,7 +558,7 @@ test('独立住宅保留同周旧综合报告，仍可选择本人专业协同�
   await workspace.getByRole('button',{name:'撤回确认并修改',exact:true}).click();
   await expect(workspace.getByRole('button',{name:'＋ 增加事项'})).toBeVisible();
   await expect(progress).toHaveText('住宅工程匿名进展');
-  await workspace.locator('[data-collaboration-publish]').click();
+  await housing.locator('[data-weekly-collaboration-footer] [data-collaboration-publish]').click();
   const overview=housing.locator('.professional-overview[data-report-id]');
   await expect(overview).toContainText('本期专业汇总');
   await expect(overview).toContainText('住宅工程匿名进展');
@@ -613,7 +619,7 @@ test('已配置的下周可提前从填报页进入并续编，未加入的项�
   const progress=cell(editor,sourceId+':prog');
   await expect(progress).toBeEditable();
   await expect(progress).toHaveText('上周已填写的进展');
-  await expect(workspace.getByRole('button',{name:'提交专业周报',exact:true})).toBeHidden();
+  await expect(editor.locator('[data-weekly-collaboration-footer] [data-collaboration-publish]')).toBeHidden();
   const saved=editor.waitForResponse(response=>response.url().endsWith('/api/weekly-collaboration/change'));
   await progress.fill('提前更新的匿名进展');
   assert.equal((await saved).status(),200);

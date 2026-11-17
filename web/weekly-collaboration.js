@@ -255,7 +255,8 @@
         + '<div data-collaboration-items hidden></div><p class="collaboration-attachments" data-collaboration-attachments hidden></p><footer class="collaboration-footer plan-form-actions" hidden>'
         + '<p data-collaboration-saved-info></p><button type="button" class="btn ghost" data-collaboration-result hidden>查看提交结果</button>'
         + '<button type="button" class="btn ghost" data-collaboration-withdraw hidden>撤回周报并修改</button>'
-        + '<button type="button" class="btn primary" data-collaboration-publish hidden>提交专业周报</button></footer></section>';
+        + '<button type="button" class="btn primary" data-collaboration-save-feedback hidden>保存本期反馈</button>'
+        + '<button type="button" class="btn primary" data-collaboration-publish hidden>保存并提交专业周报</button></footer></section>';
       const find = selector => this.root.querySelector(selector);
       this.status = find('[data-collaboration-status]');
       this.noticeElement = find('[data-collaboration-notice]');
@@ -300,8 +301,10 @@
         if(button)this.editItem(button.dataset.editItem);
       });
       this.footer = find('.collaboration-footer');
+      this.savedInfo = find('[data-collaboration-saved-info]');
       this.toolbar = find('.collaboration-toolbar');
       this.publishButton = find('[data-collaboration-publish]');
+      this.saveFeedbackButton = find('[data-collaboration-save-feedback]');
       this.resultButton = find('[data-collaboration-result]');
       this.withdrawReportButton = find('[data-collaboration-withdraw]');
       this.retryButton = find('[data-collaboration-retry]');
@@ -309,6 +312,13 @@
       this.retryButton.addEventListener('click', () => this.reconnect());
       this.copyButton.addEventListener('click', () => this.copyPending());
       this.publishButton.addEventListener('click', () => this.publish());
+      this.saveFeedbackButton.addEventListener('click', async () => {
+        if (this.saveFeedbackButton.disabled || this.savingFeedback) return;
+        this.savingFeedback = true;
+        this.paint();
+        try { await this.config.saveFollowups?.(); }
+        finally { this.savingFeedback = false; this.paint(); }
+      });
       this.resultButton.addEventListener('click', () => this.showResult());
       this.withdrawReportButton.addEventListener('click', () => this.withdrawReport());
       this.toolbar.addEventListener('pointerdown', event => { if (event.target.closest('button')) event.preventDefault(); });
@@ -321,7 +331,13 @@
 
     isComposing() { return Array.from(this.editors.values()).some(editor => editor.composing); }
 
-    canLeave() { return !this.publishing && !this.withdrawingReport && !this.savingItem && !this.confirmingMonth && !this.itemFormChanged() && !this.isComposing() && (!this.queue.length || this.persisted); }
+    attachFooter(slot) {
+      if (!slot) return;
+      if (this.footer.parentElement !== slot) slot.append(this.footer);
+      this.paint();
+    }
+
+    canLeave() { return !this.publishing && !this.withdrawingReport && !this.savingItem && !this.savingFeedback && !this.confirmingMonth && !this.itemFormChanged() && !this.isComposing() && (!this.queue.length || this.persisted); }
 
     canEdit() { return Boolean(this.state?.can_edit && this.state?.plan?.id === this.planId && !this.publishing && !this.withdrawingReport && !this.revoked); }
 
@@ -832,25 +848,29 @@
     }
 
     async publish() {
-      if (this.publishButton.disabled || this.closed || !this.state?.can_publish || this.queue.length || this.sending || this.savingItem
+      if (this.publishButton.disabled || this.publishing || this.closed || !this.state?.can_publish || this.queue.length || this.sending || this.savingItem
         || this.isComposing() || this.config.attachmentBusy?.()) return;
-      const missing = (this.state.plan?.items || []).filter(item => {
-        const editor = this.editors.get(item.source_id + ':prog');
-        return !String(editor?.text.toString() ?? item.prog ?? '').trim();
-      });
-      if (missing.length) {
-        this.notice = '请在第二部分填写 ' + missing.length + ' 项当周进展。暂无进展时可以填写原因。';
-        this.paint();
-        this.editors.get(missing[0].source_id + ':prog')?.quill.focus();
-        return;
-      }
       this.publishing = true;
       this.error = '';
       this.notice = '';
       this.paint();
+      let missingEditor, submitFailed = false;
       try {
         const feedback=await this.config.flushFollowups?.();
         if (this.closed || feedback===false) return;
+        const missing = (this.state.plan?.items || []).filter(item => {
+          const editor = this.editors.get(item.source_id + ':prog');
+          return !String(editor?.text.toString() ?? item.prog ?? '').trim();
+        });
+        if (missing.length) {
+          this.notice = '请在第二部分填写 ' + missing.length + ' 项当周进展。暂无进展时可以填写原因。';
+          missingEditor = this.editors.get(missing[0].source_id + ':prog');
+          return;
+        }
+        if (feedback?.missingKey) {
+          this.config.showMissingFollowup?.(feedback.missingKey);
+          return;
+        }
         const coordination=await this.config.flushCoordination?.();
         if (this.closed || coordination===false) return;
         if (Math.max(feedback?.revision ?? 0,coordination?.revision ?? 0)>this.state.revision) {
@@ -885,10 +905,13 @@
           this.publishAttempt = null;
           this.notice = error.message;
         } else this.failed(error);
+        submitFailed = true;
       } finally {
         this.publishing = false;
         if (!this.closed) {
           this.paint();
+          if (missingEditor) missingEditor.quill.focus();
+          if (submitFailed) (this.notice ? this.noticeElement : this.status).scrollIntoView({block:'center'});
           if (this.state?.report) this.showResult();
         }
       }
@@ -1030,6 +1053,10 @@
       this.footer.hidden = this.activeMonth==='next' || !(next?.plan || next?.report);
       this.publishButton.hidden = !next?.can_publish;
       this.publishButton.disabled = !editable || !this.online || Boolean(pending || message || this.sending || this.savingItem || this.confirmingMonth || this.itemFormOpen || this.isComposing());
+      this.publishButton.textContent = this.publishing ? '正在保存并提交…' : '保存并提交专业周报';
+      this.saveFeedbackButton.hidden = !next?.can_edit || Boolean(next?.can_publish);
+      this.saveFeedbackButton.disabled = !this.online || Boolean(this.savingFeedback) || !this.config.canSaveFollowups?.();
+      this.saveFeedbackButton.textContent = this.savingFeedback ? '正在保存反馈…' : '保存本期反馈';
       this.attachments.hidden = this.activeMonth==='next' || !next?.can_publish;
       if (next?.can_publish) {
         const count = this.config.attachmentIds?.().length || 0;
@@ -1046,8 +1073,7 @@
       const people = next?.presence || [];
       const name = person => person.name + (person.user_id === this.config.uid ? '（你）' : '');
       this.root.querySelector('[data-collaboration-presence]').textContent = next ? '在线 ' + (people.length ? people.map(name).join('、') : '暂无成员') : '';
-      const savedInfo = this.root.querySelector('[data-collaboration-saved-info]');
-      savedInfo.textContent = next?.last_change?.actor_name ? '最近保存 ' + next.last_change.actor_name
+      this.savedInfo.textContent = next?.last_change?.actor_name ? '最近保存 ' + next.last_change.actor_name
         + (next.last_change.at ? ' · ' + new Date(next.last_change.at).toLocaleTimeString('zh-CN', {timeZone:'Asia/Shanghai',hour12:false,hour:'2-digit',minute:'2-digit'}) : '') : '';
       for (const [cell, editor] of this.editors) {
         if (editor.quill.isEnabled() !== editable && !editor.composing) editor.quill.enable(editable);
@@ -1065,6 +1091,7 @@
 
     close() {
       this.closed = true;
+      this.footer.remove();
       this.controller.abort();
       if (this.pollController) this.pollController.abort();
       if(this.resizeFrame!=null)global.cancelAnimationFrame(this.resizeFrame);
@@ -1077,10 +1104,14 @@
   }
 
   global.WeeklyCollaboration = {
-    mount(root, config) {
-      if (mounted && mounted.root === root) return;
+    mount(root, config, footerSlot) {
+      if (mounted && mounted.root === root) {
+        mounted.attachFooter?.(footerSlot);
+        return;
+      }
       if (mounted) mounted.close();
       mounted = root && config ? (config.mode === 'settings' ? settings(root, config) : new Workspace(root, config)) : null;
+      mounted?.attachFooter?.(footerSlot);
     },
     canLeave() { return !mounted || mounted.canLeave(); }
   };
