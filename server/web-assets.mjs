@@ -8,7 +8,7 @@ const files = ['logo.png', 'favicon.png', 'login-bg-desktop.avif', 'login-bg-mob
   'rich-text.js', 'rich-editor.js', 'selection-format.css', 'vendor/quill/quill.js', 'vendor/quill/quill.core.css',
   'reporter-tasks.js', 'reporter-archive.js', 'reporter-workbench.css', 'reporter-tasks.css', 'reporter-archive.css',
   'admin-archive.js', 'admin-archive.css', 'project-knowledge.js', 'project-knowledge.css', 'planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'overview-meetings.js', 'completion-statistics.js', 'completion-statistics.css',
-  'monthly-plans.js', 'monthly-summaries.js', 'completion-review.js', 'completion-review.css', 'coordination-workbench.js', 'report-attachments.js', 'report-attachments.css',
+  'monthly-plans.js', 'monthly-summaries.js', 'completion-review.js', 'completion-review.css', 'report-attachments.js', 'report-attachments.css',
   'report3-layout.css','personal-report4.css','project-library.js','project-library.css',
   'project-plan-statistics.js','project-plan-statistics.css','admin-plan-overview.js','admin-plan-overview.css','admin-plans.js','admin-plans.css',
   'management-reader.js','management-reader.css','planning-ai.js','planning-ai-draft.js','planning-ai-memory.js','planning-ai.css',

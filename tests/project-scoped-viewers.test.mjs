@@ -96,6 +96,7 @@ test('actual login, read-only plan navigation and selecting a scoped viewer as c
  const f=await fixture(t),line='土建工程（东地块）',plan=await confirmMonthlyPlan(f.pool,pm,{project_id:'demo-com',line,month:'2026-11',items:[{source_id:'browser-a',mod:'匿名模块',name:'匿名浏览器确认计划',due:'2026-11-30'}]});
  await executeDatabase(f.pool,pm,{table:'reports',operation:'upsert',onConflict:'project_id,period,line,author_id',values:{project_id:'demo-com',period:'2026-11-02',line,
   biz:{monthly_plan_id:plan.id,monthly_plan_month:'2026-11',items:plan.items.map(item=>({...item,prog:'匿名浏览器周进展',blocker:''}))}}});
+ await f.admin.query("DELETE FROM public.reports WHERE project_id='demo-com' AND author_id=$1 AND period<>'2026-11-02'",[pm.id]);
  const dir=await mkdtemp(path.join(os.tmpdir(),'scoped-viewers-browser-'));
  const app=createApp({pool:f.pool,config:{authCodeSecret:randomUUID()+randomUUID(),readOnly:false,publicOrigin:'',cookieSecure:false,sessionHours:1,uploadDir:dir,
   mailer:{configured:false,async sendCode(){throw new Error('isolated test never sends mail');}}}});
@@ -122,15 +123,29 @@ test('actual login, read-only plan navigation and selecting a scoped viewer as c
   await author.goto(url);await author.locator('#email').fill(account.email);await author.locator('#password').fill(account.password);await author.getByRole('button',{name:'登录',exact:true}).click();
   await expect(author.locator('.planning-mainnav')).toBeVisible();
   await expect(author.getByRole('button',{name:'工作台',exact:true})).toHaveCount(0);
-  await author.locator('[data-immediate-coordination] > summary').click();
+  await expect(author.locator('.reporter-overview-content')).toBeVisible();
+  await expect(author.getByText('即时协调',{exact:true})).toHaveCount(0);
   const peopleResponse=await author.request.post(url+'/api/project-people/list',{headers,data:{project_id:'demo-com'}});
   assert.equal(peopleResponse.status(),200);assert.ok((await peopleResponse.json()).data.some(p=>p.user_id===viewer.id));
-  const owner=author.locator('.coordination-workbench').getByRole('combobox');await expect(owner.locator('option[value="'+viewer.id+'"]')).toHaveCount(1);await owner.selectOption(viewer.id);
-  await author.locator('.coordination-workbench .ql-editor').fill('匿名浏览器跨部门协调事项');
-  const created=author.waitForResponse(response=>response.url().endsWith('/api/coordination-tasks/create'));
-  await author.getByRole('button',{name:'发起协调',exact:true}).click();assert.equal((await created).status(),200);
-  await expect(author.locator('.coordination-workbench table')).toContainText('匿名浏览器跨部门协调事项');
-  assert.equal((await f.admin.query('SELECT owner_id FROM public.coordination_tasks WHERE what=$1',['匿名浏览器跨部门协调事项'])).rows[0].owner_id,viewer.id);
+  const text='匿名浏览器跨部门协调事项';
+  const retired=await author.request.post(url+'/api/coordination-tasks/create',{headers,
+    data:{id:randomUUID(),project_id:'demo-com',owner_id:viewer.id,what:text}});
+  assert.equal(retired.status(),410);
+  assert.equal((await retired.json()).error.code,'coordination_create_retired');
+  assert.equal((await f.admin.query('SELECT 1 FROM public.coordination_tasks WHERE what=$1',[text])).rows.length,0);
+  const owner=author.locator('#co_who_0');
+  await expect(owner.locator('option[value="'+viewer.id+'"]')).toHaveCount(1);
+  await owner.selectOption(viewer.id);
+  await author.locator('[data-rich-editor-for="co_what_0"] .ql-editor').fill(text);
+  const before=await page.request.post(url+'/api/management-read',{headers,data:{view:'coordination',project_id:'demo-com'}});
+  assert.ok(!(await before.json()).data.rows.some(item=>item.what===text));
+  const [submitted]=await Promise.all([
+    author.waitForResponse(response=>response.url().endsWith('/api/db') && response.request().postDataJSON()?.operation==='upsert'),
+    author.getByRole('button',{name:/^(提交本模块直报|重新提交（土建工程（东地块））)$/}).click()
+  ]);
+  assert.equal(submitted.status(),200,JSON.stringify((await submitted.json()).error));
+  const [row]=(await f.admin.query("SELECT coord_items FROM public.reports WHERE project_id='demo-com' AND coord_items @> $1::jsonb",[JSON.stringify([{what:text}])])).rows;
+  assert.equal(row.coord_items.find(item=>item.what===text).who_id,viewer.id);
   await author.locator('main').screenshot({path:path.join(artifacts,'scoped-coordination-recipient.png')});
   await page.setViewportSize({width:1440,height:1000});await page.getByRole('button',{name:'事项管理',exact:true}).click();await page.getByRole('button',{name:'协调需求（只读）',exact:true}).click();
   await expect(page.locator('.management-reader')).toContainText('匿名浏览器跨部门协调事项');

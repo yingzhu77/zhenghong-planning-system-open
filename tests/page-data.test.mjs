@@ -9,7 +9,7 @@ const app = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8')
   .replace(/\(async function boot\(\) \{[\s\S]*?\}\)\(\);/, '');
 const fixtureSource = fs.readFileSync(new URL('./frontend-render.mjs', import.meta.url), 'utf8');
 const sample = vm.runInNewContext(fixtureSource.slice(fixtureSource.indexOf('function pad2'), fixtureSource.indexOf('\nfunction run(')) + ';DB;', {Date});
-const reporterModules = ['planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'reporter-tasks.js', 'completion-review.js', 'coordination-workbench.js', 'monthly-plans.js', 'monthly-summaries.js', 'report-attachments.js', 'reporter-archive.js', 'admin-archive.js']
+const reporterModules = ['planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'reporter-tasks.js', 'completion-review.js', 'monthly-plans.js', 'monthly-summaries.js', 'report-attachments.js', 'reporter-archive.js', 'admin-archive.js']
   .map(name => [name, fs.readFileSync(new URL('../web/' + name, import.meta.url), 'utf8')]);
 const loginBoot = fs.readFileSync(new URL('../web/login-boot.js', import.meta.url), 'utf8');
 
@@ -59,7 +59,7 @@ function fixture(role = 'ops') {
   const tables = structuredClone(sample), calls = [], root = {innerHTML: '', querySelectorAll: () => []}, downloads = [], dom = new Map();
   const assets = Object.fromEntries(['app.js', 'reporter-tasks.js', 'reporter-tasks.css', 'reporter-workbench.css', 'completion-review.js', 'completion-review.css',
     'report-attachments.js', 'report-attachments.css', 'reporter-archive.js', 'reporter-archive.css', 'admin-archive.js', 'admin-archive.css', 'admin-overview.css',
-    'rich-text.js', 'rich-editor.js','planning-windows.js','report-scopes.js','baseline-core.js','coordination-workbench.js', 'monthly-plans.js', 'monthly-summaries.js', 'vendor/quill/quill.js', 'vendor/quill/quill.core.css'].map(key => [key, '/assets/' + key]));
+    'rich-text.js', 'rich-editor.js','planning-windows.js','report-scopes.js','baseline-core.js','monthly-plans.js', 'monthly-summaries.js', 'vendor/quill/quill.js', 'vendor/quill/quill.core.css'].map(key => [key, '/assets/' + key]));
   dom.set('planning-assets', {textContent: JSON.stringify(assets)}); dom.set('toast', {style: {}});
   const profile = {user_id: 'current', name: '当前演示用户', role, status: 'approved', project_id: 'p1', biz_line: '土建工程（东地块）'};
   tables.profiles = [profile, {user_id: 'other', name: '另一演示成员', role: 'pm', status: 'approved'}];
@@ -91,7 +91,7 @@ function fixture(role = 'ops') {
         assert.equal(init.method,'GET');assert.equal(init.body,undefined);
         const operation={table:'@monthlySummaries',operation:'select',query:{month:new URL(url,'http://anonymous.test').searchParams.get('month')}};calls.push(operation);const result=await handler(operation);return {ok:!result?.error,json:async()=>result};
       }
-      const sources = {'/api/report-scopes/list':'@reportScopes','/api/monthly-plans/list':'@monthlyPlans','/api/reporter-tasks/list': '@reporterTasks', '/api/project-people/list': '@projectPeople', '/api/completions/list': '@completions','/api/coordination-tasks/list':'@coordinationTasks','/api/coordination-tasks/create':'@coordinationCreate',
+      const sources = {'/api/report-scopes/list':'@reportScopes','/api/monthly-plans/list':'@monthlyPlans','/api/reporter-tasks/list': '@reporterTasks', '/api/project-people/list': '@projectPeople', '/api/completions/list': '@completions','/api/coordination-tasks/list':'@coordinationTasks',
         '/api/report-attachments/list': '@reportAttachments', '/api/project-plan-statistics':'@nodeStatistics', '/api/weekly-collaboration/next-week':'@nextCollaboration'};
       assert.ok(sources[url], 'unexpected read endpoint: ' + url);
       const operation = {table: sources[url], operation: 'select', query: JSON.parse(init.body)};
@@ -197,27 +197,10 @@ test('independent coordination loads before completion metadata and reaches PM w
     assert.ok(f.completionSourceKeys().includes(key));
     assert.equal(f.window.ReporterTasks.sourceItems().filter(item=>item.source_key===key).length,1);
     assert.ok(f.S.followupRows.some(item=>item.source_key===key && item.source_type==='coord'));
-    assert.match(f.root.innerHTML,/无需周报的独立协调/);assert.match(f.root.innerHTML,/协调申请/);
+    assert.match(f.root.innerHTML,/无需周报的独立协调/);assert.doesNotMatch(f.root.innerHTML,/即时协调/);
     assert.equal(f.S.reports.length,0);assert.equal(f.calls.some(call=>call.operation!=='select'),false);
-    const reads=f.calls.length;f.configureReporter();f.renderShell();assert.equal(f.calls.length,reads,'composer reuses loaded people and task snapshots');
+    const reads=f.calls.length;f.configureReporter();f.renderShell();assert.equal(f.calls.length,reads,'rendering reuses loaded people and task snapshots');
   }
-});
-
-test('coordination creation integrates its source and clears rendered fields without creating or modifying a report',async()=>{
-  const f=fixture('pm');f.S.view='form';let created=null;
-  f.setHandler(operation=>{
-    if(operation.table==='@coordinationCreate')return {data:created={...operation.query,author_id:'current',author_name:'当前演示用户',owner_name:'当前演示用户',created_at:'2026-10-21T08:00:00Z',source_key:'coord:p1:'+operation.query.id},error:null};
-    return {data:operation.table==='reports'?[]:operation.table==='@coordinationTasks'?created?[created]:[]:f.tables[operation.table] || [],error:null};
-  });
-  await f.loadPageData();await f.preparePM();f.renderShell();
-  f.dom.set('coordination_owner_id_p1',{value:'current'});f.dom.set('coordination_what_p1',{value:'本期填报即时发起'});f.dom.set('coordination_due_p1',{value:'2026-11-02'});
-  const reportDraft=JSON.stringify(f.S.coordRows);
-  await f.window.CoordinationWorkbench.create('p1');
-  assert.ok(created);assert.equal(f.S.coordinationTasks.length,1);assert.equal(f.S.reports.length,0);
-  assert.equal(JSON.stringify(f.S.coordRows),reportDraft);assert.ok(f.window.ReporterTasks.sourceItems().some(row=>row.source_key===created.source_key));
-  assert.match(f.root.innerHTML,/<textarea id="coordination_what_p1"[^>]*><\/textarea>/,'the old DOM cannot repopulate the newly cleared composer');
-  assert.equal(f.calls.filter(call=>call.table==='@coordinationCreate').length,1);
-  assert.equal(f.calls.some(call=>['reports','leader_notes'].includes(call.table) && call.operation!=='select'),false);
 });
 
 test('ops coordination page displays independent author, owner and deadline before any completion request, with no creator controls',async()=>{

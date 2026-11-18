@@ -11,7 +11,7 @@ const app = fs.readFileSync(new URL('app.js', web), 'utf8')
   .replace(/\(async function boot\(\) \{[\s\S]*?\}\)\(\);/, '');
 const artifacts = process.env.REPORT3_ARTIFACT_DIR || path.join(os.tmpdir(), 'report3-layout-artifacts');
 
-test('personal reporting renders compact desktop and mobile tables, shared formatting and an embedded coordination panel', async () => {
+test('personal reporting renders compact desktop and mobile tables, shared formatting and coordination history', async () => {
   const browser = await chromium.launch({channel: 'msedge', headless: true});
   fs.mkdirSync(artifacts, {recursive: true});
   const errors = [], requests = [];
@@ -61,7 +61,7 @@ test('personal reporting renders compact desktop and mobile tables, shared forma
     for (const name of ['styles.css', 'planning-ui.css', 'report3-layout.css', 'personal-report4.css', 'selection-format.css', 'reporter-workbench.css', 'reporter-tasks.css', 'completion-review.css', 'vendor/quill/quill.core.css']) {
       await page.addStyleTag({content: fs.readFileSync(new URL(name, web), 'utf8')});
     }
-    for (const name of ['vendor/quill/quill.js', 'rich-text.js', 'rich-editor.js', 'planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'monthly-plans.js', 'monthly-summaries.js', 'reporter-tasks.js', 'coordination-workbench.js', 'completion-review.js', 'report-attachments.js']) {
+    for (const name of ['vendor/quill/quill.js', 'rich-text.js', 'rich-editor.js', 'planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'monthly-plans.js', 'monthly-summaries.js', 'reporter-tasks.js', 'completion-review.js', 'report-attachments.js']) {
       await page.addScriptTag({content: fs.readFileSync(new URL(name, web), 'utf8')});
     }
     await page.addScriptTag({content: app});
@@ -137,20 +137,21 @@ test('personal reporting renders compact desktop and mobile tables, shared forma
     await page.screenshot({path: path.join(artifacts, 'report3-form-mobile.png'), fullPage: true});
     await page.setViewportSize({width: 1600, height: 1100});
     await expect(page.getByRole('button',{name:'工作台',exact:true})).toHaveCount(0);
-    await page.locator('[data-immediate-coordination] > summary').click();
-    await expect(page.locator('.coordination-workbench')).toContainText('独立发起协调事项需保留');
-    await expect(page.locator('main')).toContainText('旧报告协调事项需保留');
-    await expect(page.locator('.completion-initiated')).toContainText('我发起的协调事项审核');
-    await expect(page.locator('.coordination-workbench select')).toHaveCount(1);
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await page.screenshot({path: path.join(artifacts, 'report3-coordination-desktop.png'), fullPage: true});
-    await page.locator('[data-immediate-coordination] > summary').click();
-    await page.getByText('个人概览',{exact:false}).first().click();
+    await expect(page.locator('.reporter-overview-content')).toBeVisible();
+    await expect(page.locator('details.reporter-overview')).toHaveCount(0);
+    await expect(page.getByText('即时协调',{exact:true})).toHaveCount(0);
+    const history=page.locator('.reporter-coordination-history');
+    await expect(history.locator('.completion-initiated')).toBeHidden();
+    await history.locator('summary').click();
+    await expect(history.getByText('独立发起协调事项需保留',{exact:false})).toBeVisible();
+    await expect(history.getByText('旧报告协调事项需保留',{exact:false})).toBeVisible();
+    await expect(history.locator('.completion-initiated')).toBeVisible();
+    await expect.poll(()=>requests.filter(x=>x.body?.review_scope==='initiated').length).toBe(1);
+    await history.locator('summary').click();
+    await expect(history.locator('.completion-initiated')).toBeHidden();
     await expect(page.locator('main')).toContainText('待处理事项清单');
     await expect(page.locator('main')).not.toContainText('本期其他跨专业需求');
     await expect(page.locator('main')).not.toContainText('未指定给本人的需求不应显示');
-    await expect(page.locator('.coordination-workbench')).toBeHidden();
-    await expect(page.locator('.completion-initiated')).toBeHidden();
     await expect(page.locator('.reporter-followups')).toHaveCount(1);
     await expect(page.locator('.completion-work-items')).toHaveCount(0);
     await expect(page.locator('main')).not.toContainText('计划事项办理');

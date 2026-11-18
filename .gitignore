@@ -152,9 +152,7 @@
 !/tests/coordination-review-ui.test.mjs
 !/db/017-independent-coordination.sql
 !/server/coordination-tasks.mjs
-!/web/coordination-workbench.js
 !/tests/independent-coordination.test.mjs
-!/tests/coordination-workbench-ui.test.mjs
 !/db/018-monthly-plans.sql
 !/server/monthly-plans.mjs
 !/web/monthly-plans.js

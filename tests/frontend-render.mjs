@@ -17,7 +17,6 @@ const PLANNING_WINDOWS = fs.readFileSync(path.join(__dirname, '..', 'web', 'plan
 const BASELINE_CORE = fs.readFileSync(path.join(__dirname, '..', 'web', 'baseline-core.js'), 'utf8');
 const OVERVIEW_MEETINGS = fs.readFileSync(path.join(__dirname, '..', 'web', 'overview-meetings.js'), 'utf8');
 const COMPLETION_STATISTICS = fs.readFileSync(path.join(__dirname, '..', 'web', 'completion-statistics.js'), 'utf8');
-const COORDINATION_WORKBENCH = fs.readFileSync(path.join(__dirname, '..', 'web', 'coordination-workbench.js'), 'utf8');
 const MONTHLY_PLANS = fs.readFileSync(path.join(__dirname, '..', 'web', 'monthly-plans.js'), 'utf8');
 const MONTHLY_SUMMARIES = fs.readFileSync(path.join(__dirname, '..', 'web', 'monthly-summaries.js'), 'utf8');
 const PROJECT_PLAN_STATISTICS = fs.readFileSync(path.join(__dirname, '..', 'web', 'project-plan-statistics.js'), 'utf8');
@@ -265,7 +264,7 @@ function run(role, options = {}) {
   if (options.mustChangePassword) {
     sandbox.PlanningBoot = {assets: {}, session: Promise.resolve({data: {session: initialSession}}), complete() {},
       ensurePasswordChange: async () => { passwordGate.loads++; },
-      ensureEditor: async () => {}, ensureWorkflow: async () => {}, ensureReporter: async () => {}, ensureCoordination: async () => {}};
+      ensureEditor: async () => {}, ensureWorkflow: async () => {}, ensureReporter: async () => {}};
     sandbox.PasswordChange = {show: configuration => {passwordGate.shown.push(configuration); return true;},
       close: () => {passwordGate.closes++;}};
   }
@@ -281,7 +280,6 @@ function run(role, options = {}) {
   vm.runInContext(BASELINE_CORE, sandbox, { filename: 'baseline-core.js' });
   vm.runInContext(OVERVIEW_MEETINGS, sandbox, { filename: 'overview-meetings.js' });
   vm.runInContext(COMPLETION_STATISTICS, sandbox, { filename: 'completion-statistics.js' });
-  vm.runInContext(COORDINATION_WORKBENCH, sandbox, { filename: 'coordination-workbench.js' });
   vm.runInContext(MONTHLY_PLANS, sandbox, { filename: 'monthly-plans.js' });
   vm.runInContext(MONTHLY_SUMMARIES, sandbox, { filename: 'monthly-summaries.js' });
   vm.runInContext(PROJECT_PLAN_STATISTICS, sandbox, { filename: 'project-plan-statistics.js' });
@@ -585,7 +583,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     await App.view('center'); html = root.innerHTML;
     noReporterPageHeading(html, '住宅个人概览');
     ok(has(nav(html), '项目计划') && !has(nav(html), '工作台'), '住宅项目计划应进入项目资料');
-    ok(has(main(html), '个人概览') && has(main(html), '即时协调'), '本期填报应包含个人概览和即时协调');
+    ok(has(main(html), '个人概览') && !has(main(html), '即时协调'), '本期填报应常显个人概览并移除即时协调');
     ok(has(html, '工作进展统计'), '住宅个人中心缺少进展统计');
     ok(has(html, '研判节点与偏差（按优先级）'), '住宅个人中心缺少优先级节点表');
     ok(has(html, 'P0 紧急'), '住宅个人中心未按偏差分级出 P0');
@@ -727,7 +725,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     ok(!has(html, '总裁交代 · 本周需关注的工作') && has(html, '会议事项要求'), '商业个人中心应按会议要求分类，不重新引入旧总裁交代分区');
     ok(!has(html, '项目总安排 · 本周工作安排') && has(html, '他人协调我的事项'), '商业个人中心应按他人协调分类，不重新引入旧项目总安排分区');
     await App.view('coordination');
-    ok(has(main(root.innerHTML), '我发起的协调事项审核') && has(main(root.innerHTML), '即时协调') && has(main(root.innerHTML), '三、需要协调事项'), '即时协调和发起人审核应在本期填报保留独立操作');
+    ok(has(main(root.innerHTML), '我发起的协调事项审核') && !has(main(root.innerHTML), '即时协调') && has(main(root.innerHTML), '三、需要协调事项'), '第三部分应提供协调填报并保留发起人审核');
     await App.view('center'); html = root.innerHTML;
     noCameraUi(html, '商业 PM 工作台');
     const centerHtml = html;

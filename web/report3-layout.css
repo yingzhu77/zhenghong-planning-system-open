@@ -61,10 +61,10 @@
   .planning-shell .report3-monthly-table>tbody>tr>td{display:table-cell!important;padding:5px 7px;border-bottom:1px solid #ddd}
   .report3-monthly-table td[data-label]::before{display:none!important}
 }
-.planning-shell .reporter-form-panel{padding:12px 16px;margin-bottom:10px}
-.reporter-form-panel summary{cursor:pointer;font-weight:600;line-height:1.5}
-.reporter-form-panel summary .chip{margin-left:6px}
-.reporter-form-panel-content{display:grid;gap:12px;margin-top:12px;min-width:0}
-.reporter-form-panel-content>.card{margin-bottom:0;min-width:0}
-.reporter-coordination-project{display:grid;gap:5px;width:min(100%,340px)}
-@media print{.reporter-form-panel:not([open]){display:none}}
+.planning-shell .reporter-overview,.planning-shell .reporter-coordination-history{padding:12px 16px;margin-bottom:10px}
+.reporter-overview h2{margin:0;font-size:inherit;line-height:1.5}
+.reporter-overview h2 .chip{margin-left:6px}
+.reporter-coordination-history summary{cursor:pointer;font-weight:600;line-height:1.5}
+.reporter-overview-content,.reporter-coordination-history-content{display:grid;gap:12px;margin-top:12px;min-width:0}
+.reporter-overview-content>.card,.reporter-coordination-history-content>.card{margin-bottom:0;min-width:0}
+@media print{.reporter-coordination-history:not([open]){display:none}}

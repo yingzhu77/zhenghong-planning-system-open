@@ -247,8 +247,6 @@
         + '<div class="collaboration-statusbar"><p class="collaboration-status" role="status" data-collaboration-status></p>'
         + '<button type="button" class="btn ghost sm" data-collaboration-retry hidden>重试连接</button>'
         + '<button type="button" class="btn ghost sm" data-collaboration-copy hidden>复制未同步内容</button></div>'
-        + '<div class="collaboration-toolbar" aria-label="当前单元格文字格式" hidden><button type="button" data-collaboration-format="bold">加粗</button>'
-        + '<button type="button" data-collaboration-format="red">标红</button><button type="button" data-collaboration-format="clear">清除格式</button></div>'
         + '<p role="status" class="collaboration-status" data-collaboration-notice hidden></p>'
         + '<div data-collaboration-table></div><div data-next-month-table hidden></div>'
         + '<button type="button" class="btn ghost sm collaboration-add-item" data-open-item-form hidden>＋ 增加事项</button>'
@@ -302,7 +300,6 @@
       });
       this.footer = find('.collaboration-footer');
       this.savedInfo = find('[data-collaboration-saved-info]');
-      this.toolbar = find('.collaboration-toolbar');
       this.publishButton = find('[data-collaboration-publish]');
       this.saveFeedbackButton = find('[data-collaboration-save-feedback]');
       this.resultButton = find('[data-collaboration-result]');
@@ -321,11 +318,6 @@
       });
       this.resultButton.addEventListener('click', () => this.showResult());
       this.withdrawReportButton.addEventListener('click', () => this.withdrawReport());
-      this.toolbar.addEventListener('pointerdown', event => { if (event.target.closest('button')) event.preventDefault(); });
-      this.toolbar.addEventListener('click', event => {
-        const button = event.target.closest('[data-collaboration-format]');
-        if (button) this.format(button.dataset.collaborationFormat);
-      });
       this.paint();
     }
 
@@ -726,9 +718,11 @@
         editor.binding = new QuillBinding(text, quill);
         this.editors.set(cell, editor);
         doc.on('update', (update, origin) => { if (origin !== remoteUpdate) this.enqueue(cell, update); });
-        quill.root.addEventListener('focus', () => { this.lastEditor = editor; this.focusCell(cell); });
+        editor.selection = global.ZHRichEditor.bindSelection(quill,
+          () => !this.closed && this.activeMonth === 'current' && this.canEdit(), () => editor.composing);
+        quill.root.addEventListener('focus', () => this.focusCell(cell));
         quill.root.addEventListener('blur', () => { if (this.activeCell === cell) this.focusCell(null); });
-        quill.root.addEventListener('compositionstart', () => { editor.composing = true; this.paint(); });
+        quill.root.addEventListener('compositionstart', () => { editor.composing = true; editor.selection.hide(); this.paint(); });
         quill.root.addEventListener('compositionend', () => {
           queueMicrotask(() => {
             if (this.closed || this.editors.get(cell) !== editor) return;
@@ -778,19 +772,6 @@
         if (this.pollController) this.pollController.abort();
         else this.poll();
       }, 120);
-    }
-
-    format(kind) {
-      if (!this.lastEditor || !this.canEdit() || this.lastEditor.composing) return;
-      const quill = this.lastEditor.quill;
-      const range = quill.getSelection(true);
-      if (!range) return;
-      const format = quill.getFormat(range);
-      if (kind === 'clear') {
-        quill.format('bold', false, 'user');
-        quill.format('color', false, 'user');
-      } else if (kind === 'bold') quill.format('bold', !format.bold, 'user');
-      else if (kind === 'red') quill.format('color', format.color === '#d81e06' ? false : '#d81e06', 'user');
     }
 
     enqueue(cell, update) {
@@ -1049,7 +1030,7 @@
       this.retryButton.hidden = !(message || !this.online) || Boolean(this.revoked);
       this.copyButton.hidden = !pending || !this.editors.size;
       this.paintMonth();
-      this.toolbar.hidden = this.activeMonth==='next' || !editable || !this.editors.size;
+      if (this.activeMonth === 'next' || !editable) for (const editor of this.editors.values()) editor.selection.hide();
       this.footer.hidden = this.activeMonth==='next' || !(next?.plan || next?.report);
       this.publishButton.hidden = !next?.can_publish;
       this.publishButton.disabled = !editable || !this.online || Boolean(pending || message || this.sending || this.savingItem || this.confirmingMonth || this.itemFormOpen || this.isComposing());
@@ -1084,9 +1065,12 @@
     }
 
     destroyEditors() {
-      for (const editor of this.editors.values()) { editor.binding?.destroy(); editor.doc.destroy(); }
+      for (const editor of this.editors.values()) {
+        editor.selection.hide();
+        editor.binding?.destroy();
+        editor.doc.destroy();
+      }
       this.editors.clear();
-      this.lastEditor = null;
     }
 
     close() {

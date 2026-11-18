@@ -129,7 +129,7 @@ test('real anonymous HTTP and Edge preserve rich form and AI drafts, enforce pro
   await page.getByRole('button',{name:'登录',exact:true}).click();
   await expect(page.getByRole('button',{name:'查看其他专业填报',exact:true})).toBeVisible();
   await page.evaluate(()=>App.view('center'));
-  await expect(page.locator('.reporter-form-panel').first()).toHaveAttribute('open','');
+  await expect(page.locator('.reporter-overview-content')).toBeVisible();
   await expect(page.locator('.reporter-pending')).toHaveCount(0);
   await expect(page.locator('.reporter-followups')).toContainText('请复核机电清单');
   await expect(page.locator('.reporter-followups h3')).toHaveText('四、待处理事项清单');

@@ -57,25 +57,6 @@
   color: #9a2529;
   background: #fbecee;
 }
-.collaboration-toolbar {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-.collaboration-toolbar button {
-  padding: 5px 10px;
-  color: #21496f;
-  background: #fff;
-  border: 1px solid #b4c7dc;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.collaboration-toolbar button:first-child {
-  font-weight: 700;
-}
-.collaboration-toolbar button:nth-child(2) {
-  color: #c11b10;
-}
 .planning-shell .collaboration-tablewrap > .collaboration-table {
   width: 100%;
   min-width: 0;
@@ -295,7 +276,6 @@
   .collaboration-panel button,
   .collaboration-meta,
   .collaboration-statusbar,
-  .collaboration-toolbar,
   .collaboration-cell [data-collaboration-cell-presence],
   [data-collaboration-items] {
     display: none !important;

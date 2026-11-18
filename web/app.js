@@ -202,7 +202,7 @@
   }
   function attachRich(rows) { if(window.ZHRichText) (rows || []).forEach(window.ZHRichText.attach); }
   function richBinding(id) {
-    var modules = [window.AdminPlans, window.MonthlyPlans, window.CoordinationWorkbench, window.CompletionReview, window.ZHAdminArchive];
+    var modules = [window.AdminPlans, window.MonthlyPlans, window.CompletionReview, window.ZHAdminArchive];
     for (var i = 0; i < modules.length; i++) {
       var binding = modules[i] && modules[i].binding && modules[i].binding(id);
       if (binding) return binding;
@@ -1089,7 +1089,6 @@
     if (window.PlanningBoot) {
       try { await Promise.all([loadPageData(), window.PlanningBoot.ensureEditor(), S.profile.role === 'pm' && window.PlanningBoot.ensureReporter ? window.PlanningBoot.ensureReporter() : Promise.resolve(),
         window.PlanningBoot.ensureWorkflow ? window.PlanningBoot.ensureWorkflow(true) : Promise.resolve(),
-        S.profile.role === 'pm' && window.PlanningBoot.ensureCoordination ? window.PlanningBoot.ensureCoordination() : Promise.resolve(),
         window.PlanningBoot.ensureMonthlyPlans && ['pm','ops','president','pzo'].indexOf(S.profile.role)>=0 ? window.PlanningBoot.ensureMonthlyPlans() : Promise.resolve(),
         window.PlanningBoot.ensureOverview && isPlanningManager() ? window.PlanningBoot.ensureOverview() : Promise.resolve()]); }
       catch (error) { return renderFail('编辑组件加载失败，请刷新重试。'); }
@@ -1298,30 +1297,6 @@
       richCopy:richCopy,richItem:richItem,richCollect:richCollect,
       flush:function(){if(window.ZHRichEditor)window.ZHRichEditor.flush();},
       refresh:async function(){return loadData(['monthlyPlans','completions'],true);}});
-    if(window.CoordinationWorkbench){
-      window.CoordinationWorkbench.configure({S:S,esc:esc,request:reporterRequest,render:function(){renderShell(true);},toast:toast,
-        projectId:currentCoordinationProject,
-        richCopy:richCopy,richCollect:richCollect,richItem:richItem,flush:function(){if(window.ZHRichEditor)window.ZHRichEditor.flush();},
-        refreshTasks:async function(pid){
-          snapDraft();
-          var loaded=await loadData(['coordinationTasks','projectPeople','completions'],true);
-          if(!loaded || pid===S.pmProject)return loaded;
-          return window.CoordinationWorkbench.load(pid,true);
-        },
-        loadPeople:async function(pid){
-          if(pid===S.pmProject){var ok=await loadData(['projectPeople']);return ok?{data:S.projectPeople,error:null}:{error:{message:'本项目承办人读取失败，请刷新数据'}};}
-          return reporterRequest('/api/project-people/list',{project_id:pid});
-        },afterCreated:async function(){
-          snapDraft();invalidateData(['coordinationTasks']);
-          if(!await loadData(['coordinationTasks','completions']))throw new Error('协调事项状态读取失败');
-          if(window.ReporterTasks && window.ReporterTasks.prepareCoordination)window.ReporterTasks.prepareCoordination();
-          if(App.refreshWeeklyFollowups)await App.refreshWeeklyFollowups();
-          if(window.CompletionReview && window.CompletionReview.loadInitiated)await window.CompletionReview.loadInitiated(true);
-        }});
-      var peopleState=dataState.projectPeople,coordState=dataState.coordinationTasks;
-      window.CoordinationWorkbench.seed(S.pmProject,coordState && coordState.ready?S.coordinationTasks:null,
-        peopleState && peopleState.ready && peopleState.scope===S.pmProject?S.projectPeople:null);
-    }
     if (window.OverviewMeetings) window.OverviewMeetings.configure({S:S,esc:esc,request:reporterRequest,disciplines:DISCIPLINES,
       loadPeople:function(pid){return reporterRequest('/api/project-people/list',{project_id:pid});},
       reloadTasks:async function(){if(!await loadData(['reporterTasks','leaderNotes'],true))throw new Error('会议事项读取失败');},
@@ -1524,7 +1499,6 @@
     if(window.PlanningAI)window.PlanningAI.reset();
     planningAITransactions.clear();S.planningAIEntries=[];
     if(window.ManagementReader)window.ManagementReader.reset();
-    if(window.CoordinationWorkbench)window.CoordinationWorkbench.reset();
     if(window.ZHAdminArchive && window.ZHAdminArchive.reset)window.ZHAdminArchive.reset();
     dataEpoch++; pageNavigation++; dataState = {};
     Object.keys(dataSources).forEach(function (key) { S[key] = []; });
@@ -1534,8 +1508,7 @@
     S.briefDrafts = {}; S.reviewRichDrafts = {}; S.formRich = {}; S.lineEdits = {};
     S.overviewUI = { project: '', line: '', discipline: '', open: {} };
     S.professionalOverview=null;
-    S.reporterFormPanels={};
-    S.immediateCoordinationProject='';
+    S.coordinationHistoryOpen=false;
     S.reportingProfessionProject='';S.projectReportingGrants=[];
     S.memberDirectoryUI={search:'',selection:null,open:new Set()};
     S.personnelAdminProjects=[];
@@ -1582,7 +1555,6 @@
   }
   function invalidateData(keys) {
     if(window.ProjectPlanStatistics && keys.some(function(key){return ['reports','milestones','monthlyPlans','completions','members','pms','projects'].indexOf(key)>=0;}))window.ProjectPlanStatistics.invalidate();
-    if(window.CoordinationWorkbench && keys.some(function(key){return ['coordinationTasks','members','pms','projects'].indexOf(key)>=0;}))window.CoordinationWorkbench.invalidate();
     if(window.CompletionStatistics && keys.some(function(key){return ['reports','milestones','leaderNotes','reporterTasks','completions','members','pms','projects'].indexOf(key)>=0;}))window.CompletionStatistics.invalidate();
     if(window.CompletionReview && window.CompletionReview.invalidateInitiated && keys.some(function(key){return ['reports','coordinationTasks','completions','members','pms','projects'].indexOf(key)>=0;}))window.CompletionReview.invalidateInitiated();
     var affected=keys.slice();
@@ -1703,8 +1675,6 @@
           ? window.PlanningBoot.ensureStatistics() : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureProjectPlanStatistics && S.view==='projectPlanStats'
           ? window.PlanningBoot.ensureProjectPlanStatistics() : Promise.resolve(),
-        window.PlanningBoot && window.PlanningBoot.ensureCoordination && S.profile && S.profile.role==='pm' && S.view==='form'
-          ? window.PlanningBoot.ensureCoordination() : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureMonthlyPlans && (S.profile && S.profile.role==='pm' && S.view==='form' || isManagerOverview())
           ? window.PlanningBoot.ensureMonthlyPlans() : Promise.resolve(),
         window.PlanningBoot && window.PlanningBoot.ensureAdminPlans && S.profile && S.profile.role==='ops' && S.view==='adminPlans'
@@ -1728,7 +1698,7 @@
     }
     await loadInlineCollaboration();
     if(S.profile.role==='pm' && S.view==='form')await loadData(['projectPeople']);
-    if(S.profile.role==='pm' && S.view==='form' && S.reporterFormPanels?.coordination)await loadImmediateCoordination(force);
+    if(S.profile.role==='pm' && S.view==='form' && S.coordinationHistoryOpen)await window.CompletionReview?.loadInitiated(force);
     if (navigation !== pageNavigation || epoch !== dataEpoch || !S.profile) return;
     if (transition && S.pmScopeTransition === transition) S.pmScopeTransition = null;
     markPMRenderedScope();
@@ -1925,7 +1895,6 @@
   }
 
   function snapDraft(captureOnly) {
-    if(window.CoordinationWorkbench)window.CoordinationWorkbench.capture();
     if (!canCapturePMDraft()) return;
     if(window.ZHRichEditor) window.ZHRichEditor.flush();
     captureWeeklyCoordination();
@@ -1946,7 +1915,12 @@
     });
     S.coordRows.forEach(function (r, i) {
       var w = document.getElementById('co_who_' + i), t = document.getElementById('co_what_' + i), b = document.getElementById('co_by_' + i);
-      if (w) {var changed=r.who!==w.value;r.who=w.value;var person=(S.projectPeople || []).filter(function(p){return p.name===r.who;})[0];if(person)r.who_id=person.user_id;else if(changed)delete r.who_id;} if (t) r.what = t.value; if (b) r.by = b.value;
+      if (w && !w.selectedOptions?.[0]?.hasAttribute('data-original-coordination')) {
+        var person=(S.projectPeople || []).find(function(p){return p.user_id===w.value;});
+        r.who=person?.name || '';
+        if(person)r.who_id=person.user_id;else delete r.who_id;
+      }
+      if (t) r.what = t.value; if (b) r.by = b.value;
     });
     S.speedRows.forEach(function (r, i) {
       var a = document.getElementById('sp_act_' + i), g = document.getElementById('sp_gain_' + i);
@@ -1989,13 +1963,16 @@
   }
   /* 研判行：排除其他行已选（同一行自己可回显） */
   function nodeOptions(selected, selfIdx) { return nodeListOptions(selected, pickedNames(selfIdx), '请选择关键节点…'); }
-  function orgOptions(selected) {
+  function orgOptions(row) {
     var opts = ['<option value="">选择协调对象</option>'];
     var people=S.projectPeople || [];
-    if(selected && !people.some(function(person){return person.name===selected;}))opts.push('<option value="'+esc(selected)+'" selected>'+esc(selected)+'（原记录）</option>');
-    people.forEach(function (o) {
-      var detail=o.role==='viewer'?'只读协调对象':o.discipline || o.biz_line || ROLE_LABEL[o.role] || '';
-      opts.push('<option value="' + esc(o.name) + '"' + (selected === o.name ? ' selected' : '') + '>' + esc(o.name) + (detail ? '（' + esc(detail) + '）' : '') + '</option>');
+    if((row.who || row.who_id) && !people.some(function(person){return person.user_id===row.who_id;})){
+      opts.push('<option value="" data-original-coordination selected>'+esc(row.who || row.who_id)+'（原记录）</option>');
+    }
+    people.forEach(function (person) {
+      var detail=person.role==='viewer'?'只读协调对象':person.discipline || person.biz_line || ROLE_LABEL[person.role] || '';
+      opts.push('<option value="'+esc(person.user_id)+'"'+(row.who_id===person.user_id?' selected':'')+'>'
+        +esc(person.name+(detail?'（'+detail+'）':''))+'</option>');
     });
     return opts.join('');
   }
@@ -2137,7 +2114,7 @@
         :'<p class="muted">本周周报未提交协调事项。</p>')+'</section>';
     }
     if(!ready)return html+'<p class="muted" role="status">'+(room?'本周暂不可编辑协调事项。':'正在读取本周协调事项…')+'</p></section>';
-    html+='<p class="muted">保存后同步给协同成员。负责人提交周报后，协调对象可在待处理事项中查看。</p>';
+    html+='<p class="muted">保存后同步给协同成员。负责人提交周报后，送达协调对象。</p>';
     if(room.peopleLoadError)html+='<p class="notice warn" role="status">部分分期的协调对象暂时无法读取，请重新加载页面后重试。</p>';
     var projects=pmScopeProjectIds(),scoped=projects.length>1,disabled=room.saving?' disabled':'';
     if(room.dirty && room.baseRevision!==room.remoteRevision)html+='<p class="notice warn" role="status">其他成员已更新协调草稿，本机修改已保留。'
@@ -2499,12 +2476,9 @@
     var status=mode==='member'
       ? coordination?.status==='published'?'专业周报已提交':coordination?.status==='ready'?'协同填报中':'正在读取协同状态'
       : mode && mode!=='unconfigured'?'本期填报暂不可用':report?'本期已提交':'本期未提交';
-    var panels=S.reporterFormPanels || {};
-    return '<details class="card reporter-form-panel" ontoggle="App.toggleReporterFormPanel(\'overview\',this)"'+(panels.overview?' open':'')+'>'
-      +'<summary>个人概览 <span class="chip">'+esc(status)+'</span></summary>'
-      +'<div class="reporter-form-panel-content">'+viewReporterOverview(S.pmProject,report,status,coordination)+'</div></details>'
-      +'<details class="card reporter-form-panel" data-immediate-coordination ontoggle="App.toggleReporterFormPanel(\'coordination\',this)"'+(panels.coordination?' open':'')+'>'
-      +'<summary>即时协调</summary><div class="reporter-form-panel-content">'+viewImmediateCoordination()+'</div></details>'
+    return '<section class="card reporter-overview" aria-labelledby="reporter-overview-title">'
+      +'<h2 id="reporter-overview-title">个人概览 <span class="chip">'+esc(status)+'</span></h2>'
+      +'<div class="reporter-overview-content">'+viewReporterOverview(S.pmProject,report,status,coordination)+'</div></section>'
       +form;
   }
 
@@ -2571,7 +2545,7 @@
     }).join('');
     if(!itemRows)itemRows='<tr><td colspan="4" class="empty">添加本月计划事项。确认后计划列固定。</td></tr>';
     var coordHtml = S.coordRows.map(function (r, i) {
-      return '<div class="nextitem plan-coord-row" data-row><select id="co_who_' + i + '" aria-label="协调对象">' + orgOptions(r.who) + '</select>'
+      return '<div class="nextitem plan-coord-row" data-row><select id="co_who_' + i + '" aria-label="协调对象">' + orgOptions(r) + '</select>'
         + '<textarea rows="1" data-grow data-rich id="co_what_' + i + '" oninput="App.grow(this)" placeholder="需要对方做什么">' + esc(r.what || '') + '</textarea>'
         + '<input type="date" aria-label="协调最晚时间" id="co_by_' + i + '" value="' + esc(dstr(r.by)) + '"></div>';
     }).join('');
@@ -2631,7 +2605,7 @@
       +planFormContext(pid,cur,moduleHtml,commercial)
       +(collaboration==='member'?corePlanHtml
         +'<div data-weekly-collaboration data-inline-key="'+esc(inlineCollaborationKey())+'"></div>'
-        +renderWeeklyCoordination()
+        +renderWeeklyCoordination()+coordinationHistoryHtml()
         +(window.ReporterTasks?window.ReporterTasks.formHtml(S.inlineFollowups?.scope===followupDraftScope()
           ?{...S.inlineFollowups,conflict:Boolean(S.followupSync?.conflicts?.length)}:{status:'loading'}):'')
         +(window.ReportAttachments?window.ReportAttachments.formHtml():'')
@@ -2661,8 +2635,8 @@
       +'><thead><tr><th>模块</th><th>事项</th><th>完成时间</th><th>当周进展</th></tr></thead><tbody>' + itemRows + '</tbody></table></div>'
       + (!monthLocked?'<div class="plan-row-actions"><button type="button" class="btn ghost sm" onclick="App.addBizItem()">＋ 增加事项</button></div>':'')+'</section>'
       + (window.MonthlyPlans && !separateMonthEditor?window.MonthlyPlans.plannerHtml():'')
-      + '<section class="card plan-form-section"><div class="cardhd plan-section-head"><h3>三、需要协调事项</h3></div>' + coordHtml
-      + '<div class="plan-row-actions"><button type="button" class="btn ghost sm" onclick="App.addCoord()">＋ 增加一行</button></div></section>'
+      + '<section class="card plan-form-section"><div class="cardhd plan-section-head"><h3>三、需要协调事项</h3></div>' + '<p class="muted">提交本期周报后，送达协调对象。</p>' + coordHtml
+      + '<div class="plan-row-actions"><button type="button" class="btn ghost sm" onclick="App.addCoord()">＋ 增加一行</button></div></section>'+coordinationHistoryHtml()
       + (window.ReporterTasks ? window.ReporterTasks.formHtml() : '')
       + (window.ReportAttachments ? window.ReportAttachments.formHtml() : '')
       + planFormActions(cur, commercial) + '</div></div>';
@@ -2902,7 +2876,18 @@
   }
   function ownCoordinationHtml(pid) {
     var groups=[['coord','本人发起的协调事项'],['handover','本人登记的移交事项']];
+    var projects=pmScopeProjectIds();
     return groups.map(function(group){var rows=[];
+      if(group[0]==='coord'){
+        (S.coordinationTasks || []).filter(function(row){
+          return row.author_id===S.uid && projects.includes(row.project_id);
+        }).forEach(function(row){
+          var key=row.source_key || 'coord:'+row.project_id+':'+row.id;
+          rows.push('<tr><td>'+richItem(row,'what')+'<div class="muted">'+esc(projName(row.project_id)+' · '+sd(row.created_at))+'</div></td>'
+            +'<td>'+esc(row.owner_name || '未记录承办人')+'</td><td class="pm-col-date">'+esc(sd(effectiveItemDue(key,row.due)))+'</td>'
+            +'<td class="pm-col-action">'+(window.CompletionReview?.badge(key,row.owner_id) || '等待承办人办理')+'</td></tr>');
+        });
+      }
       (S.reports || []).filter(function(r){return r.project_id===pid && r.author_id===S.uid && myProfessionalScopeReport(r,pid) && (!isCom(pid) || canReportBizLine(r.line,pid));}).forEach(function(r){
         var items=group[0]==='coord'?r.coord_items:handoverOf(r);
         (items || []).forEach(function(x){if(!x || !String(x.what || '').trim())return;
@@ -2912,7 +2897,14 @@
         });
       });
       return rows.length?'<section class="card"><div class="cardhd"><h3>'+group[1]+'</h3></div><div class="tablewrap"><table class="pm-assignment-table"><thead><tr><th>事项内容</th><th>协调／接收人</th><th class="pm-col-date">最晚时间</th><th class="pm-col-action">事项申报</th></tr></thead><tbody>'+rows.join('')+'</tbody></table></div></section>':'';
-    }).join('')+(window.CompletionReview && window.CompletionReview.renderInitiatedQueue?window.CompletionReview.renderInitiatedQueue({project_id:pid}):'');
+    }).join('');
+  }
+
+  function coordinationHistoryHtml() {
+    return '<details class="card reporter-coordination-history" ontoggle="App.toggleCoordinationHistory(this)"'+(S.coordinationHistoryOpen?' open':'')+'>'
+      +'<summary>已发起的协调事项与审核</summary><div class="reporter-coordination-history-content">'
+      +(ownCoordinationHtml(S.pmProject) || '<p class="muted">当前填报范围暂无本人已发起的事项。</p>')
+      +(window.CompletionReview?.renderInitiatedQueue() || '')+'</div></details>';
   }
   function reporterNodeSectionHtml(pid) {
     if(!window.CompletionReview || !S.profile || S.profile.role!=='pm')return '';
@@ -4301,21 +4293,6 @@
       onChanged:async function(){if(current()){captureBriefDrafts();renderShell(true);}}
     };
   }
-  function currentCoordinationProject() {
-    if(S.profile?.role!=='pm')return null;
-    var projects=myProjects(),selected=S.immediateCoordinationProject || S.pmProject;
-    return projects.some(function(p){return p.id===selected;})?selected:projects[0]?.id;
-  }
-  function loadImmediateCoordination(force) {
-    var pid=currentCoordinationProject();
-    return Promise.all([window.CoordinationWorkbench?.load?.(pid,force), window.CompletionReview?.loadInitiated?.(force)]);
-  }
-  function viewImmediateCoordination() {
-    var pid=currentCoordinationProject(),projects=myProjects();
-    if(!pid)return '<p class="empty">尚未分配项目。</p>';
-    return (projects.length>1?'<label class="reporter-coordination-project">协调项目 <select aria-label="协调申请项目" onchange="App.immediateCoordinationProject(this.value)">'+projects.map(function(p){return '<option value="'+esc(p.id)+'"'+(p.id===pid?' selected':'')+'>'+esc(p.name)+'</option>';}).join('')+'</select></label>':'')
-      +(window.CoordinationWorkbench?window.CoordinationWorkbench.render(pid):'<p class="muted">正在加载协调申请…</p>')+ownCoordinationHtml(pid);
-  }
   function viewProjectLibrary() {
     var list=detailProjects(),pid=S.libraryProject;
     if(!list.some(function(p){return p.id===pid;}))pid=list[0] && list[0].id;
@@ -4976,7 +4953,6 @@
   function renderShell(keepScroll) {
     if(window.AdminPlans)window.AdminPlans.capture();
     if(window.MonthlyPlans)window.MonthlyPlans.capture();
-    if(window.CoordinationWorkbench)window.CoordinationWorkbench.capture();
     if(window.OverviewMeetings)window.OverviewMeetings.capture();
     configureReporter();
     var rev=isPlanningManager(), navs=planningNavItems(), groups=planningGroups(navs);
@@ -5201,10 +5177,9 @@
       if(S.profile && S.profile.role==='viewer' && !planningNavItems().some(function(item){return item.k===v;}))return;
       if (S.view === 'mline' && App.mlineCapture) App.mlineCapture();
       if (S.profile && S.profile.role === 'pm') {
-        var panel=v==='center'?'overview':v==='coordination'?'coordination':null;
-        var target=!panel && (v==='detail' || planningNavItems().some(function(item){return item.k===v;}))?v:'form';
+        var target=(v==='detail' || planningNavItems().some(function(item){return item.k===v;}))?v:'form';
         return changePMScope(function(){
-          if(panel)(S.reporterFormPanels || (S.reporterFormPanels={}))[panel]=true;
+          if(v==='coordination')S.coordinationHistoryOpen=true;
           if(target==='professionalOverview')S.professionalOverview={currentOnly:true};
           if(target!=='form' && target!=='professionalOverview' && futureReportWeek(S.pmPeriod))S.pmPeriod=currentPeriod();
           S.view=target;
@@ -5216,23 +5191,13 @@
       S.view = v;
       await showPage(v === 'form');
     },
-    toggleReporterFormPanel: async function(name,element) {
-      if(S.profile?.role!=='pm' || S.view!=='form' || !element.isConnected || !['overview','coordination'].includes(name))return;
-      var panels=S.reporterFormPanels || (S.reporterFormPanels={});
-      if(Boolean(panels[name])===element.open)return;
-      panels[name]=element.open;
-      if(name!=='coordination' || !element.open)return;
-      await loadImmediateCoordination();
-      if(S.reporterFormPanels===panels && S.view==='form' && panels.coordination){snapDraft(true);renderShell(true);}
-    },
-    immediateCoordinationProject: async function(pid) {
-      if(S.profile?.role!=='pm' || S.view!=='form' || !myProjects().some(function(p){return p.id===pid;}))return;
-      snapDraft(true);
-      S.immediateCoordinationProject=pid;
-      var epoch=dataEpoch;
-      renderShell(true);
-      await loadImmediateCoordination();
-      if(epoch===dataEpoch && S.view==='form' && currentCoordinationProject()===pid){snapDraft(true);renderShell(true);}
+    toggleCoordinationHistory: async function(element) {
+      if(S.profile?.role!=='pm' || S.view!=='form' || !element.isConnected || Boolean(S.coordinationHistoryOpen)===element.open)return;
+      S.coordinationHistoryOpen=element.open;
+      if(!element.open)return;
+      var epoch=dataEpoch,navigation=pageNavigation;
+      await window.CompletionReview?.loadInitiated();
+      if(epoch===dataEpoch && navigation===pageNavigation && S.view==='form' && S.coordinationHistoryOpen){snapDraft(true);renderShell(true);}
     },
     refreshWeeklyFollowups:refreshWeeklyFollowups,
     openFollowup: async function (key) {

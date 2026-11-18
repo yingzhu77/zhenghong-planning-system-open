@@ -2,7 +2,7 @@
 (function (global) {
   'use strict';
   var assets = JSON.parse(document.getElementById('planning-assets').textContent), monthlySummariesPromise = null;
-  var ready = false, pending = null, editorPromise = null, adminPromise = null, adminPlansPromise = null, overviewPromise = null, statisticsPromise = null, planStatisticsPromise = null, managementPromise = null, coordinationPromise = null, monthlyPromise = null, libraryPromise = null, passwordPromise = null, planningAIPromise = null, reporterPromises = {}, workflowPromises = {};
+  var ready = false, pending = null, editorPromise = null, adminPromise = null, adminPlansPromise = null, overviewPromise = null, statisticsPromise = null, planStatisticsPromise = null, managementPromise = null, monthlyPromise = null, libraryPromise = null, passwordPromise = null, planningAIPromise = null, reporterPromises = {}, workflowPromises = {};
   var shell = document.querySelector('[data-initial-login]');
   function act(action, value) {
     if (!ready) { pending = [action, value]; return; }
@@ -111,10 +111,6 @@
     ensureManagementReader:function(){
       if(!managementPromise)managementPromise=Promise.all([style(assets['management-reader.css']),script(assets['management-reader.js'])]).catch(function(error){managementPromise=null;throw error;});
       return managementPromise;
-    },
-    ensureCoordination:function(){
-      if(!coordinationPromise)coordinationPromise=script(assets['coordination-workbench.js']).catch(function(error){coordinationPromise=null;throw error;});
-      return coordinationPromise;
     },
     ensureMonthlyPlans:function(){
       if(!monthlyPromise)monthlyPromise=script(assets['monthly-plans.js']).catch(function(error){monthlyPromise=null;throw error;});

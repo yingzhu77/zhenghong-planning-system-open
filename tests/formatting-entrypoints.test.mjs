@@ -56,41 +56,6 @@ async function formatSelection(page, id, text) {
   return editor;
 }
 
-test('actual coordination form delegates rich binding and preserves selection format in submitted source and read-only row', async () => {
-  const browser = await chromium.launch({ channel: 'msedge', headless: true });
-  try {
-    const { page, errors } = await fixture(browser, ['coordination-workbench.js']);
-    await page.evaluate(() => {
-      const h = window.formattingAudit, S = h.S;
-      window.coordinationCalls = [];
-      const render = () => {
-        document.getElementById('root').innerHTML = '<div class="planning-shell"><main>' + window.CoordinationWorkbench.render('p1') + '</main></div>';
-        window.mountFormatting();
-      };
-      window.CoordinationWorkbench.configure({ S, esc: h.esc, richCopy: h.richCopy, richCollect: h.richCollect, richItem: h.richItem,
-        flush: () => window.ZHRichEditor.flush(), render, toast() {}, request: async (url, body) => {
-          window.coordinationCalls.push({ url, body: JSON.parse(JSON.stringify(body)) });
-          return { data: { ...body, author_id: S.uid, owner_name: '匿名承办人', source_key: 'coord:p1:' + body.id } };
-        } });
-      window.CoordinationWorkbench.seed('p1', [], [{ user_id: 'anonymous-worker', role: 'pm', name: '匿名承办人' }]);
-      render();
-    });
-    await page.locator('#coordination_owner_id_p1').selectOption('anonymous-worker');
-    await page.locator('#coordination_due_p1').fill('2026-10-30');
-    await expect(page.locator('[data-rich-editor-for="coordination_due_p1"], [data-rich-editor-for="coordination_owner_id_p1"]')).toHaveCount(0);
-    await formatSelection(page, 'coordination_what_p1', '  请核验材料并反馈整改结果  ');
-    await page.screenshot({ path: path.join(artifacts, 'coordination-form.png'), fullPage: true });
-    await page.getByRole('button', { name: '发起协调', exact: true }).click();
-    await expect(page.locator('.coordination-workbench tbody .rt-red strong')).toHaveText('请核验材料并反馈整改结果');
-    const calls = await page.evaluate(() => window.coordinationCalls);
-    assert.equal(calls.length, 1); assert.equal(calls[0].url, '/api/coordination-tasks/create');
-    assert.equal(calls[0].body.what, '请核验材料并反馈整改结果'); assert.equal(calls[0].body.due, '2026-10-30');
-    assert.equal(calls[0].body.owner_id, 'anonymous-worker');
-    assert.deepEqual(calls[0].body.rich_text, { v: 1, fields: { what: delta('请核验材料并反馈整改结果') } });
-    assert.deepEqual(errors, []);
-  } finally { await browser.close(); }
-});
-
 test('completion, extension and reviewer dialogs outside planning shell format through actual dispatcher and submit matching Delta', async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {

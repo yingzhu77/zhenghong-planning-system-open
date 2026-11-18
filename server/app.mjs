@@ -6,7 +6,7 @@ import { createAuth, createOriginCheck } from './auth.mjs';
 import { executeDatabase, replaceLeaderNotes, withIdentity } from './database.mjs';
 import { listReporterTasks, saveReporterTask, listProjectPeople, assignLeaderRequirement } from './reporter-tasks.mjs';
 import { listProjectLibrary, setLibraryPassword, unlockProjectLibrary, uploadProjectDocument, withdrawProjectDocument, loadProjectDocument, MAX_LIBRARY_BYTES } from './project-library.mjs';
-import { listCoordinationTasks, createCoordinationTask } from './coordination-tasks.mjs';
+import { listCoordinationTasks } from './coordination-tasks.mjs';
 import { listMonthlyPlans, confirmMonthlyPlan, withdrawMonthlyPlan } from './monthly-plans.mjs';
 import {listAdminPlanBatches,withdrawAdminPlanBatch} from './admin-plan-batches.mjs';
 import { assertAdminPlanOperator, getAdminPlanContext, previewAdminPlanRows, saveAdminMonthlyPlans } from './admin-monthly-plans.mjs';
@@ -159,11 +159,12 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   app.post('/api/leader-notes/assign', auth.requireUser, express.json({limit:'16kb'}), asyncRoute(async(req,res)=>{
     res.json({data:await assignLeaderRequirement(pool,req.user,req.body ?? {}),error:null});
   }));
-  for (const [route, handler] of [['list', listCoordinationTasks], ['create', createCoordinationTask]]) {
-    app.post('/api/coordination-tasks/' + route, auth.requireUser, express.json({ limit: '32kb' }), asyncRoute(async (req, res) => {
-      res.json({ data: await handler(pool, req.user, req.body ?? {}), error: null });
-    }));
-  }
+  app.post('/api/coordination-tasks/list', auth.requireUser, express.json({ limit: '32kb' }), asyncRoute(async (req, res) => {
+    res.json({ data: await listCoordinationTasks(pool, req.user, req.body ?? {}), error: null });
+  }));
+  app.post('/api/coordination-tasks/create', auth.requireUser, (_req, _res, next) => {
+    next(new HttpError(410, '请刷新页面，在本期填报第三部分提交协调事项。', 'coordination_create_retired'));
+  });
   for (const [route, handler] of [['list', listMonthlyPlans], ['confirm', confirmMonthlyPlan], ['withdraw', withdrawMonthlyPlan]]) {
     app.post('/api/monthly-plans/' + route, auth.requireUser, express.json({ limit: '1mb' }), asyncRoute(async (req, res) => {
       res.json({ data: await handler(pool, req.user, req.body ?? {}), error: null });
