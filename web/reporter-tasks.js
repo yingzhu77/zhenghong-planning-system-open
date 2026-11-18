@@ -431,7 +431,7 @@
   }
   function meetingForm(pid) {
     if (!editing || editing.project_id !== pid) return '';
-    if (busy) return '<div class="reporter-meeting-form" role="status" aria-live="polite"><b>' + esc(editing.title) + '</b><p class="muted">正在保存会议事项…</p></div>';
+    if (busy) return '<div class="reporter-meeting-form" role="status" aria-live="polite"><b>' + cfg.richItem(editing,'title') + '</b><p class="muted">正在保存会议事项…</p></div>';
     var operator = isOperator(), candidates = peopleCache[pid] || [];
     var fields = operator
       ? '<label>事项类别<select id="meeting_kind" onchange="ReporterTasks.setKind(this.value)">' + ['requirement', 'special'].concat(editing.id && meetingKind(editing) === 'legacy' ? ['legacy'] : []).map(function(kind){return '<option value="'+kind+'"'+(meetingKind(editing)===kind?' selected':'')+'>'+kindText({meeting_kind:kind})+'</option>';}).join('') + '</select></label>'
@@ -444,10 +444,10 @@
           + esc(person.name + (person.biz_line || person.discipline ? '（' + (person.biz_line || person.discipline) + '）' : '')) + '</option>'; }).join('') + '</select></label>'
         + (peopleLoading === pid ? '<p class="muted" role="status">正在读取本项目承办人…</p>' : '')
         + (peopleErrors[pid] ? '<p class="reporter-source-note" role="alert">' + esc(peopleErrors[pid]) + ' <button type="button" class="btn" onclick="ReporterTasks.retryPeople()">重试</button></p>' : '')
-        + '<label>事项标题<input id="meeting_title" maxlength="200" value="' + esc(editing.title) + '" placeholder="填写会议主题或事项标题"></label>'
+        + '<label>事项标题<input data-rich id="meeting_title" maxlength="200" value="' + esc(editing.title) + '" placeholder="填写会议主题或事项标题"></label>'
         + '<label>事项内容<textarea id="meeting_what" data-rich rows="3" placeholder="填写会议决议及交付要求">' + esc(editing.what) + '</textarea></label>'
         + '<label>最晚时间<input id="meeting_due" type="date" value="' + esc(editing.due) + '"></label>'
-      : '<div class="reporter-meeting-source"><b>' + esc(editing.title) + '</b><div>' + cfg.richItem(editing, 'what') + '</div><p class="muted">运营分派 · 最晚时间：'
+      : '<div class="reporter-meeting-source"><b>' + cfg.richItem(editing,'title') + '</b><div>' + cfg.richItem(editing, 'what') + '</div><p class="muted">运营分派 · 最晚时间：'
         + esc(dueFor('meeting:' + pid + ':' + editing.id, editing.due, editing.owner_id) || '未设置') + '</p></div>';
     return '<div class="reporter-meeting-form"><h4>' + (operator ? (editing.id ? '维护' : '新增') + kindText(editing) : '更新会议事项进展') + '</h4>'
       + fields
@@ -471,7 +471,7 @@
   function taskRow(entry, requirement) {
     var row = entry.row, key = 'meeting:' + row.project_id + ':' + row.id, feedback=currentFeedback(key,row), approved=isApproved(key);
     return '<tr data-meeting-key="'+esc(key)+'">' + (requirement ? '<td data-label="提出人">' + esc(proposerText(row)) + '</td>' : '<td data-label="类型／模块">' + esc(personalKindText(row)) + '</td>')
-      + '<td data-label="事项内容"><b>' + esc(row.title || personalKindText(row)) + '</b>' + personalProjectLabel(row.project_id) + '<div>' + cfg.richItem(row, 'what') + '</div></td>'
+      + '<td data-label="事项内容"><b>' + cfg.richItem(row,'title',personalKindText(row)) + '</b>' + personalProjectLabel(row.project_id) + '<div>' + cfg.richItem(row, 'what') + '</div></td>'
       + '<td data-label="完成时间">' + esc(dueFor(key, row.due, row.owner_id) || '未设置') + '</td><td data-label="本期进展">' + cfg.richItem(feedback, 'progress', '本期未填写')
       + '<div class="reporter-feedback-state">' + (approved ? '已审核完成' : feedback.meeting_conflict?'进展待核对':statusText(feedback.status)) + '</div></td><td data-label="事项申报"><div class="reporter-row-actions">'
       + (!approved?feedbackLink(key):'') + reviewAction(key) + '</div></td></tr>';
@@ -528,7 +528,7 @@
       + '<button type="button" class="btn primary" onclick="ReporterTasks.edit()"' + (busy || !pid ? ' disabled' : '') + '>录入'+esc(kindText({meeting_kind:kind==='legacy'?'special':kind}))+'</button></div></div>'
       + '<p class="muted">按项目记录会议决议，为每项指定一名承办人；承办人更新进展并提交完成或延期申请，运营在事项审核中逐条处理。</p>' + meetingForm(pid)
       + (list.length ? '<div class="tablewrap"><table><thead><tr><th>会议事项</th><th>提出人</th><th>责任人</th><th>完成时间</th><th>当前进展</th><th>操作</th></tr></thead><tbody>' + list.map(function (entry) {
-        var row = entry.row; return '<tr><td><b>' + esc(row.title) + '</b><div>' + cfg.richItem(row, 'what') + '</div></td><td>'+esc(meetingKind(row)==='requirement'?proposerText(row):'运营录入')+'</td><td>' + esc(row.owner_name || '未记录') + '</td><td>'
+        var row = entry.row; return '<tr><td><b>' + cfg.richItem(row,'title') + '</b><div>' + cfg.richItem(row, 'what') + '</div></td><td>'+esc(meetingKind(row)==='requirement'?proposerText(row):'运营录入')+'</td><td>' + esc(row.owner_name || '未记录') + '</td><td>'
           + esc(dueFor('meeting:' + pid + ':' + row.id, row.due, row.owner_id) || '—') + '</td><td>' + cfg.richItem(row, 'progress', '尚未反馈进展') + '</td><td><button type="button" class="btn" onclick="ReporterTasks.edit(' + entry.index + ')"' + (busy ? ' disabled' : '') + '>维护事项</button></td></tr>';
       }).join('') + '</tbody></table></div>' : '<div class="empty">本项目暂无会议事项。</div>') + '</section>';
   }
@@ -563,6 +563,7 @@
     var source = index === undefined ? null : (S.reporterTasks || [])[index];
     if (index !== undefined && !source || !source && !isOperator()) return;
     editing = source ? copy(source) : { project_id: S.meetingAdminProject || (S.projects || [])[0] && S.projects[0].id, owner_id: '', meeting_kind: S.meetingAdminKind === 'requirement' ? 'requirement' : 'special', proposer_id: '', title: '', what: '', due: '', status: 'open', progress: '' };
+    delete editing.rich_text;
     originalProposerId = source && meetingKind(source) === 'requirement' ? source.proposer_id || null : null;
     if(source && !isOperator() && currentWeek()){
       var feedback=(S.followupRows || []).filter(function(row){return row.source_key==='meeting:'+source.project_id+':'+source.id && row.source_revision===source.revision && !row.meeting_conflict;})[0];
@@ -570,7 +571,7 @@
     }
     cfg.render();
     var loading = isOperator() ? loadPeople(editing.project_id) : null;
-    var field = global.document && global.document.getElementById('meeting_title'); if (field && field.focus) field.focus();
+    var field = global.document && (global.document.querySelector?.('[data-rich-editor-for="meeting_title"] .ql-editor') || global.document.getElementById('meeting_title')); if (field && field.focus) field.focus();
     return loading;
   }
   function cancel() { if (busy) return; editing = null; originalProposerId = null; cfg.render(); }
@@ -582,7 +583,7 @@
     if (isOperator() && meetingKind(editing) === 'requirement' && !(editing.id && originalProposerId && editing.proposer_id===originalProposerId)
       && !(peopleCache[editing.project_id] || []).some(function(p){return p.user_id===editing.proposer_id && ['president','pzo'].indexOf(p.role)>=0;})) return cfg.toast('请选择实际提出要求的总裁／项目总', 'err');
     var payload = isOperator()
-      ? cfg.richCopy(editing, { project_id: editing.project_id, owner_id: editing.owner_id, meeting_kind: meetingKind(editing), proposer_id: meetingKind(editing)==='requirement'?editing.proposer_id:null, title: editing.title.trim(), what: editing.what.trim(), due: editing.due || '', status: state(editing.status), progress: editing.progress.trim() }, { what: 'what', progress: 'progress' })
+      ? cfg.richCopy(editing, { project_id: editing.project_id, owner_id: editing.owner_id, meeting_kind: meetingKind(editing), proposer_id: meetingKind(editing)==='requirement'?editing.proposer_id:null, title: editing.title.trim(), what: editing.what.trim(), due: editing.due || '', status: state(editing.status), progress: editing.progress.trim() }, { title: 'title', what: 'what', progress: 'progress' })
       : cfg.richCopy(editing, { project_id: editing.project_id, status: state(editing.status), progress: editing.progress.trim() }, { progress: 'progress' });
     if (editing.id) { payload.id = editing.id; payload.expected_revision = editing.revision; }
     payload = cfg.richCollect(payload);
@@ -620,7 +621,7 @@
   function binding(id) {
     var owner, key, match = /^followup_progress_(\d+)$/.exec(id);
     if (match) { owner = (S.followupRows || [])[Number(match[1])]; key = 'progress'; }
-    else if (id === 'meeting_what' || id === 'meeting_progress') { owner = editing; key = id.slice('meeting_'.length); }
+    else if (['meeting_title','meeting_what','meeting_progress'].includes(id)) { owner = editing; key = id.slice('meeting_'.length); }
     if (!owner || typeof owner !== 'object' || Array.isArray(owner)) return null;
     return { get: function () { return owner._rich && owner._rich[key] || (global.ZHRichText && global.ZHRichText.doc(owner, key)); },
       set: function (doc) { owner._rich = owner._rich || {}; owner._rich[key] = doc; if (global.ZHRichText) owner[key] = global.ZHRichText.text(doc); } };

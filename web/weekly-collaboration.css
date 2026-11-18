@@ -90,6 +90,27 @@
   border: 1px solid #b4c7dc;
   border-radius: 5px;
 }
+.collaboration-entry [data-item-editor]{
+  margin-top:4px;
+  height:auto;
+  background:#fff;
+  border:1px solid #b4c7dc;
+  border-radius:6px;
+}
+.collaboration-entry [data-item-editor]:focus-within{
+  border-color:#276397;
+  box-shadow:0 0 0 2px #dcecf9;
+}
+.collaboration-entry [data-item-editor] .ql-editor{
+  min-height:40px;
+  height:auto;
+  padding:8px 10px;
+  font:inherit;
+  color:inherit;
+  overflow-wrap:anywhere;
+}
+.collaboration-entry [data-item-editor="name"] .ql-editor{min-height:62px}
+.collaboration-entry [data-item-editor].ql-disabled{background:#f2f5f9}
 .collaboration-cell .ql-container:focus-within {
   border-color: #276397;
   box-shadow: 0 0 0 2px #dcecf9;

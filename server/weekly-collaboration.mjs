@@ -172,10 +172,42 @@ async function replay(client, user, scope, operation, fingerprint) {
   return Boolean(row);
 }
 
+function collaborationItem(input, sourceId, scopeId) {
+  const {rich_text,...plain}=input || {};
+  const [item]=normalizeMonthlyPlanItems([{...plain,source_id:sourceId}],scopeId);
+  return rich_text===undefined?item:{...item,rich_text:validateRichText('collaboration_item',rich_text,item)};
+}
+
+function preserveItemFormat(item, previous) {
+  if (item.rich_text!==undefined || !previous?.rich_text?.fields) return item;
+  const fields=Object.fromEntries(Object.entries(previous.rich_text.fields).filter(([field])=>item[field]===previous[field]));
+  return Object.keys(fields).length?{...item,rich_text:{v:1,fields}}:item;
+}
+
+function splitItemFormats(rows) {
+  const fields={};
+  const items=rows.map(({rich_text,...item},index)=>{
+    for(const [field,doc] of Object.entries(rich_text?.fields || {}))fields['items.'+index+'.'+field]=doc;
+    return item;
+  });
+  return {items,...(Object.keys(fields).length?{rich_text:{v:1,fields}}:{})};
+}
+
+function restoreItemFormats(plan) {
+  return plan.items.map((item,index)=>{
+    const fields=Object.fromEntries(['mod','name'].flatMap(field=>{
+      const doc=plan.rich_text?.fields?.['items.'+index+'.'+field];
+      return doc?[[field,doc]]:[];
+    }));
+    return Object.keys(fields).length?{...item,rich_text:{v:1,fields}}:item;
+  });
+}
+
 function reportFields(draft, plan, scoped) {
   const fields = {};
-  for (const [key, delta] of Object.entries(plan.rich_text?.fields || {})) fields['biz.' + key] = delta;
-  const items = plan.items.map((item, index) => {
+  const split=splitItemFormats(plan.items);
+  for (const [key, delta] of Object.entries({...plan.rich_text?.fields,...split.rich_text?.fields})) fields['biz.' + key] = delta;
+  const items = split.items.map((item, index) => {
     const result = { ...item, ...(scoped && plan.confirmed_id ? {monthly_plan_id:plan.confirmed_id} : {}) };
     for (const field of ['prog','blocker']) {
       const ops = readCell(draft.cells[item.source_id + ':' + field]);
@@ -619,7 +651,7 @@ export function createWeeklyCollaboration(pool) {
     if (!['add','update'].includes(action) || !Number.isSafeInteger(revision) || revision<0) fail(400,'事项操作不正确。');
     const id=action==='add'?operation:body.source_id;
     if (typeof id!=='string' || !uuid.test(id)) fail(400,'事项标识不正确。');
-    const item=normalizeMonthlyPlanItems([{...body.item,source_id:id}],scope.scopeId)[0];
+    const item=collaborationItem(body.item,id,scope.scopeId);
     const fingerprint=digest(['items',action,id,item,revision]);
     const result=await withIdentity(pool,user.id,async client=>{
       await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
@@ -642,7 +674,7 @@ export function createWeeklyCollaboration(pool) {
       } else {
         const index=rows.findIndex(row=>row.source_id===id);
         if (index<0) fail(409,'事项已变化，请刷新后核对。');
-        rows[index]=item;
+        rows[index]=preserveItemFormat(item,rows[index]);
       }
       if (Buffer.byteLength(JSON.stringify(rows))>maxDraftBytes) fail(400,'本周事项累计内容已达上限。');
       const nextRevision=current.revision+1;
@@ -661,7 +693,7 @@ export function createWeeklyCollaboration(pool) {
       || typeof planId!=='string' || !uuid.test(planId)) fail(400,'本周新增事项的操作或月计划不正确。');
     const id=action==='add'?operation:body.source_id;
     if (typeof id!=='string' || !uuid.test(id)) fail(400,'事项标识不正确。');
-    const item=action==='delete'?null:normalizeMonthlyPlanItems([{...body.item,source_id:id}],scope.scopeId)[0];
+    const item=action==='delete'?null:collaborationItem(body.item,id,scope.scopeId);
     const fingerprint=digest(['weekly-supplement',action,id,item,planId,revision]);
     const result=await withIdentity(pool,user.id,async client=>{
       await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
@@ -685,7 +717,7 @@ export function createWeeklyCollaboration(pool) {
       } else {
         const index=rows.findIndex(row=>row.source_id===id);
         if (index<0) fail(409,'只能修改尚未提交同步的本周新增事项。');
-        if (action==='update') rows[index]=item;
+        if (action==='update') rows[index]=preserveItemFormat(item,rows[index]);
         else {
           if (draft.cells[id+':prog'] || draft.cells[id+':blocker'])
             fail(409,'该事项已有当周进展或卡点，不能删除。');
@@ -712,7 +744,7 @@ export function createWeeklyCollaboration(pool) {
     if (!transition && !['add','update','delete'].includes(action)) fail(400,'月计划事项操作不正确。');
     const id=action==='add'?operation:body.source_id;
     if (!transition && (typeof id!=='string' || !uuid.test(id))) fail(400,'月计划事项标识不正确。');
-    const item=action==='add' || action==='update'?normalizeMonthlyPlanItems([{...body.item,source_id:id}],scope.scopeId)[0]:null;
+    const item=action==='add' || action==='update'?collaborationItem(body.item,id,scope.scopeId):null;
     const fingerprint=digest(['month',month,action,id,item,revision]);
     const result=await withIdentity(pool,user.id,async client=>{
       await lockWeeklyCollaborationWrite(client,scope.projectId,scope.line,scope.week);
@@ -733,7 +765,8 @@ export function createWeeklyCollaboration(pool) {
         const range=(await client.query('SELECT project_ids FROM app_private.report_scopes WHERE id=$1',[scope.scopeId])).rows[0];
         if (!range.project_ids.includes(item.project_id)) fail(400,'请选择本项目范围内的实际分期。');
       }
-      const sharedId=plan.id || randomUUID(), rows=plan.items.slice();
+      const sharedId=plan.id || randomUUID();
+      let rows=plan.items.slice();
       let confirmedId=null;
       if (transition==='withdraw') {
         try {
@@ -743,17 +776,20 @@ export function createWeeklyCollaboration(pool) {
           if (error.code==='42501') fail(403,error.message);
           throw error;
         }
+        await client.query('UPDATE app_private.collaboration_monthly_drafts SET items=$2::jsonb WHERE id=$1',
+          [sharedId,JSON.stringify(restoreItemFormats(plan))]);
       } else if (transition==='confirm') {
-        const confirmed=await confirmMonthlyPlanInTransaction(client,user,{project_id:scope.projectId,line:scope.line,month,items:rows,
+        const confirmed=await confirmMonthlyPlanInTransaction(client,user,{project_id:scope.projectId,line:scope.line,month,...splitItemFormats(rows),
           ...(scope.scopeId?{report_scope_id:scope.scopeId}:{})});
         confirmedId=confirmed.id;
+        rows=confirmed.items;
       } else if (action==='add') {
         if (rows.length>=500) fail(400,'月计划事项最多 500 项。');
         rows.push(item);
       } else {
         const index=rows.findIndex(row=>row.source_id===id);
         if (index<0) fail(409,'事项已变化，请刷新后核对。');
-        if (action==='update') rows[index]=item;
+        if (action==='update') rows[index]=preserveItemFormat(item,rows[index]);
         else {
           const {used}=(await client.query('SELECT app_private.collaboration_monthly_item_in_use($1,$2) AS used',[sharedId,id])).rows[0];
           if (used) fail(409,'该事项已有进展、卡点或已提交记录，不能删除。');

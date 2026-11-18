@@ -35,7 +35,7 @@ const denied = error => error.status === 403;
 const conflict = error => error.status === 409;
 const collaborationGuard = error => error.code === 'P3801' || error.status === 409;
 
-async function fixture(t, through = 47) {
+async function fixture(t, through = 49) {
   const database = await initializedDatabase({through:38});
   t.after(() => database.close());
   const admin = testPool(database, null);
@@ -103,7 +103,13 @@ async function fixture(t, through = 47) {
     await database.exec(await readFile(new URL('../db/047-weekly-collaboration-outbound.sql',import.meta.url),'utf8'));
   };
   if (through >= 47) await upgradeOutgoing();
-  return { database, admin, pool, upgrade, upgradeItems, upgradeMonths, upgradeWithdrawals, upgradeSupplements, upgradeFollowups, upgradeOutgoing,
+  const upgradeFormatting = async () => {
+    await database.exec('RESET ROLE');
+    await database.exec(await readFile(new URL('../db/048-reported-completion.sql',import.meta.url),'utf8'));
+    if(through!==48)await database.exec(await readFile(new URL('../db/049-filling-text-format.sql',import.meta.url),'utf8'));
+  };
+  if (through >= 48) await upgradeFormatting();
+  return { database, admin, pool, upgrade, upgradeItems, upgradeMonths, upgradeWithdrawals, upgradeSupplements, upgradeFollowups, upgradeOutgoing, upgradeFormatting,
     service:createWeeklyCollaboration(pool) };
 }
 
@@ -753,7 +759,9 @@ test('038 的活动草稿、操作历史及已发布周报经过 039 重复迁�
   await f.upgradeFollowups();
   await f.upgradeFollowups();
   await f.upgradeOutgoing();
+  await f.upgradeFormatting();
   await f.upgradeOutgoing();
+  await f.upgradeFormatting();
   assert.deepEqual((await f.admin.query(`SELECT to_jsonb(d)-'project_id'-'line'-'report_scope_id'-'unplanned_items'-'member_ids'-'shared_monthly_plan_id'-'supplement_items'-'followup_feedback'-'outgoing_coordination' row
     FROM app_private.weekly_collaboration_drafts d WHERE project_id='hf' AND line='设计部' ORDER BY week`)).rows,oldDrafts);
   assert.deepEqual((await f.admin.query(`SELECT to_jsonb(o)-'project_id'-'line' row

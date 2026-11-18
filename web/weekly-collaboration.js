@@ -64,7 +64,7 @@
 
   function planField(plan, field, item, index) {
     const path = 'items.' + index + '.' + field;
-    const doc = plan.rich_text && plan.rich_text.fields && plan.rich_text.fields[path];
+    const doc = plan.rich_text?.fields?.[path] || item.rich_text?.fields?.[field];
     return doc && global.ZHRichText ? global.ZHRichText.render(doc) : esc(item[field] || '—');
   }
 
@@ -276,17 +276,30 @@
       this.addItemButton.addEventListener('click',()=>{
         this.resetItemForm();
         this.openItemForm(this.selectedItemPlan());
-        this.paint();this.itemForm.querySelector('[name=name]').focus();
+        this.paint();this.itemEditors.name.quill.focus();
       });
       const names=this.config.scope.projectNames || {};
       this.itemForm.innerHTML='<form><p class="muted" data-weekly-item-help hidden>新增事项在本周共享稿中保存，负责人提交周报后同步至本月计划。</p><div class="f2">'
         + (this.target.report_scope_id?'<label>实际项目／分期<select name="project_id" required>'
           +Object.entries(names).map(([id,name])=>'<option value="'+esc(id)+'">'+esc(name)+'</option>').join('')+'</select></label>':'')
-        + '<label>模块<input name="mod" maxlength="200"></label><label class="collaboration-item-name">事项<textarea name="name" maxlength="10000" rows="2" required></textarea></label>'
+        + '<div>模块<div data-item-editor="mod"></div></div><div class="collaboration-item-name">事项<div data-item-editor="name"></div></div>'
         + '<label>完成时间<input name="due" type="date"></label></div>'
         + '<div class="actions"><button class="btn primary sm" type="submit">添加事项</button> <button class="btn ghost sm" type="button" data-cancel-item>取消</button>'
         + '<button class="btn ghost sm" type="button" data-delete-item hidden>删除事项</button></div>'
         + '<p role="status" data-item-status></p></form>';
+      this.itemEditors = Object.fromEntries(Object.entries({mod:'模块',name:'事项'}).map(([field,label])=>{
+        const quill=new global.Quill(find('[data-item-editor="'+field+'"]'),{
+          formats:['bold','color'],modules:{toolbar:false,history:{userOnly:true}}
+        });
+        quill.root.setAttribute('role','textbox');
+        quill.root.setAttribute('aria-label',label);
+        if(field==='name')quill.root.setAttribute('aria-required','true');
+        const editor={quill,composing:false};
+        editor.selection=global.ZHRichEditor.bindSelection(quill,()=>quill.isEnabled() && !this.itemForm.hidden && !this.closed,()=>editor.composing);
+        quill.root.addEventListener('compositionstart',()=>{editor.composing=true;editor.selection.hide();});
+        quill.root.addEventListener('compositionend',()=>{editor.composing=false;});
+        return [field,editor];
+      }));
       this.itemForm.querySelector('form').addEventListener('submit',event=>{
         event.preventDefault();this.saveItem();
       });
@@ -321,7 +334,7 @@
       this.paint();
     }
 
-    isComposing() { return Array.from(this.editors.values()).some(editor => editor.composing); }
+    isComposing() { return [...this.editors.values(), ...Object.values(this.itemEditors)].some(editor => editor.composing); }
 
     attachFooter(slot) {
       if (!slot) return;
@@ -488,7 +501,15 @@
 
     itemFormValues() {
       const fields=this.itemForm.querySelector('form').elements;
-      return Object.fromEntries(['project_id','mod','name','due'].filter(name=>fields[name]).map(name=>[name,fields[name].value]));
+      const item=Object.fromEntries(['project_id','due'].filter(name=>fields[name]).map(name=>[name,fields[name].value]));
+      const rich=global.ZHRichText, formats={};
+      for(const [field,{quill}] of Object.entries(this.itemEditors)){
+        const doc=rich.normalize(quill.getContents());
+        item[field]=rich.text(doc).trim();
+        const fitted=rich.fit(doc,item[field]);
+        if(fitted?.ops.some(op=>op.attributes))formats[field]=fitted;
+      }
+      return {...item,rich_text:Object.keys(formats).length?{v:1,fields:formats}:{}};
     }
 
     itemFormChanged() {
@@ -510,6 +531,9 @@
       this.editingItem=null;
       const form=this.itemForm.querySelector('form');
       form.reset();
+      for(const {quill,selection} of Object.values(this.itemEditors)){
+        quill.setText('','silent');quill.history.clear();selection.hide();
+      }
       form.querySelector('[type=submit]').textContent='添加事项';
       form.querySelector('[data-delete-item]').hidden=true;
       form.querySelector('[data-item-status]').textContent='';
@@ -526,13 +550,20 @@
       this.editingItem={id:sourceId,revision:plan.revision};
       this.openItemForm(plan);
       const form=this.itemForm.querySelector('form');
-      for(const field of ['mod','name','due','project_id'])if(form.elements[field])form.elements[field].value=item[field] || '';
+      for(const field of ['due','project_id'])if(form.elements[field])form.elements[field].value=item[field] || '';
+      const index=plan.items.indexOf(item), rich=global.ZHRichText;
+      for(const [field,{quill,selection}] of Object.entries(this.itemEditors)){
+        const doc=rich.fit(plan.rich_text?.fields?.['items.'+index+'.'+field] || item.rich_text?.fields?.[field],item[field])
+          || rich.legacy(item[field] || '');
+        quill.setContents({ops:[...doc.ops,{insert:'\n'}]},'silent');
+        quill.history.clear();selection.hide();
+      }
       this.itemFormBaseline=JSON.stringify(this.itemFormValues());
       form.querySelector('[type=submit]').textContent='保存事项';
       form.querySelector('[data-delete-item]').hidden=!!plan.legacyWeek;
       form.querySelector('[data-item-status]').textContent='';
       this.paint();
-      form.elements.name.focus();
+      this.itemEditors.name.quill.focus();
     }
 
     async saveItem(action) {
@@ -551,6 +582,10 @@
       }
       if(deleting && (!editing || plan.legacyWeek || !global.confirm(plan.weeklySupplement?'删除此本周新增事项？':'删除此计划事项？')))return;
       const item=deleting?undefined:this.itemFormValues();
+      if(item && (!item.name || item.name.length>10000 || item.mod.length>200)){
+        status.textContent='请填写事项（最多 10000 字），模块最多 200 字。';
+        return;
+      }
       const scope = plan.weeklySupplement ? {weekly_supplement:true,plan_id:plan.confirmed_id}
         : plan.legacyWeek ? {} : {month:plan.month};
       const payload={action:deleting?'delete':editing?'update':'add',revision:editing?.revision ?? plan.revision,item,
@@ -997,6 +1032,12 @@
       const form=this.itemForm.querySelector('form');
       form.querySelector('[data-weekly-item-help]').hidden=!this.openItemFormScope?.startsWith('week:');
       for(const field of form.elements)field.disabled=busy;
+      for(const {quill,selection} of Object.values(this.itemEditors)){
+        const editable=!!itemPlan?.can_edit && !busy && !this.itemForm.hidden;
+        if(quill.isEnabled()!==editable)quill.enable(editable);
+        quill.root.setAttribute('aria-readonly',String(!editable));
+        if(!editable)selection.hide();
+      }
       form.querySelector('[type=submit]').disabled=!itemPlan?.can_edit || !this.online || busy || waiting;
       form.querySelector('[data-delete-item]').disabled=!itemPlan?.can_edit || !this.online || busy || waiting;
     }
@@ -1075,6 +1116,7 @@
 
     close() {
       this.closed = true;
+      for(const {selection} of Object.values(this.itemEditors))selection.hide();
       this.footer.remove();
       this.controller.abort();
       if (this.pollController) this.pollController.abort();

@@ -193,9 +193,29 @@ test('弘坊设计部两个实名会话合并同一单元格的中文改动并�
   await leadPanel.getByRole('button',{name:/准备下月/}).click();
   await editorPanel.getByRole('button',{name:/准备下月/}).click();
   await editorPanel.getByRole('button',{name:'＋ 增加事项'}).click();
-  await editorPanel.getByLabel('事项',{exact:true}).fill('组员准备下月图纸');
+  const itemForm=editorPanel.locator('[data-collaboration-items]');
+  const itemTools=editor.getByRole('toolbar',{name:'所选文字格式'});
+  for(const [label,value] of [['模块','匿名图纸模块'],['事项','组员准备下月图纸']]){
+    const box=itemForm.getByRole('textbox',{name:label,exact:true});
+    await box.fill(value);await box.press('Control+A');
+    await itemTools.getByRole('button',{name:'加粗',exact:true}).click();
+    await itemTools.getByRole('button',{name:'标红',exact:true}).click();
+  }
+  await editor.screenshot({path:selectionArtifacts+'/next-month-item-format.png'});
   await editorPanel.getByRole('button',{name:'添加事项'}).click();
-  await expect(leadPanel.locator('[data-next-month-table]')).toContainText('组员准备下月图纸',{timeout:18000});
+  const nextTable=leadPanel.locator('[data-next-month-table]');
+  await expect(nextTable.locator('.rt-red strong')).toHaveText(['匿名图纸模块','组员准备下月图纸'],{timeout:18000});
+  await nextTable.getByRole('button',{name:'修改事项',exact:true}).click();
+  await expect(leadPanel.locator('[data-item-editor="name"] strong')).toHaveText('组员准备下月图纸');
+  await leadPanel.getByRole('button',{name:'取消',exact:true}).click();
+  lead.once('dialog',dialog=>dialog.accept());
+  await leadPanel.getByRole('button',{name:'确认下月计划',exact:true}).click();
+  await expect(leadPanel.getByRole('button',{name:'撤回确认并修改',exact:true})).toBeVisible();
+  await expect(nextTable.locator('.rt-red strong')).toHaveText(['匿名图纸模块','组员准备下月图纸']);
+  lead.once('dialog',dialog=>dialog.accept());
+  await leadPanel.getByRole('button',{name:'撤回确认并修改',exact:true}).click();
+  await expect(nextTable.getByRole('button',{name:'修改事项',exact:true})).toBeVisible();
+  await expect(nextTable.locator('.rt-red strong')).toHaveText(['匿名图纸模块','组员准备下月图纸']);
   await expect(editorPanel.getByRole('button',{name:'确认下月计划',exact:true})).toHaveCount(0);
   await leadPanel.getByRole('button',{name:/^本月 /}).click();
   await editorPanel.getByRole('button',{name:/^本月 /}).click();
@@ -425,7 +445,11 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
 
   const updated=lead.waitForResponse(response=>response.url().endsWith('/api/weekly-collaboration/items'));
   await newRow.getByRole('button',{name:'修改事项',exact:true}).click();
-  await leadPanel.getByLabel('事项',{exact:true}).fill('临时补充现场图纸复核及会签');
+  const amended=leadPanel.locator('[data-item-editor="name"] .ql-editor');
+  await amended.fill('临时补充现场图纸复核及会签');
+  await amended.press('Control+A');
+  await lead.getByRole('toolbar',{name:'所选文字格式'}).getByRole('button',{name:'加粗',exact:true}).click();
+  await lead.getByRole('toolbar',{name:'所选文字格式'}).getByRole('button',{name:'标红',exact:true}).click();
   await leadPanel.getByRole('button',{name:'保存事项',exact:true}).click();
   assert.equal((await updated).status(),200);
   await expect(editorPanel.getByRole('row').filter({hasText:'临时补充现场图纸复核及会签'})).toBeVisible({timeout:18000});
@@ -496,6 +520,9 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   const [synced]=(await after.json()).data;
   assert.equal(synced.id,planId);
   assert.deepEqual(synced.items[0],originalPlan.items[0]);
+  const formatting={ops:[{insert:'临时补充现场图纸复核及会签',attributes:{bold:true,color:'#d81e06'}}]};
+  assert.deepEqual(synced.rich_text.fields['items.1.name'],formatting);
+  assert.deepEqual(report.rich_text.fields['biz.items.1.name'],formatting);
   assert.deepEqual(synced.items.slice(1).map(item=>[item.source_id,item.name,item.due]),[
     [newId,'临时补充现场图纸复核及会签',fixture.week]
   ]);

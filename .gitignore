@@ -337,6 +337,7 @@
 !/db/046-weekly-collaboration-followups.sql
 !/db/047-weekly-collaboration-outbound.sql
 !/db/048-reported-completion.sql
+!/db/049-filling-text-format.sql
 !/server/progress-status.mjs
 !/server/reported-completions.mjs
 !/tests/reported-completions.test.mjs

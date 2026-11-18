@@ -3,6 +3,8 @@ import {HttpError} from './errors.mjs';
 import {hasManagementRead,withManagementRead} from './management-read.mjs';
 import {monthlyPlanMonth,normalizeMonthlyPlanItems} from './monthly-plans.mjs';
 
+import {validateRichText} from './rich-text.mjs';
+
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const invalid=()=>{throw new HttpError(400,'月度汇总内容或保存标识不正确','invalid_monthly_summary');};
@@ -17,11 +19,15 @@ export function normalizeMonthlyPlanSummary(value,operation,index){
  if(!Object.hasOwn(value,'expected_summary_id')||value.expected_summary_id!==null&&(typeof value.expected_summary_id!=='string'||!uuid.test(value.expected_summary_id)))invalid();
  if(!Array.isArray(value.items)||value.items.length>500)invalid();
  const plain=value.items.map((item,at)=>{
-  if(!object(item)||Object.keys(item).some(key=>!['source_id','mod','name','due','progress'].includes(key))||typeof item.progress!=='string'||item.progress.length>10000||item.progress.includes('\0'))invalid();
-  const {progress,...fixed}=item;
+  if(!object(item)||Object.keys(item).some(key=>!['source_id','mod','name','due','progress','rich_text'].includes(key))||typeof item.progress!=='string'||item.progress.length>10000||item.progress.includes('\0'))invalid();
+  const {progress,rich_text,...fixed}=item;
   return {...fixed,source_id:fixed.source_id??'summary_'+createHash('sha256').update(JSON.stringify([operation,index,at])).digest('hex').slice(0,48)};
  });
- const fixed=normalizeMonthlyPlanItems(plain,null),items=fixed.map((item,at)=>({...item,progress:value.items[at].progress}));
+ const fixed=normalizeMonthlyPlanItems(plain,null),items=fixed.map((item,at)=>{
+  const {progress,rich_text}=value.items[at],row={...item,progress};
+  const rich=validateRichText('monthly_summary_item',rich_text ?? {},row);
+  return Object.keys(rich.fields || {}).length?{...row,rich_text:rich}:row;
+ });
  if(JSON.stringify(items).length>1000000)invalid();
  return {project_id:value.project_id,report_scope_id:value.report_scope_id??null,line:value.line,owner_id:value.owner_id,month:value.month,items,expected_summary_id:value.expected_summary_id?.toLowerCase()??null};
 }
