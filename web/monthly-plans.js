@@ -731,7 +731,9 @@
           return '<tr><td data-label="模块">' + esc(row.plan.line) + (row.item.mod ? ' / ' + itemName(row.plan, 'items.' + row.index + '.mod', row.item.mod) : '')
             + '</td><td data-label="节点事项">' + itemName(row.plan, 'items.' + row.index + '.name', row.item.name)
             + '<div class="muted">' + esc(monthOf(row.plan.plan_month)) + ' 已确认月计划</div></td><td data-label="计划完成时间">' + esc(row.item.due)
-            + '</td><td data-label="当周进展">' + progress + (feedback && feedback.legacy ? '<div class="muted">沿用既有周报反馈，原报告及审批关联保留</div>' : '')
+            + '</td><td data-label="当周进展">' + progress
+            + (global.CompletionReview?.reportedStatus?.(sourceKey(row.plan,row.item), {owner_id:planOwner(row.plan),report:feedback?.record,readOnly:true}) || '')
+            + (feedback && feedback.legacy ? '<div class="muted">沿用既有周报反馈，原报告及审批关联保留</div>' : '')
             + (feedback && feedback.draft ? '<div class="muted">本页反馈，修改后需提交同步管理端</div>' : '')
             + '</td><td data-label="遇到卡点">' + (feedback ? feedback.item.blocker ? itemName(feedback.record, feedback.prefix + 'blocker', feedback.item.blocker) : '未填写卡点' : '本周未反馈') + '</td></tr>';
         }).join('') : '<tr><td colspan="5" class="empty">' + (plans.length ? '本窗口暂无到期的已确认月计划事项。' : '该模块暂无已确认月计划，未确认内容不作为自动汇总来源。') + '</td></tr>') + '</tbody></table></div>';

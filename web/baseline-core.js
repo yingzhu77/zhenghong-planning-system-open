@@ -134,7 +134,9 @@
         + (m.done ? '<div class="muted">基准已标记完成</div>' : '') + (personal && m.standard ? '<div class="muted">完成标准：' + field(m, 'standard') + '</div>' : '') + supplement
         + '</td><td data-label="原计划完成日">' + esc(date(m.plan_date)) + '</td><td data-label="预计完成日（原保存）">' + esc(date(m.forecast_date) || '未填写')
         + '</td>' + (personal ? '<td data-label="节点说明（原保存）">' + (m.note ? field(m, 'note') : '<span class="muted">未填写节点说明</span>')
-          + '</td><td data-label="当周节点进展">' + feedbackHtml(row, 'prog') + '</td><td data-label="当周节点卡点">' + feedbackHtml(row, 'blocker') + '</td>' : '') + '</tr>';
+          + '</td><td data-label="当周节点进展">' + feedbackHtml(row, 'prog')
+          + (cfg.reportedStatus?.(row.sourceKey, {owner_id:row.current?.record?.author_id || S.uid,readOnly:true}) || '')
+          + '</td><td data-label="当周节点卡点">' + feedbackHtml(row, 'blocker') + '</td>' : '') + '</tr>';
     }).join('');
     return filter + note + (result.missingDate ? '<p class="muted">另有 ' + result.missingDate + ' 个当前范围节点缺有效计划日期，未计入到期窗口。</p>' : '')
       + '<div class="' + (personal ? 'tablewrap' : 'overview-table-scroll') + '"><table class="' + (personal ? 'plan-form-table' : 'overview-data-table')

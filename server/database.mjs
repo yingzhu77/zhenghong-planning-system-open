@@ -7,6 +7,7 @@ import { resolveCompletionSource, reportCoordinationSourceItem } from './complet
 import { resolveReportScope } from './report-scopes.mjs';
 import { hasProjectReportingGrant, resolveWritableResidentialLine } from './report-lines.mjs';
 import { preserveSchemeMaster, sanitizeSchemeRows } from './scheme-protection.mjs';
+import { annotateReportProgress, completeFromReport } from './reported-completions.mjs';
 
 const fields = (text) => text.split(/\s+/).filter(Boolean);
 export const TABLES = Object.freeze({
@@ -604,10 +605,14 @@ export async function executeDatabase(pool, user, request, options = {}) {
     const prepared = operation === 'select' ? request : await prepareMutation(client, user, { ...request, operation });
     const input = await preserveSchemeMaster(client, prepared, buildQuery);
     const schemeTable = ['project_master', 'project_drawings'].includes(input.table);
-    const result = await client.query(buildQuery(schemeTable ? { ...input, columns: '*' } : input));
+    const submitReport = input.table === 'reports' && ['insert','upsert','update'].includes(operation)
+      && [].concat(input.values || []).some(row => Object.hasOwn(row,'biz'));
+    const result = await client.query(buildQuery(schemeTable || submitReport ? { ...input, columns: '*' } : input));
     if (['update', 'delete'].includes(operation) && !result.rows.length) throw new HttpError(403, '记录不存在或无权修改');
-    const rows = await sanitizeSchemeRows(client, input.table, result.rows, options);
-    if (!schemeTable || request.columns == null || request.columns === '*') return rows;
+    if (submitReport) for (const row of result.rows) await completeFromReport(client,user,row);
+    const rows = input.table === 'reports' ? result.rows.map(annotateReportProgress)
+      : await sanitizeSchemeRows(client, input.table, result.rows, options);
+    if ((!schemeTable && !submitReport) || request.columns == null || request.columns === '*') return rows;
     const columns = Array.isArray(request.columns) ? request.columns : request.columns.split(',').map(column => column.trim());
     return rows.map(row => Object.fromEntries(columns.map(column => [column, row[column]])));
   });

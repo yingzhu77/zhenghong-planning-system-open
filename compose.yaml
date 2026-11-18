@@ -60,6 +60,7 @@ services:
       - ./db/045-weekly-collaboration-supplements.sql:/docker-entrypoint-initdb.d/045-weekly-collaboration-supplements.sql:ro
       - ./db/046-weekly-collaboration-followups.sql:/docker-entrypoint-initdb.d/046-weekly-collaboration-followups.sql:ro
       - ./db/047-weekly-collaboration-outbound.sql:/docker-entrypoint-initdb.d/047-weekly-collaboration-outbound.sql:ro
+      - ./db/048-reported-completion.sql:/docker-entrypoint-initdb.d/048-reported-completion.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s

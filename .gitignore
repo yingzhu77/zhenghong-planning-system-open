@@ -336,6 +336,10 @@
 !/db/045-weekly-collaboration-supplements.sql
 !/db/046-weekly-collaboration-followups.sql
 !/db/047-weekly-collaboration-outbound.sql
+!/db/048-reported-completion.sql
+!/server/progress-status.mjs
+!/server/reported-completions.mjs
+!/tests/reported-completions.test.mjs
 !/tests/materials-only-viewers.test.mjs
 
 !/scripts/enable-weekly-collaboration.mjs

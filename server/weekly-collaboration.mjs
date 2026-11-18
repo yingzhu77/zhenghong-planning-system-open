@@ -11,6 +11,7 @@ import { validateReportAttachmentReferences } from './report-attachments.mjs';
 import { residentialDisciplinesForProject } from './report-lines.mjs';
 import { configuredReportScopes, resolveReportScope } from './report-scopes.mjs';
 import { validateRichText } from './rich-text.mjs';
+import { annotateReportProgress, completeFromReport } from './reported-completions.mjs';
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const weekFilter = 'project_id=$1 AND line=$2 AND week=$3::date';
@@ -459,6 +460,8 @@ export function createWeeklyCollaboration(pool) {
       ? (await client.query('SELECT * FROM app_private.weekly_withdrawal_info($1,$2,$3,$4::date)',
         [...scope.eligibility,scope.week])).rows[0]
       : null;
+    const automaticCompletion = report && withdrawal?.can_withdraw
+      && (await client.query('SELECT app_private.report_has_automatic_completion($1) AS found',[report.id])).rows[0].found;
     if (!settings && draft && presenceInput) {
       const {tab,activeCell}=presenceInput;
       touch(user,scope,tab,validCell(plan,activeCell)?activeCell:null);
@@ -481,14 +484,14 @@ export function createWeeklyCollaboration(pool) {
       can_publish:!settings && status === 'ready' && submitter.user_id === user.id
         && (!plan.unplanned || plan.items.length>0 || coordination.rows.length>0
           || Object.keys(followupRevisions).some(ownerId=>ownFeedback(draft,ownerId).rows.some(row=>row.progress.trim()))),
-      can_withdraw:status === 'published' && !!withdrawal?.can_withdraw,
-      withdraw_blocked:status === 'published' && !!withdrawal?.withdraw_blocked,
+      can_withdraw:status === 'published' && !!withdrawal?.can_withdraw && !automaticCompletion,
+      withdraw_blocked:status === 'published' && !!(withdrawal?.withdraw_blocked || automaticCompletion),
       withdrawn_revision:withdrawal?.withdrawn_revision ?? null,
       withdrawn_attachment_ids:withdrawal?.withdrawn_attachment_ids ?? [],
       can_configure:settings && !(await ownerIsLocked(client,scope,draft)),
       eligible:settings ? eligible : [], member_ids:settings ? draft?.member_ids ?? null : undefined, plan:settings || status !== 'ready' ? null : plan,
       month_plans:settings ? undefined : monthPlans,
-      cells:!settings && status === 'ready' ? draft.cells : {}, report, last_change:last || null, presence:online,
+      cells:!settings && status === 'ready' ? draft.cells : {}, report:report && annotateReportProgress(report), last_change:last || null, presence:online,
       my_followups:feedback.rows,my_followups_revision:feedback.revision,followup_revisions:followupRevisions,
       coordination_items:coordination.rows,coordination_revision:coordination.revision
     };
@@ -1049,13 +1052,14 @@ export function createWeeklyCollaboration(pool) {
         }
       }
       await client.query("SELECT set_config('app.weekly_collaboration_publish',$1,true)",[operation]);
-      const {id}=(await client.query(`INSERT INTO public.reports(project_id,period,line,author_id,author_name,biz,rich_text,status,self_speed,
-        report_scope_id,scope_project_ids,scope_week,coord_items,coord) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12,$13::jsonb,$14) RETURNING id`,
+      const savedReport=(await client.query(`INSERT INTO public.reports(project_id,period,line,author_id,author_name,biz,rich_text,status,self_speed,
+        report_scope_id,scope_project_ids,scope_week,coord_items,coord) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12,$13::jsonb,$14) RETURNING *`,
         [projectId,period,line,user.id,profile.name,JSON.stringify(row.biz),JSON.stringify(rich),status,speed,
           row.report_scope_id || null,row.scope_project_ids || null,row.scope_week || null,
           JSON.stringify(coordItems),coordItems.length?coordItems.map(item=>item.who+'：'+item.what).join('\n'):'无'])).rows[0];
+      await completeFromReport(client,user,savedReport,true);
       await client.query(`UPDATE app_private.weekly_collaboration_drafts SET revision=$4,published_revision=$5,published_report_id=$6
-        WHERE ${weekFilter}`,[...scope.weekValues,revision,current.revision,id]);
+        WHERE ${weekFilter}`,[...scope.weekValues,revision,current.revision,savedReport.id]);
       return state(client,user,scope,false);
     });
     notify(scope);

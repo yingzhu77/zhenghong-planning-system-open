@@ -15,6 +15,7 @@ import { listMonthlyPlanSummaries } from './monthly-plan-summaries.mjs';
 import { listCommercialModuleGrants, saveCommercialModuleGrant } from './commercial-module-grants.mjs';
 import { startAdminPlanAI, chatAdminPlanAI, getAdminPlanAISession, reviseAdminPlanAI, confirmAdminPlanAI, closeAdminPlanAI } from './admin-plan-ai.mjs';
 import { listCompletions, previewCompletion, requestCompletion, reviewCompletion, withdrawCompletion } from './completions.mjs';
+import { supplyReportedCompletionDate } from './reported-completions.mjs';
 import { completionStatistics } from './completion-statistics.mjs';
 import { projectPlanStatistics } from './project-plan-statistics.mjs';
 import { addProjectReportingProfession, grantProjectReportingProfession, listProjectReportingGrants } from './project-reporting-professions.mjs';
@@ -316,7 +317,7 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   app.post('/api/project-reporting-grants', auth.requireUser, express.json({ limit: '8kb' }), asyncRoute(async (req, res) => {
     res.json({ data: await grantProjectReportingProfession(pool, req.user, req.body ?? {}), error: null });
   }));
-  for (const [route, handler] of [['preview', previewCompletion], ['request', requestCompletion], ['review', reviewCompletion], ['withdraw', withdrawCompletion]]) {
+  for (const [route, handler] of [['preview', previewCompletion], ['request', requestCompletion], ['review', reviewCompletion], ['withdraw', withdrawCompletion], ['progress-date', supplyReportedCompletionDate]]) {
     app.post('/api/completions/' + route, auth.requireUser, express.json({ limit: '64kb' }), asyncRoute(async (req, res) => {
       res.json({ data: await handler(pool, req.user, req.body || {}), error: null });
     }));

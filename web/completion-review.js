@@ -97,7 +97,9 @@
   function badge(key, owner) { return cfg ? badgeRow(find(key, owner)) : ''; }
   function badgeRow(row) {
     var status = effective(row), cls = Object.prototype.hasOwnProperty.call(LABEL, status) ? status : 'none';
-    var label = isExtension(row) && ['pending', 'approved', 'rejected', 'withdrawn'].includes(status)
+    var automatic = status === 'approved' && !row.reviewer_id && row.source_snapshot?.completion_feedback;
+    var label = automatic ? (row.completion_category === 'unknown' ? '已完成 · 未设有效期限' : categoryLabel(row)) + ' · 系统识别'
+      : isExtension(row) && ['pending', 'approved', 'rejected', 'withdrawn'].includes(status)
       ? { pending: '延期待审核', approved: '延期已批准', rejected: '延期已退回', withdrawn: '延期已撤回' }[status] : LABEL[status] || '审核状态待核对';
     return '<span class="completion-badge completion-' + cls + '">' + esc(label) + '</span>';
   }
@@ -114,11 +116,55 @@
     links.set(cacheKey, token); tokens.set(token, { key: key, options: { owner_id: owner, readOnly: !!opts.readOnly, id: opts.id, initiated: !!opts.initiated } });
     return token;
   }
+  function recognitionFor(key, options) {
+    var opts = options || {}, owner = opts.owner_id || S.uid;
+    var found = opts.report
+      ? opts.report.progress_recognition?.find(function (entry) { return entry.source_key === key && entry.owner_id === owner; })
+      : cfg.recognition?.(key, owner);
+    return found && {...found,report_id:opts.report?.id || found.report_id};
+  }
+  function canEnterReportedDate(found, owner) {
+    return found?.status === 'awaiting_date' && found.report_id && owner === S.uid && role() === 'pm';
+  }
+  function recognitionHtml(key, owner, found, allowDate) {
+    if (!found) return '';
+    var label = { incomplete:'未完成', unclear:'进展待明确', awaiting_date:'已完成 · 待补日期',
+      on_time:'完成情况待核对', late:'完成情况待核对', completed_without_deadline:'完成情况待核对' }[found.status];
+    if (!label) return '';
+    var html = '<span class="completion-badge completion-none">' + label + '</span>';
+    if (!allowDate || !canEnterReportedDate(found,owner)) return html;
+    var token = register(key, { owner_id:owner });
+    return '<span class="reported-completion-date" data-completion-report="' + esc(found.report_id) + '">' + html
+      + '<label>实际完成日期 <input type="date" required></label>'
+      + '<button type="button" class="btn sm" onclick="CompletionReview.saveReportedDate(' + token + ',this)">保存并销项</button></span>';
+  }
+  async function saveReportedDate(token, button) {
+    var entry = tokens.get(token), control = button.closest('[data-completion-report]');
+    var input = control?.querySelector('input[type=date]');
+    if (role() !== 'pm' || !entry || entry.options.owner_id !== S.uid || button.disabled || !input || !input.reportValidity()) return;
+    var stamp = context();
+    stash(false);
+    button.disabled = true;
+    try {
+      check(await cfg.request('/api/completions/progress-date', {report_id:control.dataset.completionReport, source_key:entry.key, completion_date:input.value}));
+      if (!sameContext(stamp)) return;
+      var loaded = await cfg.loadData(['completions'], true);
+      if (sameContext(stamp)) {
+        cfg.toast(loaded ? '已根据实际完成日期销项' : '已销项，状态读取失败，请刷新数据', loaded ? '' : 'err');
+        cfg.render();
+      }
+    } catch (error) {
+      if (sameContext(stamp)) cfg.toast(message(error), 'err');
+    } finally { if (button.isConnected) button.disabled = false; }
+  }
   function actionHtml(key, options) {
     if (!cfg) return '';
     var opts = options || {}, row = find(key, opts.owner_id), owner = opts.owner_id || S.uid;
     var readonly = !!opts.readOnly || !(role() === 'pm' && owner === S.uid || canReview(row));
-    var html = badgeRow(row);
+    var feedback = (!row || isExtension(row) && row.status!=='pending') && recognitionFor(key,opts);
+    var recognized = recognitionHtml(key,owner,feedback,!readonly);
+    if (!readonly && canEnterReportedDate(feedback,owner)) return recognized;
+    var html = recognized || badgeRow(row);
     if (readonly && !row) return html;
     if (role() === 'ops' && !row) return html;
     var token = register(key, { owner_id: opts.owner_id, readOnly: readonly });
@@ -481,7 +527,14 @@
     return { get: function () { return global.ZHRichText && global.ZHRichText.doc(m, field); },
       set: function (doc) { if (!editable() || !global.ZHRichText) return; m._rich = m._rich || {}; m._rich[field] = doc; m[field] = global.ZHRichText.text(doc); } };
   }
-  global.CompletionReview = { configure: configure, binding: binding, badge: badge, actionHtml: actionHtml, approved: approved, completionFor: completionFor, effectiveDue: effectiveDue, renderQueue: renderQueue,
+  function reportedStatus(key, options) {
+    if (!cfg || !key) return '';
+    var opts = options || {}, row = find(key,opts.owner_id);
+    if (row && (!isExtension(row) || row.status==='pending')) return badgeRow(row);
+    return recognitionHtml(key,opts.owner_id || S.uid,recognitionFor(key,opts),!opts.readOnly) || (row ? badgeRow(row) : '');
+  }
+
+  global.CompletionReview = { configure: configure, binding: binding, badge: badge, actionHtml: actionHtml, reportedStatus: reportedStatus, saveReportedDate: saveReportedDate, approved: approved, completionFor: completionFor, effectiveDue: effectiveDue, renderQueue: renderQueue,
     loadInitiated: loadInitiated, renderInitiatedQueue: renderInitiatedQueue, filterInitiated: filterInitiated, moreInitiated: moreInitiated, refreshInitiated: refreshInitiated, invalidateInitiated: invalidateInitiated,
     snapshotsHtml: snapshotsHtml, overlayHtml: overlayHtml, open: open, openKey: openKey, close: close, refresh: refresh,
     request: requestCompletion, review: review, changeType: changeType, dateChanged: dateChanged, filter: setFilter, loadMore: loadMore };

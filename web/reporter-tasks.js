@@ -410,6 +410,7 @@
       + (visible.length ? visible.map(function (entry) {
         var row=entry.row,index=entry.index;
         var owner=row.owner_id || S.uid, canEdit=editable && !row.submitted;
+        var inferred=!canEdit && global.CompletionReview?.reportedStatus?.(row.source_key,{owner_id:owner,readOnly:owner!==S.uid});
         var effectiveDue=row.effective_due || dueFor(row.source_key,row.due,owner);
         return '<tr data-followup-key="'+esc(row.source_key)+'" data-followup-index="'+index+'"><td data-label="类别"><b>' + esc(pendingCategory(row)) + '</b></td>'
           + '<td data-label="提出人">'+esc(pendingProposer(row))+'<div class="muted">'+origin(row)+'</div></td>'
@@ -422,7 +423,7 @@
           + (row.meeting_conflict ? '<div class="reporter-source-note" role="alert">其他入口已有更新，本机输入保留。<div class="reporter-conflict-actions"><button type="button" class="btn ghost sm" onclick="ReporterTasks.resolveMeeting('+index+',false)">采用最新进展</button><button type="button" class="btn ghost sm" onclick="ReporterTasks.resolveMeeting('+index+',true)">保留本机进展</button></div></div>' : '')
           + (owner===S.uid?'<div class="reporter-followup-actions">'+reviewAction(row.source_key)+'</div>':'')
           :published && !row.submitted?'<div class="reporter-feedback-state">待补填 · 未纳入已提交周报</div>'
-          :cfg.richItem(row,'progress','本期未填写')+'<div class="reporter-feedback-state">'+esc(statusText(row.status))+'</div>')
+          :cfg.richItem(row,'progress','本期未填写')+'<div class="reporter-feedback-state">'+(inferred || esc(statusText(row.status)))+'</div>')
           + (row.filled_by && row.filled_by!==owner?'<div class="muted">由 '+esc(row.filled_by_name || '本周负责人')+' 代填</div>':'')+'</td>'
           + '</tr>';
       }).join('') : '<tr><td colspan="5" class="empty">' + (collaboration?.error?'待办读取失败，请更新后重试。'

@@ -102,7 +102,7 @@ node scripts/restore.mjs backups/实际备份目录
 
 更新源码无需删卷。不得把 `docker compose down -v` 当作更新命令；不得用新建空库覆盖现有业务库。已有数据库不会自动重跑初始化 SQL，数据库结构升级需明确执行对应迁移并验证。
 
-新空库按 Compose 顺序初始化至 039。已有卷的升级顺序、兼容边界和恢复检查见[数据库升级](docs/MIGRATIONS.md)。
+新空库按 Compose 顺序初始化至 048。已有卷的升级顺序、兼容边界和恢复检查见[数据库升级](docs/MIGRATIONS.md)。
 
 ## 部署到其他服务器
 

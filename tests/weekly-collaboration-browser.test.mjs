@@ -385,7 +385,7 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   const followupRow = (page,key=followupKey) => page.locator('[data-followup-key="' + key + '"]');
   await expect(followupRow(editor)).toContainText(followup);
   await expect(followupRow(lead)).toContainText('承办人 匿名设计协作者');
-  const feedback = '已核对图纸并向对方反馈';
+  const feedback = fixture.week+'已全部完成。';
   await followupRow(editor).locator('.ql-editor').fill(feedback);
   const feedbackSaved = editor.waitForResponse(response => response.url().endsWith('/api/weekly-collaboration/followups'));
   const editorFooter=editor.locator('[data-weekly-collaboration-footer]');
@@ -443,7 +443,7 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   await expect(publish).toBeEnabled({timeout:18000});
   await publish.click();
   await expect(followupRow(lead,delegatedKey).locator('.ql-editor')).toBeFocused();
-  const delegatedFeedback='已代组员核对，待项目方会签';
+  const delegatedFeedback='完成。';
   await followupRow(lead,delegatedKey).locator('.ql-editor').fill(delegatedFeedback);
   const artifacts='.local/weekly-collaboration-browser';
   await mkdir(artifacts,{recursive:true});
@@ -469,6 +469,23 @@ test('已确认月计划下两人可补充本周事项，负责人提交后同�
   assert.equal(official.get(delegatedKey).owner_id,'design-pilot-editor');
   assert.equal(official.get(delegatedKey).progress,delegatedFeedback);
   assert.equal(official.get(delegatedKey).filled_by,'design-pilot-lead');
+  const [auto]=(await fixture.admin.query('SELECT owner_id,reviewer_name,status FROM public.completion_requests WHERE source_key=$1',[followupKey])).rows;
+  assert.deepEqual(auto,{owner_id:'design-pilot-editor',reviewer_name:'系统识别',status:'approved'});
+  const noDateRow=followupRow(editor,delegatedKey);
+  await expect(noDateRow).toContainText('已完成 · 待补日期',{timeout:18000});
+  await expect(followupRow(editor)).toContainText('按时完成 · 系统识别');
+  await noDateRow.screenshot({path:artifacts+'/reported-completion-date.png'});
+  const crossOwner=await lead.request.post(fixture.base+'/api/completions/progress-date',{headers,data:{
+    report_id:String(report.id),source_key:delegatedKey,completion_date:fixture.week
+  }});
+  assert.equal(crossOwner.status(),403);
+  await noDateRow.getByLabel('实际完成日期').fill(fixture.week);
+  const [dateSaved]=await Promise.all([
+    editor.waitForResponse(response=>response.url().endsWith('/api/completions/progress-date')),
+    noDateRow.getByRole('button',{name:'保存并销项'}).click()
+  ]);
+  assert.equal(dateSaved.status(),200,JSON.stringify((await dateSaved.json()).error));
+  await expect(noDateRow).toContainText('按时完成 · 系统识别');
   assert.deepEqual(report.coord_items.map(row=>[row.source_id,row.who_id,row.what,row.by]),[
     [savedRow.source_id,receiver,outgoing,fixture.week]
   ]);

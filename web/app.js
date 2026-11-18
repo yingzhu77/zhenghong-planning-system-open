@@ -1282,6 +1282,7 @@
       projectName:projName,snapshotHtml:function(report){return reportSnapshotHtml(report,{reference:true});}});
     if(window.PlanningAI)window.PlanningAI.configure({getContext:planningAIContext,request:planningAIRequest,memoryRequest:planningAIMemoryRequest,onApply:planningAIApply,onUndo:planningAIUndo,onViewDraft:function(options){if(options && options.month && window.MonthlyPlans)window.MonthlyPlans.aiView(options.month);var target=options && options.month && document.querySelector('[data-plan-month="'+options.month+'"]') || document.querySelector('[data-rich-editor-for="bi_pg_0"]') || document.getElementById('bi_pg_0');if(target)target.scrollIntoView({behavior:'smooth',block:'center'});},notify:toast});
     if(window.BaselineCore)window.BaselineCore.configure({S:S,esc:esc,richItem:richItem,weekWindow:reportWindow,
+      reportedStatus:function(key,options){return window.CompletionReview?.reportedStatus?.(key,options) || '';},
       baselineState:function(){return dataState.milestones || {};},render:function(){renderShell(true);},flush:snapDraft});
     if(window.ManagementReader)window.ManagementReader.configure({S:S,esc:esc,richItem:richItem,request:reporterRequest,
       render:function(){renderShell(true);},toast:toast,canRead:canReadManagement,
@@ -1317,7 +1318,7 @@
     if (window.CompletionReview) window.CompletionReview.configure({S:S,esc:esc,request:reporterRequest,loadData:loadData,
       richItem:richItem,richCopy:richCopy,richCollect:richCollect,
       render:function(){renderShell(true);},toast:toast,flush:snapDraft,saveDraft:saveDraft,
-      queryCompletions:queryCompletions,loadMoreCompletions:loadMoreCompletions,
+      recognition:recognitionFromCurrentReport,queryCompletions:queryCompletions,loadMoreCompletions:loadMoreCompletions,
       afterSaved:async function(row){return loadData(row.kind==='milestone'?['milestones','completions']:['completions'],true);}});
     if (window.ReportAttachments) window.ReportAttachments.configure({S:S,esc:esc,render:function(){renderShell(true);},toast:toast,flush:snapDraft,saveDraft:saveDraft,
       canEditScope:function(){return !S.pmScopeTransition && canCapturePMDraft() && (!isCom(S.pmProject) || canReportBizLine(S.pmLine));}});
@@ -1333,6 +1334,24 @@
     if (window.ReportAttachments && window.ReportAttachments.isUploading()) { toast('附件正在处理中，请完成后再切换或提交。','err'); return true; }
     return false;
   }
+  var recognitionCache;
+  function recognitionFromCurrentReport(key,owner) {
+    var active=activeWeeklyCoordination()?.report || S.pmReport;
+    if(!recognitionCache || recognitionCache.reports!==S.reports || recognitionCache.active!==active
+      || recognitionCache.project!==S.pmProject || recognitionCache.period!==S.pmPeriod){
+      var reports=(S.reports || []).filter(function(row){
+        return row.progress_recognition?.length && row.project_id===S.pmProject && reportInPeriod(row,S.pmPeriod);
+      });
+      if(active && !reports.some(function(row){return row.id===active.id;}))reports.push(active);
+      reports.sort(function(a,b){return String(a.updated_at || a.submitted_at || '').localeCompare(String(b.updated_at || b.submitted_at || ''));});
+      var entries=new Map();
+      for(var report of reports)for(var row of report.progress_recognition || [])
+        entries.set(JSON.stringify([row.source_key,row.owner_id]),{...row,report_id:report.id});
+      recognitionCache={reports:S.reports,active:active,project:S.pmProject,period:S.pmPeriod,entries:entries};
+    }
+    return recognitionCache.entries.get(JSON.stringify([key,owner]));
+  }
+
   function completionQuery() {
     if (!S.completionQuery) S.completionQuery = {status:S.profile && S.profile.role==='ops'?'pending':''};
     return S.completionQuery;
@@ -1531,7 +1550,7 @@
       form: ['pms', 'reports', 'milestones', 'orgList', 'projectPeople', 'reviews', 'leaderNotes', 'reporterTasks', 'coordinationTasks', 'monthlyPlans', 'completions', 'reportAttachments', 'nextCollaboration'],
       library: ['pms'],
       mline: ['pms', 'milestones', 'completions'], history: ['reports', 'coordinationTasks', 'monthlyPlans', 'completions', 'reportAttachments'],
-      professionalOverview: ['reports', 'reportAttachments'],
+      professionalOverview: ['reports', 'completions', 'reportAttachments'],
       completion: ['completions'],
       meetings: ['reporterTasks'],
       board: ['members', 'pms', 'milestones', 'reports', 'reviews'],
@@ -2411,8 +2430,8 @@
         }
         if(state.report){
           var report=state.report, owner=report.author_id;
-          var key=planSourceKey(report,'items',item);
-          return key?window.CompletionReview.actionHtml(key,{owner_id:owner,readOnly:owner!==S.uid}):'';
+          var key=reportProgressSourceKey(report,'items',item);
+          return key?window.CompletionReview.actionHtml(key,{owner_id:owner,readOnly:owner!==S.uid,report:report}):'';
         }
         if(plan.id && !plan.unplanned){
           return window.CompletionReview.actionHtml('monthly:'+scope.project_id+':'+(plan.confirmed_id || plan.id)+':'+item.source_id,
@@ -2420,7 +2439,13 @@
         }
         return '<span class="muted">提交本期填报后可申报完成或延期。</span>';
       },
-      onPublicationObserved:function(){invalidateData(['monthlyPlans']);},
+      onPublicationObserved:function(){
+        invalidateData(['monthlyPlans','reports','completions']);
+        var epoch=dataEpoch,navigation=pageNavigation;
+        loadData(['reports','completions']).then(function(){
+          if(epoch===dataEpoch && navigation===pageNavigation && S.view==='form'){snapDraft(true);renderShell(true);}
+        });
+      },
       notify:toast,onPublished:function(report){
         return App.openProfessionalOverview(report.id,report.updated_at || report.submitted_at,{report:report});
       }};
@@ -2827,12 +2852,17 @@
   }
   function planSourceKey(report,group,item) {
     if(!report || report.author_id!==S.uid || isCom(report.project_id) && !canReportBizLine(report.line,report.project_id))return '';
+    return reportProgressSourceKey(report,group,item);
+  }
+  function reportProgressSourceKey(report,group,item) {
+    if(!report)return '';
     if(group==='items' && item.monthly_plan_id && report.biz && Array.isArray(report.biz.monthly_plan_ids)
       && report.biz.monthly_plan_ids.includes(item.monthly_plan_id) && item.source_id)return 'monthly:'+report.project_id+':'+item.monthly_plan_id+':'+item.source_id;
     if(group==='items' && report.biz && report.biz.monthly_plan_id && item.source_id)return 'monthly:'+report.project_id+':'+report.biz.monthly_plan_id+':'+item.source_id;
-    var baseline=group==='nodes' && msOf(report.project_id).filter(function(m){return item.milestone_id!=null?String(m.id)===String(item.milestone_id):!item.source_id && m.name===item.name;})[0];
+    var pid=item.project_id || report.project_id;
+    var baseline=group==='nodes' && msOf(pid).filter(function(m){return item.milestone_id!=null?String(m.id)===String(item.milestone_id):!item.source_id && m.name===item.name;})[0];
     var stored=group==='nodes' && !item.source_id?nodesOf(report).filter(function(n){return n.name===item.name;})[0]:item;
-    return baseline?'milestone:'+report.project_id+':'+baseline.id:stored && stored.source_id?'plan:'+report.project_id+':'+report.id+':'+group+':'+stored.source_id:'';
+    return baseline?'milestone:'+pid+':'+baseline.id:stored && stored.source_id?'plan:'+report.project_id+':'+report.id+':'+group+':'+stored.source_id:'';
   }
   function effectiveItemDue(key,due) {
     return window.CompletionReview && window.CompletionReview.effectiveDue?window.CompletionReview.effectiveDue(key,due,S.uid):due;
@@ -2893,7 +2923,7 @@
         (items || []).forEach(function(x){if(!x || !String(x.what || '').trim())return;
           var key=x.source_id?'coord:'+pid+':'+r.id+':'+group[0]+':'+x.source_id:'';
           if(r.period!==S.pmPeriod && key && window.CompletionReview && window.CompletionReview.approved(key,S.uid))return;
-          rows.push('<tr><td>'+richItem(x,'what')+'<div class="muted">'+esc(r.period)+'</div></td><td>'+esc(x.who || x.to || '未指定')+'</td><td class="pm-col-date">'+esc(sd(effectiveItemDue(key,x.by || x.due)))+'</td><td class="pm-col-action">'+(group[0]==='coord'?'<span class="muted">承办人申报后，由本人审核确认</span>':itemAction(key))+'</td></tr>');
+          rows.push('<tr><td>'+richItem(x,'what')+'<div class="muted">'+esc(r.period)+'</div></td><td>'+esc(x.who || x.to || '未指定')+'</td><td class="pm-col-date">'+esc(sd(effectiveItemDue(key,x.by || x.due)))+'</td><td class="pm-col-action">'+(group[0]==='coord'?(window.CompletionReview?.reportedStatus?.(key,{owner_id:x.who_id,readOnly:true}) || '<span class="muted">等待承办人反馈</span>'):itemAction(key))+'</td></tr>');
         });
       });
       return rows.length?'<section class="card"><div class="cardhd"><h3>'+group[1]+'</h3></div><div class="tablewrap"><table class="pm-assignment-table"><thead><tr><th>事项内容</th><th>协调／接收人</th><th class="pm-col-date">最晚时间</th><th class="pm-col-action">事项申报</th></tr></thead><tbody>'+rows.join('')+'</tbody></table></div></section>':'';
@@ -3656,8 +3686,10 @@
       modules.push(module);
       sources.push(entry.source);
       layoutItems.push({source:actualProject?projName(actualProject):'统一范围',mod:entry.module || '未分类',name:item.name || '',due:sd(item.due),progress:item.prog,blocker:item.blocker});
+      var recognition=r.progress_recognition?.length && window.CompletionReview?.reportedStatus?.(reportProgressSourceKey(r,'items',item),
+        {owner_id:r.author_id,report:r,readOnly:r.author_id!==S.uid || S.view!=='professionalOverview'});
       rows.push((withSource?[overviewActualSource(r,item)]:[]).concat([String(rows.length+1),module,richItem(item,'name','未命名计划事项')+overviewRowSource(r,reports.length>1),
-        esc(sd(item.due)),(item.prog?richItem(item,'prog'):r._monthly_preview?'<span class="overview-empty" title="月计划已确认，本周尚未提交">本周未提交</span>':overviewEmpty('未填写'))+(item.blocker?'<div class="plan-blocker"><b>遇到卡点：</b>'+richItem(item,'blocker')+'</div>':'')]));
+        esc(sd(item.due)),(item.prog?richItem(item,'prog'):r._monthly_preview?'<span class="overview-empty" title="月计划已确认，本周尚未提交">本周未提交</span>':overviewEmpty('未填写'))+(recognition?'<div>'+recognition+'</div>':'')+(item.blocker?'<div class="plan-blocker"><b>遇到卡点：</b>'+richItem(item,'blocker')+'</div>':'')]));
     });
     var widths=summaries && summaries.columnWidths?summaries.columnWidths(layoutItems,{sequence:true,source:withSource,balanceProgress:true}):null;
     if(widths && withSource)widths=[widths[1],widths[0]].concat(widths.slice(2));
