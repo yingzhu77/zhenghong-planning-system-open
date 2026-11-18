@@ -11,27 +11,27 @@ function appHarness() {
   sandbox.window=sandbox;vm.createContext(sandbox);
   for(const name of ['rich-text.js','planning-windows.js','report-scopes.js','reporter-tasks.js'])vm.runInContext(readFileSync(new URL(name,web),'utf8'),sandbox);
   const source=readFileSync(new URL('app.js',web),'utf8'),boundary=source.indexOf('  (async function boot() {');assert.ok(boundary>0);
-  vm.runInContext(source.slice(0,boundary)+'\nwindow.audit={S,preparePM,configureReporter,currentPeriod,viewPMCenter,criticalWorkItems};\n})();',sandbox);
+  vm.runInContext(source.slice(0,boundary)+'\nwindow.audit={S,preparePM,configureReporter,currentPeriod,viewReporterForm,criticalWorkItems};\n})();',sandbox);
   const h=sandbox.audit,S=h.S,period=h.currentPeriod(),week=sandbox.PlanningWindows.periodStart(period),ids=['zhx1','zhx2','klq'];
   Object.assign(S,{uid:'pm',session:{},profile:{user_id:'pm',name:'匿名PM',role:'pm',status:'approved',project_id:'zhx1'},projects:ids.map(id=>({id,name:'原实际项目-'+id,project_type:'res',active:true})),reportScopes:[{id:'zhenghongxu-residential',name:'正弘序',anchor_project_id:'zhx1',project_ids:ids,effective_week:'2026-10-19',period_week:week,active_for_period:true,blocked_weeks:[]}],pms:ids.map(id=>({user_id:'pm',project_id:id})),pmProject:'zhx1',pmPeriod:period,view:'center',reports:[],milestones:[],leaderNotes:[],reporterTasks:[],followupRows:[]});
   return {...h,sandbox,week};
 }
-test('实际个人工作台读取住宅全组安排并沿每个真实项目申报，显式空反馈不回填实时进展',async()=>{
+test('本期填报读取住宅全组安排并沿每个真实项目申报，显式空反馈不回填实时进展',async()=>{
   const h=appHarness(),S=h.S;
   S.reporterTasks=[task('zhx1','anchor'),task('zhx2','phase2'),task('klq','kela'),task('zhx2','special','special'),task('klq','legacy','legacy'),{...task('outside','foreign')},{...task('zhx2','other-owner'),owner_id:'someone-else'}].map(row=>({...row,created_at:h.week+'T00:00:00Z'}));
   S.leaderNotes=[{id:'original-note',project_id:'klq',owner_id:'pm',kind:'ceo_brief',what:'原可乐领导要求',period:S.pmPeriod,created_at:h.week+'T00:00:00Z'},
     {id:'unassigned-note',project_id:'zhx2',kind:'pzo_note',what:'原二期待核对领导要求',period:S.pmPeriod}];
   const before=JSON.stringify({tasks:S.reporterTasks,notes:S.leaderNotes});await h.preparePM();
   S.followupRows=S.followupRows.map(row=>row.source_key==='meeting:zhx2:phase2'?{...row,progress:''}:row);
-  const requirements=h.sandbox.ReporterTasks.requirementsHtml('zhx1'),center=h.viewPMCenter();
+  const requirements=h.sandbox.ReporterTasks.requirementsHtml('zhx1'),form=h.viewReporterForm();
   for(const [project,id] of [['zhx1','anchor'],['zhx2','phase2'],['klq','kela']]){
     assert.match(requirements,new RegExp('data-meeting-key="meeting:'+project+':'+id+'"'));
-    assert.match(requirements,new RegExp('data-claim="meeting:'+project+':'+id+'"'));assert.match(center,new RegExp('原事项-'+id));
+    assert.match(requirements,new RegExp('data-claim="meeting:'+project+':'+id+'"'));assert.match(form,new RegExp('原事项-'+id));
   }
   assert.match(requirements,/data-claim="leader:klq:original-note"/);assert.doesNotMatch(requirements,/leader:zhx1:original-note/);
   assert.match(requirements,/实际项目：原实际项目-zhx2/);assert.match(requirements,/原二期待核对领导要求/);
   assert.doesNotMatch(requirements,/原事项-foreign|原事项-other-owner|原进展-phase2/);
-  assert.match(center,/meeting:zhx2:special/);assert.match(center,/meeting:klq:legacy/);
+  assert.match(form,/meeting:zhx2:special/);assert.match(form,/meeting:klq:legacy/);
   const keys=Array.from(h.criticalWorkItems('zhx1'),row=>row.source_key);assert.ok(keys.includes('meeting:zhx2:phase2'));assert.ok(keys.includes('meeting:klq:kela'));
   assert.equal(JSON.stringify({tasks:S.reporterTasks,notes:S.leaderNotes}),before,'读取组任务不得重绑原项目或修改原记录');
 });

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { chromium, expect } from '@playwright/test';
 import { createApp } from '../server/app.mjs';
 import { reportWeekStart } from '../server/database.mjs';
+import { previewCompletion, requestCompletion, reviewCompletion } from '../server/completions.mjs';
 import { seedDemo } from '../scripts/seed-demo.mjs';
 import { initializedDatabase, testPool } from './helpers/pglite-pool.mjs';
 import { makeAdminPlanWorkbook, adminPlanSheet, adminPlanTitle, adminPlanHeaders, adminPlanRow, adminPlanInline } from './helpers/admin-plan-workbook.mjs';
@@ -30,7 +31,7 @@ async function runtime(t, provider = {}) {
     await new Promise(resolve => { server.close(resolve); server.closeAllConnections?.(); });
     await pool.end(); await admin.end(); await db.close();
   });
-  return { admin, url, project, week, month, accounts };
+  return { admin, pool, url, project, week, month, accounts };
 }
 async function login(browser, f, id, errors) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } }), page = await context.newPage();
@@ -40,6 +41,193 @@ async function login(browser, f, id, errors) {
   await page.getByRole('button', { name: '登录', exact: true }).click(); await expect(page.locator('.planning-mainnav')).toBeVisible();
   return page;
 }
+
+test('组织树和全局姓名搜索可区分同名账号，并保存原权限编辑', {timeout:90000}, async t=>{
+  const f=await runtime(t),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];
+  t.after(()=>browser.close());
+  await f.admin.query("UPDATE public.profiles SET name='匿名同名员工' WHERE user_id IN ('demo-pm-res','demo-pm-com')");
+  await f.admin.query(`INSERT INTO app_private.personnel_directory(user_id,division,team,title,sort_order)
+    VALUES('demo-pm-res','示例项目部','工程组','工程经理',10),
+      ('demo-pm-com','示例设计部','设计组','建筑设计师',20)`);
+  const page=await login(browser,f,'demo-ops',errors);
+  await page.getByRole('button',{name:'系统设置',exact:true}).click();
+  await page.getByRole('button',{name:'成员与权限',exact:true}).click();
+  const nav=page.getByRole('navigation',{name:'人员组织'});
+  const rows=page.locator('[data-directory-member]');
+  await expect(nav.getByRole('button',{name:'示例项目部',exact:true})).toBeVisible();
+  await expect(nav.getByRole('button',{name:'未归类',exact:true})).toBeVisible();
+  const toggle=nav.getByRole('button',{name:'示例项目部下的组别'});
+  await expect(toggle).toHaveAttribute('aria-expanded','false');
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded','true');
+  const team=nav.getByRole('button',{name:'工程组',exact:true});
+  await team.click();
+  await expect(team).toHaveAttribute('aria-pressed','true');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('示例项目部 · 工程组 · 工程经理');
+  const search=page.getByRole('searchbox',{name:'搜索姓名'});
+  await search.fill('同名');
+  await expect(search).toBeFocused();
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(1)).toContainText('示例设计部 · 设计组 · 建筑设计师');
+  await rows.filter({hasText:'建筑设计师'}).getByLabel('匿名同名员工的专业条线').selectOption('设计');
+  await expect(page.getByText('已保存',{exact:true})).toBeVisible();
+  await expect(search).toHaveValue('同名');
+  await expect(rows.filter({hasText:'建筑设计师'}).getByLabel('匿名同名员工的专业条线')).toHaveValue('设计');
+  const saved=await f.admin.query("SELECT user_id,discipline FROM public.profiles WHERE name='匿名同名员工' ORDER BY user_id");
+  assert.deepEqual(saved.rows,[{user_id:'demo-pm-com',discipline:'设计'},{user_id:'demo-pm-res',discipline:'工程'}]);
+  const artifacts=path.resolve('.local/personnel-directory-browser');
+  await mkdir(artifacts,{recursive:true});
+  await page.locator('.member-directory').screenshot({path:path.join(artifacts,'personnel-desktop.png')});
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth+1));
+  await search.fill('没有对应人员');
+  await expect(page.getByText('未找到匹配的人员。')).toBeVisible();
+  await search.fill('');
+  await expect(rows).toHaveCount(1);
+  await expect(team).toHaveAttribute('aria-pressed','true');
+  await page.evaluate(()=>window.scrollTo(0,0));
+  await page.screenshot({fullPage:true,path:path.join(artifacts,'personnel-mobile.png')});
+  assert.deepEqual(errors,[]);
+});
+
+test('员工完成统计按组织和姓名筛选时同步更新汇总与明细', {timeout:90000}, async t=>{
+  const f=await runtime(t),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];
+  t.after(()=>browser.close());
+  await f.admin.query("UPDATE public.profiles SET name='匿名同名员工' WHERE user_id IN ('demo-pm-res','demo-pm-com')");
+  await f.admin.query(`INSERT INTO app_private.personnel_directory(user_id,division,team,title,sort_order)
+    VALUES('demo-pm-res','示例项目部','工程组','工程经理',10),
+      ('demo-pzo','示例项目部','统筹组','项目总',20),
+      ('demo-pm-com','示例设计部','设计组','建筑设计师',30)`);
+  const ops={id:'demo-ops'};
+  const previousDay=new Date(f.week+'T00:00:00Z');
+  previousDay.setUTCDate(previousDay.getUTCDate()-1);
+  for(const [id,project,due] of [
+    ['demo-pm-res','demo-res',f.week],
+    ['demo-pm-com','demo-com',previousDay.toISOString().slice(0,10)]
+  ]){
+    const person={id};
+    const {id:note}=(await f.admin.query(`INSERT INTO public.leader_notes(project_id,period,kind,what,due,author_name)
+      VALUES($1,$2,'ceo_brief','匿名统计验收事项',$3,'匿名管理人员') RETURNING id`,[project,f.week,due])).rows[0];
+    const source=await previewCompletion(f.pool,person,{source_key:'leader:'+project+':'+note});
+    const submitted=await requestCompletion(f.pool,person,{source_key:source.source_key,source_version:source.source_version,
+      completion_date:f.week,completion_note:'匿名完成验收'});
+    await reviewCompletion(f.pool,ops,{id:submitted.id,expected_revision:submitted.revision,decision:'approve'});
+  }
+  const page=await login(browser,f,'demo-ops',errors);
+  await page.getByRole('button',{name:'统计分析',exact:true}).click();
+  await page.getByRole('button',{name:'员工完成统计',exact:true}).click();
+  const panel=page.locator('.completion-statistics');
+  const org=panel.getByRole('navigation',{name:'统计组织'});
+  const rows=panel.locator('[data-statistics-employee]');
+  const metric=name=>panel.locator('.completion-statistics-totals > div').filter({hasText:name}).locator('strong');
+  await expect(panel.getByRole('heading',{name:'员工事项完成统计'})).toBeVisible();
+  await expect(metric('已审完成')).toHaveText('2');
+  await expect(metric('按时完成')).toHaveText('1');
+  await expect(metric('延期完成')).toHaveText('1');
+  await expect(rows).toHaveCount(5);
+  await expect(org.getByRole('button',{name:/未归类/})).toBeVisible();
+
+  const toggle=org.getByRole('button',{name:'示例项目部下的组别'});
+  await expect(toggle).toHaveAttribute('aria-expanded','false');
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded','true');
+  const engineering=org.getByRole('button',{name:/^工程组/});
+  await engineering.click();
+  await expect(engineering).toHaveAttribute('aria-pressed','true');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('工程经理');
+  await expect(metric('已审完成')).toHaveText('1');
+  await expect(metric('按时完成')).toHaveText('1');
+  await expect(metric('延期完成')).toHaveText('0');
+  await rows.first().getByText('按类别查看',{exact:true}).click();
+  await expect(rows.first().getByText('领导安排',{exact:true})).toBeVisible();
+
+  const projectFilter=panel.locator('label').filter({hasText:/^项目/}).locator('select');
+  await projectFilter.selectOption('demo-com');
+  await expect(rows).toHaveCount(0);
+  await expect(metric('已审完成')).toHaveText('0');
+  await projectFilter.selectOption('');
+  await expect(rows).toHaveCount(1);
+  await expect(engineering).toHaveAttribute('aria-pressed','true');
+
+  await org.getByRole('button',{name:/^全部人员/}).click();
+  const search=panel.getByRole('searchbox',{name:'搜索姓名'});
+  await search.fill('同名');
+  await expect(search).toBeFocused();
+  await expect(rows).toHaveCount(2);
+  await expect(rows.filter({hasText:'工程经理'})).toHaveCount(1);
+  await expect(rows.filter({hasText:'建筑设计师'})).toHaveCount(1);
+  await expect(metric('已审完成')).toHaveText('2');
+
+  const artifacts=path.resolve('.local/completion-statistics-browser');
+  await mkdir(artifacts,{recursive:true});
+  await panel.screenshot({path:path.join(artifacts,'completion-statistics-desktop.png')});
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth+1));
+  await search.fill('没有对应人员');
+  await expect(rows).toHaveCount(0);
+  await expect(metric('已审完成')).toHaveText('0');
+  await search.fill('');
+  await org.getByRole('button',{name:/未归类/}).click();
+  await expect(rows).toHaveCount(2);
+  await expect(metric('已审完成')).toHaveText('0');
+  await engineering.click();
+  await expect(rows).toHaveCount(1);
+  await rows.first().getByText('按类别查看',{exact:true}).click();
+  await expect(rows.first().getByText('领导安排',{exact:true})).toBeVisible();
+  assert.ok(await page.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth+1));
+  await org.evaluate(node=>{node.scrollTop=0;});
+  await page.evaluate(()=>window.scrollTo(0,0));
+  await page.screenshot({fullPage:true,path:path.join(artifacts,'completion-statistics-mobile.png')});
+  await page.emulateMedia({media:'print'});
+  await expect(org).toBeHidden();
+  await expect(search).toBeHidden();
+  await expect(rows).toHaveCount(1);
+  await expect(metric('已审完成')).toHaveText('1');
+  assert.deepEqual(errors,[]);
+});
+
+test('限定范围的项目人员管理员通过只读人员页进入本项目协同设置', {timeout:90000}, async t=>{
+  const f=await runtime(t),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];
+  t.after(()=>browser.close());
+  await f.admin.query("UPDATE public.profiles SET role='viewer',viewer_scope='projects',viewer_access='materials' WHERE user_id='demo-pzo'");
+  await f.admin.query("DELETE FROM public.project_members WHERE user_id='demo-pzo'");
+  await f.admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES('demo-pzo',$1,'viewer')",[f.project]);
+  await f.admin.query("INSERT INTO app_private.project_personnel_admins(user_id,project_id) VALUES('demo-pzo',$1)",[f.project]);
+  await f.admin.query(`INSERT INTO app_private.personnel_directory(user_id,division,team,title,sort_order)
+    VALUES('demo-pm-res','示例项目部','工程组','工程经理',10),('demo-pm-com','示例设计部','设计组','建筑设计师',20)`);
+  const page=await login(browser,f,'demo-pzo',errors);
+  const settings=page.getByRole('button',{name:'系统设置',exact:true});
+  await settings.click();
+  await expect(page.getByRole('button',{name:'成员与权限',exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'本项目人员',exact:true}).click();
+  const panel=page.locator('.member-directory');
+  await expect(panel.getByRole('heading',{name:'本项目人员'})).toBeVisible();
+  await expect(panel).toContainText('工程经理');
+  await expect(panel).not.toContainText('建筑设计师');
+  await expect(panel.locator('select')).toHaveCount(0);
+  await panel.getByRole('searchbox',{name:'搜索姓名'}).fill('住宅');
+  await expect(panel.locator('[data-directory-member]')).toHaveCount(1);
+  await expect(panel).toContainText('匿名管理员代填验收住宅 · 工程');
+  await settings.click();
+  await page.getByRole('button',{name:'周报协同设置',exact:true}).click();
+  const collaboration=page.locator('[data-weekly-collaboration]');
+  await expect(collaboration.getByRole('heading',{name:'周报协同设置'})).toBeVisible();
+  const project=collaboration.locator('[data-weekly-collaboration-project]');
+  await expect(project.locator('option')).toHaveText(['请选择项目','匿名管理员代填验收住宅']);
+  await project.selectOption(f.project);
+  await collaboration.locator('[data-weekly-collaboration-profession]').selectOption('工程');
+  await collaboration.locator('[data-weekly-collaboration-submitter]').selectOption('demo-pm-res');
+  await collaboration.getByRole('button',{name:'保存协同设置'}).click();
+  await expect(collaboration.getByRole('status')).toContainText('已保存。');
+  const configured=await f.admin.query("SELECT submitter_id FROM app_private.weekly_collaboration_drafts WHERE project_id=$1 AND line='工程'",[f.project]);
+  assert.deepEqual(configured.rows,[{submitter_id:'demo-pm-res'}]);
+  assert.deepEqual(errors,[]);
+});
+
 const richEditor = (page, id) => page.locator('[data-rich-editor-for="' + id + '"] .ql-editor');
 async function context(page, f) {
   const response = await page.request.get(f.url + '/api/admin-plans/context?project_type=res&month=' + f.month);
@@ -49,6 +237,65 @@ function reportWrite(response) {
   if (!response.url().endsWith('/api/db') || response.request().method() !== 'POST') return false;
   try { const body = response.request().postDataJSON(); return body.table === 'reports' && body.operation === 'upsert'; } catch { return false; }
 }
+
+test('管理员新增项目专业并分配后，住宅提报人可切换专业、确认月计划和提交周报', {timeout:90000},async t=>{
+  const f=await runtime(t),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];
+  t.after(()=>browser.close());
+  const admin=await login(browser,f,'demo-ops',errors),line='样板管理',headers={Origin:f.url};
+  await admin.getByRole('button',{name:'系统设置',exact:true}).click();
+  await admin.getByRole('button',{name:'汇报专业设置',exact:true}).click();
+  await admin.getByLabel('项目',{exact:true}).selectOption(f.project);
+  await admin.getByLabel('新专业名称').fill(line);
+  await admin.getByRole('button',{name:'新增专业',exact:true}).click();
+  await expect(admin.locator('main li')).toHaveText([line]);
+  const artifacts=path.resolve('.local/project-reporting-professions-20261106');await mkdir(artifacts,{recursive:true});
+  await admin.locator('main').screenshot({path:path.join(artifacts,'reporting-professions.png')});
+  await admin.setViewportSize({width:390,height:844});
+  assert.ok(await admin.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth+1));
+  await admin.locator('main').screenshot({path:path.join(artifacts,'reporting-professions-narrow.png')});
+  await admin.setViewportSize({width:1440,height:1000});
+  const duplicate=await admin.request.post(f.url+'/api/project-reporting-professions',{headers,data:{project_id:f.project,line}});
+  assert.equal(duplicate.status(),409);
+  const reporter=await login(browser,f,'demo-pm-res',errors);
+  const plan={project_id:f.project,line,month:f.month,items:[{source_id:'custom-first',mod:'样板',name:'完成匿名样板验收',due:f.month+'-28'}]};
+  const confirm=()=>reporter.request.post(f.url+'/api/monthly-plans/confirm',{headers,data:plan});
+  assert.equal((await confirm()).status(),403,'catalog creation alone does not authorize a project member');
+  assert.equal((await reporter.request.post(f.url+'/api/project-reporting-grants',{headers,data:{project_id:f.project,line,user_id:'demo-pm-res'}})).status(),403);
+  await admin.getByRole('button',{name:'系统设置',exact:true}).click();
+  await admin.getByRole('button',{name:'成员与权限',exact:true}).click();
+  const member=admin.locator('tr').filter({hasText:'演示住宅经理'});
+  await member.getByLabel('为演示住宅经理分配项目专业').selectOption(JSON.stringify([f.project,line]));
+  await member.getByRole('button',{name:'分配专业',exact:true}).click();
+  await expect(member).toContainText('匿名管理员代填验收住宅 · '+line);
+  await reporter.reload();
+  await reporter.locator('#planProject').selectOption(f.project);
+  await reporter.getByLabel('住宅专业',{exact:true}).selectOption(line);
+  const confirmed=await confirm();
+  assert.equal(confirmed.status(),200,JSON.stringify((await confirmed.json()).error));
+  await reporter.getByRole('button',{name:'刷新数据',exact:true}).click();
+  await expect(reporter.locator('.plan-context-module select')).toHaveValue(line);
+  await expect(reporter.locator('main')).toContainText(plan.items[0].name);
+  const write=reporter.waitForResponse(reportWrite);
+  await reporter.getByRole('button',{name:'提交本期直报',exact:true}).click();
+  const submitted=await write;
+  assert.equal(submitted.status(),200,JSON.stringify((await submitted.json()).error));
+  const saved=(await f.admin.query('SELECT line,author_id,biz FROM public.reports WHERE project_id=$1',[f.project])).rows[0];
+  assert.equal(saved.line,line);assert.equal(saved.author_id,'demo-pm-res');assert.equal(saved.biz.items[0].name,plan.items[0].name);
+  const other=await admin.request.post(f.url+'/api/project-reporting-professions',{headers,data:{project_id:'demo-res',line}});
+  assert.equal(other.status(),200);
+  assert.equal((await reporter.request.post(f.url+'/api/monthly-plans/confirm',{headers,data:{...plan,project_id:'demo-res'}})).status(),403,'same name in another project requires a distinct grant');
+  await admin.getByRole('button',{name:'计划总览',exact:true}).click();
+  await admin.getByRole('button',{name:'住宅计划总览',exact:true}).click();
+  await admin.getByRole('button',{name:'刷新数据',exact:true}).click();
+  await admin.locator('#overviewFilter').selectOption('匿名管理员代填验收住宅');
+  await admin.locator('#overviewDiscipline').selectOption(line);
+  await expect(admin.locator('main')).toContainText(plan.items[0].name);
+  const popup=admin.waitForEvent('popup');await admin.getByRole('button',{name:'开启会议投影',exact:true}).click();
+  const projection=await popup;
+  await expect(projection.locator('#meeting-profession')).toHaveValue(line);
+  await expect(projection.locator('main')).toContainText(plan.items[0].name);
+  assert.deepEqual(errors,[]);
+});
 
 test('实际HTTP与Edge：商业总览在零周报时显示本月已确认计划，按专业隔离且不放入历史周期', {timeout:120000},async t=>{
  const f=await runtime(t),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];t.after(()=>browser.close());const page=await login(browser,f,'demo-ops',errors),project='browser-commercial-plan',line='土建工程（东地块）',name='已确认但尚未提交周报的商业工作计划';
@@ -184,13 +431,19 @@ test('实际HTTP与Edge：未选项目可打开文件选择器，导入后直接
   await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:path.join(evidence,'saved-plan-edit.png'),fullPage:true});page.once('dialog',dialog=>dialog.accept());receiptPromise=page.waitForResponse(response=>response.url().endsWith('/api/admin-plans/save'));await page.getByRole('button',{name:'保存计划修改',exact:true}).click();const corrected=(await (await receiptPromise).json()).data.plans[0];
   assert.notEqual(corrected.id,initial.id);assert.equal(corrected.items[0].source_id,initial.items[0].source_id);assert.equal(corrected.items[0].name,'导入后修正的计划事项');assert.equal(corrected.rich_text.fields['items.0.name'].ops[0].attributes.bold,true);
   const archived=(await f.admin.query('SELECT snapshot,withdrawn_by FROM app_private.monthly_plan_withdrawals WHERE plan_id=$1',[initial.id])).rows[0];assert.equal(archived.snapshot.items[0].name,'可核对的原计划事项');assert.equal(archived.withdrawn_by,'demo-ops');
-  await page.getByRole('button',{name:/^修改月度完成汇总：/}).click();await expect(page.locator('#admin_plan_progress_0')).toHaveValue('原月度完成情况');await page.locator('#admin_plan_progress_0').fill('本窗口不能丢失的完成情况');
+  await page.getByRole('button',{name:/^修改月度完成汇总：/}).click();await expect(page.locator('#admin_plan_progress_0')).toHaveValue('原月度完成情况');await richEditor(page,'admin_plan_progress_0').fill('本窗口不能丢失的完成情况');
   const concurrent=await page.request.post(f.url+'/api/admin-plans/save',{headers:{Origin:f.url},data:{operation_id:randomUUID(),plans:[],summaries:[{...summary,expected_summary_id:originalSummary.id,items:[{...summary.items[0],progress:'另一窗口已核对的最新情况'}]}]}});assert.equal(concurrent.status(),200);const concurrentSummary=(await concurrent.json()).data.summaries[0];
   page.once('dialog',dialog=>dialog.accept());receiptPromise=page.waitForResponse(response=>response.url().endsWith('/api/admin-plans/save'));await page.getByRole('button',{name:'保存汇总修改',exact:true}).click();assert.equal((await receiptPromise).status(),409);await expect(page.locator('#admin_plan_progress_0')).toHaveValue('本窗口不能丢失的完成情况');
   await page.getByRole('button',{name:'重新读取计划',exact:true}).click();await expect(page.getByRole('button',{name:'保存汇总修改',exact:true})).toBeDisabled();await expect(page.locator('#admin_plan_progress_0')).toHaveValue('本窗口不能丢失的完成情况');
   await page.getByRole('button',{name:'载入最新内容，保留原输入副本',exact:true}).click();await expect(page.locator('#admin_plan_progress_0')).toHaveValue('另一窗口已核对的最新情况');await page.getByText('载入前的未保存输入副本',{exact:true}).click();await expect(page.locator('#admin-plan-saved-editor details')).toContainText('本窗口不能丢失的完成情况');
-  await page.locator('#admin_plan_progress_0').fill('最终人工核对后的完成情况');page.once('dialog',dialog=>dialog.accept());receiptPromise=page.waitForResponse(response=>response.url().endsWith('/api/admin-plans/save'));await page.getByRole('button',{name:'保存汇总修改',exact:true}).click();const finalSummary=(await (await receiptPromise).json()).data.summaries[0];
+  await richEditor(page,'admin_plan_progress_0').fill('最终人工核对后的完成情况');await richEditor(page,'admin_plan_progress_0').press('Control+A');
+  const summaryFormat=page.locator('[data-rich-editor-for="admin_plan_progress_0"]');
+  await summaryFormat.getByRole('button',{name:'加粗',exact:true}).click();
+  await summaryFormat.getByRole('button',{name:'标红',exact:true}).click();
+  page.once('dialog',dialog=>dialog.accept());receiptPromise=page.waitForResponse(response=>response.url().endsWith('/api/admin-plans/save'));await page.getByRole('button',{name:'保存汇总修改',exact:true}).click();const finalSummary=(await (await receiptPromise).json()).data.summaries[0];
   assert.notEqual(finalSummary.id,concurrentSummary.id);assert.equal(finalSummary.version,3);assert.equal(finalSummary.items[0].source_id,'original-summary');assert.equal(finalSummary.items[0].progress,'最终人工核对后的完成情况');
+  assert.deepEqual(finalSummary.items[0].rich_text.fields.progress.ops[0].attributes,{bold:true,color:'#d81e06'});
+  await expect(summaryFormat.locator('strong')).toHaveText('最终人工核对后的完成情况');
   assert.equal((await f.admin.query('SELECT count(*)::int n FROM public.reports WHERE project_id=$1',[f.project])).rows[0].n,0);assert.equal((await f.admin.query('SELECT count(*)::int n FROM public.completion_requests WHERE project_id=$1',[f.project])).rows[0].n,0);assert.equal(imports.length,1);assert.equal(saves.filter(body=>body.summaries).every(body=>body.plans.length===0),true);assert.deepEqual(errors,[]);
   await page.setViewportSize({width:390,height:844});await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:path.join(evidence,'summary-mobile.png'),fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
 });
@@ -218,7 +471,7 @@ test('实际HTTP与Edge：双月Excel一次保存本月独立完成汇总和下�
   const currentPreview=preview.data.batches.find(row=>row.month===f.month),nextPreview=preview.data.batches.find(row=>row.month===next);assert.equal(currentPreview.rows.length,2);assert.equal(nextPreview.rows.length,1);assert.equal(currentPreview.rows[0].due,next+'-10');assert.equal(currentPreview.rows[0].progress,rawProgress);
   await expect(admin.locator('.admin-month-card')).toHaveCount(2);await expect(admin.getByRole('checkbox',{name:f.month+'保存月度完成情况',exact:true})).toBeChecked();await expect(admin.getByRole('checkbox',{name:f.month+'写入月计划',exact:true})).not.toBeChecked();await expect(admin.getByRole('checkbox',{name:next+'写入月计划',exact:true})).toBeChecked();await expect(admin.getByRole('checkbox',{name:next+'保存月度完成情况',exact:true})).not.toBeChecked();
   await admin.getByRole('textbox',{name:'第1项月度完成情况',exact:true}).fill(editedProgress);await admin.locator('.admin-month-open').filter({hasText:next+' · 下月工作计划'}).click();await expect(richEditor(admin,'admin_plan_name_0')).toContainText(nextName);await richEditor(admin,'admin_plan_name_0').fill(editedNextName);
-  await admin.locator('.admin-month-open').filter({hasText:f.month+' · 本月计划及完成情况'}).click();await expect(admin.getByRole('textbox',{name:'第1项月度完成情况',exact:true})).toHaveValue(editedProgress);assert.deepEqual(await snapshot(),before);assert.equal(saves.length,0);
+  await admin.locator('.admin-month-open').filter({hasText:f.month+' · 本月计划及完成情况'}).click();await expect(admin.getByRole('textbox',{name:'第1项月度完成情况',exact:true})).toHaveText(editedProgress);assert.deepEqual(await snapshot(),before);assert.equal(saves.length,0);
   admin.once('dialog',dialog=>dialog.accept());const savedResponse=admin.waitForResponse(response=>response.url().endsWith('/api/admin-plans/save'));await admin.getByRole('button',{name:'确认保存所选月份',exact:true}).click();const savedHttp=await savedResponse;assert.equal(savedHttp.status(),200);const receipt=await savedHttp.json();assert.equal(receipt.error,null);assert.equal(receipt.data.plans.length,1);assert.equal(receipt.data.summaries.length,1);assert.equal(saves.length,1);assert.equal(saves[0].plans[0].month,next);assert.equal(saves[0].summaries[0].month,f.month);
   const summariesHttp=await admin.request.get(f.url+'/api/monthly-summaries?month='+f.month);assert.equal(summariesHttp.status(),200);const summaries=(await summariesHttp.json()).data.filter(row=>row.project_id===f.project);assert.equal(summaries.length,1);assert.equal(summaries[0].owner_id,'demo-pm-res');assert.equal(summaries[0].items.length,2);assert.equal(summaries[0].items[0].progress,editedProgress);assert.equal(summaries[0].items[1].progress,secondProgress);assert.equal(summaries[0].items[0].due,next+'-10');assert.ok(!Object.hasOwn(summaries[0],'status'));
   const nextPlanHttp=await employee.request.post(f.url+'/api/monthly-plans/list',{headers:{Origin:f.url},data:{project_id:f.project,month:next,line:'工程'}});assert.equal(nextPlanHttp.status(),200);const nextPlans=(await nextPlanHttp.json()).data;assert.equal(nextPlans.length,1);assert.equal(nextPlans[0].owner_id,'demo-pm-res');assert.equal(nextPlans[0].items[0].name,editedNextName);assert.equal(nextPlans[0].items[0].due,next+'-28');assert.ok(nextPlans[0].items.every(item=>!Object.hasOwn(item,'progress')&&!Object.hasOwn(item,'prog')));

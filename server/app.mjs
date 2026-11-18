@@ -3,10 +3,10 @@ import pg from 'pg';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createAuth, createOriginCheck } from './auth.mjs';
-import { executeDatabase, replaceLeaderNotes } from './database.mjs';
+import { executeDatabase, replaceLeaderNotes, withIdentity } from './database.mjs';
 import { listReporterTasks, saveReporterTask, listProjectPeople, assignLeaderRequirement } from './reporter-tasks.mjs';
 import { listProjectLibrary, setLibraryPassword, unlockProjectLibrary, uploadProjectDocument, withdrawProjectDocument, loadProjectDocument, MAX_LIBRARY_BYTES } from './project-library.mjs';
-import { listCoordinationTasks, createCoordinationTask } from './coordination-tasks.mjs';
+import { listCoordinationTasks } from './coordination-tasks.mjs';
 import { listMonthlyPlans, confirmMonthlyPlan, withdrawMonthlyPlan } from './monthly-plans.mjs';
 import {listAdminPlanBatches,withdrawAdminPlanBatch} from './admin-plan-batches.mjs';
 import { assertAdminPlanOperator, getAdminPlanContext, previewAdminPlanRows, saveAdminMonthlyPlans } from './admin-monthly-plans.mjs';
@@ -15,16 +15,19 @@ import { listMonthlyPlanSummaries } from './monthly-plan-summaries.mjs';
 import { listCommercialModuleGrants, saveCommercialModuleGrant } from './commercial-module-grants.mjs';
 import { startAdminPlanAI, chatAdminPlanAI, getAdminPlanAISession, reviseAdminPlanAI, confirmAdminPlanAI, closeAdminPlanAI } from './admin-plan-ai.mjs';
 import { listCompletions, previewCompletion, requestCompletion, reviewCompletion, withdrawCompletion } from './completions.mjs';
+import { supplyReportedCompletionDate } from './reported-completions.mjs';
 import { completionStatistics } from './completion-statistics.mjs';
 import { projectPlanStatistics } from './project-plan-statistics.mjs';
+import { addProjectReportingProfession, grantProjectReportingProfession, listProjectReportingGrants } from './project-reporting-professions.mjs';
 import { listReportScopes } from './report-scopes.mjs';
+import { createWeeklyCollaboration } from './weekly-collaboration.mjs';
 import { managementRead, withManagementRead } from './management-read.mjs';
 import { loadSchemePreview } from './scheme-protection.mjs';
 import { uploadReportAttachment, listReportAttachments, loadReportAttachment, discardReportAttachment, discardInaccessibleReportDrafts } from './report-attachments.mjs';
 import { pipeline } from 'node:stream/promises';
 import { loadFile, MAX_FILE_BYTES, saveUpload } from './files.mjs';
 import { HttpError, publicError } from './errors.mjs';
-import { webAssets } from './web-assets.mjs';
+import { sendWebContent, webAssets, webContent } from './web-assets.mjs';
 import { readOnlyGate, readOnlyHtml } from './read-only.mjs';
 import { planningAIChat } from './planning-ai.mjs';
 import { loadPlanningAIMemory, savePlanningAIConversation, savePlanningAIPreference } from './planning-ai-memory.mjs';
@@ -77,6 +80,7 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
     res.json({ data: { status: 'ok' }, error: null });
   }));
   const auth = createAuth({ pool, config });
+  const weeklyCollaboration = createWeeklyCollaboration(pool);
   app.use('/api/auth', auth.router);
   for (const [route, handler] of [['load', loadPlanningAIMemory], ['conversation', savePlanningAIConversation], ['preference', savePlanningAIPreference]]) {
     app.post('/api/planning-ai/memory/' + route, auth.requireUser, express.json({limit:'256kb'}), asyncRoute(async(req,res)=>{
@@ -109,6 +113,38 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   app.post('/api/report-scopes/list', auth.requireUser, express.json({limit:'16kb'}), asyncRoute(async(req,res)=>{
     res.json({data:await listReportScopes(pool,req.user,req.body || {}),error:null});
   }));
+  for (const [route,action] of Object.entries({open:'open',mode:'mode','next-week':'nextWeek',items:'items','month-items':'monthItems',
+    'confirm-month':'confirmMonth','withdraw-month':'withdrawMonth',change:'change','pending-followups':'pendingFollowups',
+    followups:'followups',coordination:'coordination',publish:'publish',withdraw:'withdraw',settings:'settings',catalog:'catalog'})) {
+    app.post('/api/weekly-collaboration/' + route, auth.requireUser, express.json({ limit: ['change','followups','coordination','items','month-items'].includes(route) ? '256kb' : '16kb' }), asyncRoute(async (req, res) => {
+      const data = await weeklyCollaboration[action](req.user, req.body ?? {});
+      res.json({ data, error: null });
+    }));
+  }
+  app.post('/api/weekly-collaboration/poll', auth.requireUser, express.json({ limit: '16kb' }), asyncRoute(async (req, res) => {
+    if (res.destroyed) return;
+    const { user, sessionTokenHash } = req;
+    const controller = new AbortController();
+    const disconnect = () => controller.abort();
+    res.once('close', disconnect);
+    try {
+      const data = await weeklyCollaboration.poll(user, req.body ?? {}, controller.signal);
+      if (controller.signal.aborted) return;
+      // Authentication can be revoked while the request waits for a change.
+      delete req._zhSessionPromise;
+      const session = await auth.getSession(req);
+      if (controller.signal.aborted) return;
+      if (!session || req.user.id !== user.id || req.sessionTokenHash !== sessionTokenHash)
+        throw new HttpError(401, '会话已失效，请重新登录。', 'UNAUTHENTICATED');
+      if (req.user.must_change_password)
+        throw new HttpError(403, '首次登录请先修改初始密码', 'PASSWORD_CHANGE_REQUIRED');
+      res.json({ data, error: null });
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      res.off('close', disconnect);
+    }
+  }));
   app.post('/api/management-read', auth.requireUser, express.json({ limit: '16kb' }), asyncRoute(async (req, res) => {
     res.json({ data: await managementRead(pool, req.user, req.body ?? {}, { uploadDir }), error: null });
   }));
@@ -124,11 +160,12 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   app.post('/api/leader-notes/assign', auth.requireUser, express.json({limit:'16kb'}), asyncRoute(async(req,res)=>{
     res.json({data:await assignLeaderRequirement(pool,req.user,req.body ?? {}),error:null});
   }));
-  for (const [route, handler] of [['list', listCoordinationTasks], ['create', createCoordinationTask]]) {
-    app.post('/api/coordination-tasks/' + route, auth.requireUser, express.json({ limit: '32kb' }), asyncRoute(async (req, res) => {
-      res.json({ data: await handler(pool, req.user, req.body ?? {}), error: null });
-    }));
-  }
+  app.post('/api/coordination-tasks/list', auth.requireUser, express.json({ limit: '32kb' }), asyncRoute(async (req, res) => {
+    res.json({ data: await listCoordinationTasks(pool, req.user, req.body ?? {}), error: null });
+  }));
+  app.post('/api/coordination-tasks/create', auth.requireUser, (_req, _res, next) => {
+    next(new HttpError(410, '请刷新页面，在本期填报第三部分提交协调事项。', 'coordination_create_retired'));
+  });
   for (const [route, handler] of [['list', listMonthlyPlans], ['confirm', confirmMonthlyPlan], ['withdraw', withdrawMonthlyPlan]]) {
     app.post('/api/monthly-plans/' + route, auth.requireUser, express.json({ limit: '1mb' }), asyncRoute(async (req, res) => {
       res.json({ data: await handler(pool, req.user, req.body ?? {}), error: null });
@@ -250,7 +287,37 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   app.post('/api/project-plan-statistics', auth.requireUser, express.json({limit:'16kb'}), asyncRoute(async(req,res)=>{
     res.json({data:await projectPlanStatistics(pool,req.user,req.body ?? {}),error:null});
   }));
-  for (const [route, handler] of [['preview', previewCompletion], ['request', requestCompletion], ['review', reviewCompletion], ['withdraw', withdrawCompletion]]) {
+  app.post('/api/project-reporting-professions', auth.requireUser, express.json({ limit: '8kb' }), asyncRoute(async (req, res) => {
+    res.json({ data: await addProjectReportingProfession(pool, req.user, req.body ?? {}), error: null });
+  }));
+  app.get('/api/project-reporting-grants', auth.requireUser, asyncRoute(async (req, res) => {
+    res.set('Cache-Control','no-store'); res.json({ data: await listProjectReportingGrants(pool, req.user), error: null });
+  }));
+  app.get('/api/personnel-directory', auth.requireUser, asyncRoute(async (req, res) => {
+    const rows = await withIdentity(pool, req.user.id, async client => {
+      const { allowed } = (await client.query('SELECT app_private.weekly_collaboration_operator() AS allowed')).rows[0];
+      if (!allowed) throw new HttpError(403, '仅管理员可读取人员目录', 'personnel_directory_forbidden');
+      return (await client.query('SELECT user_id, division, team, title, sort_order FROM app_private.personnel_directory ORDER BY sort_order, user_id')).rows;
+    });
+    res.set('Cache-Control', 'no-store').json({ data: rows, error: null });
+  }));
+  app.get('/api/personnel-admin-access', auth.requireUser, asyncRoute(async (req, res) => {
+    const projects = await withIdentity(pool, req.user.id, async client =>
+      (await client.query('SELECT project_id,project_name,report_scope_id FROM app_private.personnel_admin_projects()')).rows);
+    res.json({ data: { projects }, error: null });
+  }));
+  app.get('/api/project-personnel', auth.requireUser, asyncRoute(async (req, res) => {
+    const rows = await withIdentity(pool, req.user.id, async client => {
+      const { allowed } = (await client.query('SELECT EXISTS(SELECT 1 FROM app_private.personnel_admin_projects()) AS allowed')).rows[0];
+      if (!allowed) throw new HttpError(403, '当前账号没有本项目人员查看权限', 'project_personnel_forbidden');
+      return (await client.query('SELECT * FROM app_private.project_personnel()')).rows;
+    });
+    res.json({ data: rows, error: null });
+  }));
+  app.post('/api/project-reporting-grants', auth.requireUser, express.json({ limit: '8kb' }), asyncRoute(async (req, res) => {
+    res.json({ data: await grantProjectReportingProfession(pool, req.user, req.body ?? {}), error: null });
+  }));
+  for (const [route, handler] of [['preview', previewCompletion], ['request', requestCompletion], ['review', reviewCompletion], ['withdraw', withdrawCompletion], ['progress-date', supplyReportedCompletionDate]]) {
     app.post('/api/completions/' + route, auth.requireUser, express.json({ limit: '64kb' }), asyncRoute(async (req, res) => {
       res.json({ data: await handler(pool, req.user, req.body || {}), error: null });
     }));
@@ -321,19 +388,23 @@ export function createApp({ pool, config = {}, webRoot = path.join(root, 'web') 
   }));
   app.use('/api', (req, res) => res.status(404).json({ data: null, error: { code: 'not_found', message: '接口不存在' } }));
   const assets = webAssets(webRoot);
+  const indexPage = webContent(readOnlyHtml(assets.html,config));
   app.get(['/', '/index.html'], (req, res) => {
-    res.set('Cache-Control', 'no-cache, max-age=0, must-revalidate').type('html').send(readOnlyHtml(assets.html, config));
+    res.set('Cache-Control','no-cache, max-age=0, must-revalidate').type('html');
+    sendWebContent(req,res,indexPage);
   });
   app.get(/^\/assets\//, (req, res, next) => {
     const asset = assets.responses.get(req.path);
     if (!asset) return next();
-    res.set('Cache-Control', 'public, max-age=31536000, immutable').type(path.extname(asset.name)).send(asset.body);
+    res.set('Cache-Control','public, max-age=31536000, immutable').type(path.extname(asset.name));
+    sendWebContent(req,res,asset);
   });
   app.use(express.static(webRoot, { dotfiles: 'deny', index: false, fallthrough: true, setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, max-age=0') }));
   app.use((req, res) => res.status(404).send('Not found'));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
-    const result = publicError(error);
+    const result = publicError(error.code === 'P3801'
+      ? new HttpError(409, '该项目专业本周已启用协同填报，或报告周格式不正确。请在本期填报核对周期和协同状态。', 'P3801') : error);
     if (result.status >= 500) console.error('[request failed]', { code: error.code || error.name, route: req.path,
       ...(error.code==='attachment_cleanup_failed'?{phase:error.cleanupPhase || 'upload-file',attachmentId:error.attachmentId || null,
         cleanupCode:error.cleanupCause?.code || error.cause?.code || null,cleanupFailures:error.cleanupFailures || []}:{}) });

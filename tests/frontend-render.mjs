@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
+const RICH_TEXT = fs.readFileSync(path.join(__dirname, '..', 'web', 'rich-text.js'), 'utf8');
 const REPORTER_TASKS = fs.readFileSync(path.join(__dirname, '..', 'web', 'reporter-tasks.js'), 'utf8');
 const COMPLETION_REVIEW = fs.readFileSync(path.join(__dirname, '..', 'web', 'completion-review.js'), 'utf8');
 const REPORT_ATTACHMENTS = fs.readFileSync(path.join(__dirname, '..', 'web', 'report-attachments.js'), 'utf8');
@@ -16,7 +17,6 @@ const PLANNING_WINDOWS = fs.readFileSync(path.join(__dirname, '..', 'web', 'plan
 const BASELINE_CORE = fs.readFileSync(path.join(__dirname, '..', 'web', 'baseline-core.js'), 'utf8');
 const OVERVIEW_MEETINGS = fs.readFileSync(path.join(__dirname, '..', 'web', 'overview-meetings.js'), 'utf8');
 const COMPLETION_STATISTICS = fs.readFileSync(path.join(__dirname, '..', 'web', 'completion-statistics.js'), 'utf8');
-const COORDINATION_WORKBENCH = fs.readFileSync(path.join(__dirname, '..', 'web', 'coordination-workbench.js'), 'utf8');
 const MONTHLY_PLANS = fs.readFileSync(path.join(__dirname, '..', 'web', 'monthly-plans.js'), 'utf8');
 const MONTHLY_SUMMARIES = fs.readFileSync(path.join(__dirname, '..', 'web', 'monthly-summaries.js'), 'utf8');
 const PROJECT_PLAN_STATISTICS = fs.readFileSync(path.join(__dirname, '..', 'web', 'project-plan-statistics.js'), 'utf8');
@@ -168,6 +168,7 @@ function run(role, options = {}) {
     : role === 'pm-com'
     ? [{ user_id: 'u-pm2', project_id: 'p3', role_in_project: 'pm' }]
     : [{ user_id: 'u-pm', project_id: 'p1', role_in_project: 'pm' }];
+  for (const project_id of options.extraProjectIds || []) DB.project_members.push({user_id:'u-pm',project_id,role_in_project:'pm'});
 
   const root = makeEl('root');
   const body = makeEl('body');
@@ -233,7 +234,8 @@ function run(role, options = {}) {
           filters, options: {projects, groups: projects.map(project => project.display_group || project.name), disciplines: [], levels: []}, rows: [], projects: [],
           totals: {total: 0, completed: 0, incomplete: 0, group_count: 0, project_count: 0}}, error: null})};
       }
-      if(url.startsWith('/api/monthly-summaries?month=') || url==='/api/commercial-module-grants')return {ok:true,json:async()=>({data:[]})};
+      if(url.startsWith('/api/monthly-summaries?month=') || ['/api/commercial-module-grants','/api/project-reporting-grants','/api/personnel-directory'].includes(url))return {ok:true,json:async()=>({data:[]})};
+      if(url==='/api/personnel-admin-access')return {ok:true,json:async()=>({data:{projects:[]}})};
       const tables = { '/api/report-scopes/list': 'report_scopes', '/api/monthly-plans/list': 'monthly_plans',
         '/api/reporter-tasks/list': 'reporter_tasks', '/api/coordination-tasks/list': 'coordination_tasks', '/api/completions/list': 'completion_requests',
         '/api/report-attachments/list': 'report_attachments' };
@@ -262,7 +264,7 @@ function run(role, options = {}) {
   if (options.mustChangePassword) {
     sandbox.PlanningBoot = {assets: {}, session: Promise.resolve({data: {session: initialSession}}), complete() {},
       ensurePasswordChange: async () => { passwordGate.loads++; },
-      ensureEditor: async () => {}, ensureWorkflow: async () => {}, ensureReporter: async () => {}, ensureCoordination: async () => {}};
+      ensureEditor: async () => {}, ensureWorkflow: async () => {}, ensureReporter: async () => {}};
     sandbox.PasswordChange = {show: configuration => {passwordGate.shown.push(configuration); return true;},
       close: () => {passwordGate.closes++;}};
   }
@@ -278,11 +280,11 @@ function run(role, options = {}) {
   vm.runInContext(BASELINE_CORE, sandbox, { filename: 'baseline-core.js' });
   vm.runInContext(OVERVIEW_MEETINGS, sandbox, { filename: 'overview-meetings.js' });
   vm.runInContext(COMPLETION_STATISTICS, sandbox, { filename: 'completion-statistics.js' });
-  vm.runInContext(COORDINATION_WORKBENCH, sandbox, { filename: 'coordination-workbench.js' });
   vm.runInContext(MONTHLY_PLANS, sandbox, { filename: 'monthly-plans.js' });
   vm.runInContext(MONTHLY_SUMMARIES, sandbox, { filename: 'monthly-summaries.js' });
   vm.runInContext(PROJECT_PLAN_STATISTICS, sandbox, { filename: 'project-plan-statistics.js' });
   vm.runInContext(ADMIN_PLAN_OVERVIEW, sandbox, { filename: 'admin-plan-overview.js' });
+  if(options.richText)vm.runInContext(RICH_TEXT, sandbox, { filename: 'rich-text.js' });
   vm.runInContext(SRC, sandbox, { filename: 'app.js' });
   return new Promise((resolve, reject) => {
     setTimeout(() => {
@@ -386,7 +388,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     ok(navLabels(html, ['项目档案', '资料共享'], '子导航') && has(main(html), 'admin-archive'), '项目资料应提供项目档案和已有资料共享入口');
     noCameraUi(html, '运营项目资料');
     await App.section('settings'); html = root.innerHTML;
-    ok(navLabels(html, ['节点归属设置', '成员与权限'], '子导航') && has(main(html), 'App.lineSaveAll'), '系统设置应归集节点归属及原成员权限入口');
+    ok(navLabels(html, ['节点归属设置', '成员与权限', '汇报专业设置', '周报协同设置'], '子导航') && has(main(html), 'App.lineSaveAll'), '系统设置应包含原有设置、汇报专业及周报协同入口');
     await App.view('members'); html = root.innerHTML;
     ok(has(main(html), 'App.memberSet'), '成员与权限入口未通向原成员管理');
 
@@ -540,7 +542,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     let html = root.innerHTML;
     ok(identityRole(html) === '提报人' && DB.profiles[0].role === 'pm', '住宅场景账号应使用统一提报人身份和原 pm 角色');
     const n = nav(html);
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料', '历史记录']), 'PM 主导航应为四个整合入口');
+    ok(navLabels(html, ['本期填报', '项目资料']), 'PM 主导航应整合为本期填报和项目资料');
     ok(!has(nav(html), '批量导入计划') && !has(main(html), 'App.openAdminPlans'), '住宅提报人不能看到管理员代填导入入口');
     ok(!has(n, '节点基线'), 'PM 导航仍残留独立「节点基线」页签');
     ok(!has(n, '成员权限') && !has(n, '项目分析'), 'PM 主导航混入管理入口');
@@ -568,7 +570,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     ok(has(html, '提交本期直报') && has(html, 'plan-form-actions') && has(html, '本周基准节点 <b>0 项</b>') && has(html, '当月计划事项 <b>1 项</b>'), '住宅填报缺少提交操作或未分配专业的项目快览统计不符');
 
     await App.view('mine'); html = root.innerHTML;
-    ok(!has(nav(html), '项目列表') && has(main(html), '我的工作台'), '已撤销项目列表入口应回落工作台');
+    ok(!has(nav(html), '项目列表') && has(main(html), '个人概览'), '已撤销项目列表入口应回落含个人概览的本期填报');
     ok(!has(main(html), '节点基线 · 示例住宅一号'), '住宅工作台仍重复内嵌已撤节点基线展示');
     noReporterPageHeading(html, '住宅撤销项目列表入口');
     ok(!has(main(html), 'App.msSet('), '项目资料基线应只读，不能重复编辑工作台的预计完成时间');
@@ -580,8 +582,8 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     /* 个人中心（住宅）：研判节点偏差 + 下周重点 + 协调 */
     await App.view('center'); html = root.innerHTML;
     noReporterPageHeading(html, '住宅个人概览');
-    ok(navLabels(html, ['条线节点', '个人概览', '协调申请'], '子导航'), 'PM 工作台未保留条线节点、个人概览和协调申请');
-    ok(has(html, '我的工作台'), '住宅个人中心标题缺失');
+    ok(has(nav(html), '项目计划') && !has(nav(html), '工作台'), '住宅项目计划应进入项目资料');
+    ok(has(main(html), '个人概览') && !has(main(html), '即时协调'), '本期填报应常显个人概览并移除即时协调');
     ok(has(html, '工作进展统计'), '住宅个人中心缺少进展统计');
     ok(has(html, '研判节点与偏差（按优先级）'), '住宅个人中心缺少优先级节点表');
     ok(has(html, 'P0 紧急'), '住宅个人中心未按偏差分级出 P0');
@@ -593,7 +595,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     /* 2026-10-14 新增：我的条线（住宅 PM 未设条线 → 项目经理视角看全部节点） */
     await App.view('mline'); html = root.innerHTML;
     noReporterPageHeading(html, '住宅条线节点');
-    ok(has(main(html), '我的条线：') && has(main(html), '项目全专业（项目经理视角）') && has(main(html), 'id="reporter-line-project"'), '住宅条线节点应保留正文的本人视角和项目筛选');
+    ok(has(main(html), '项目计划 ·') && has(main(html), '项目全专业（项目经理视角）') && has(main(html), 'id="reporter-line-project"'), '住宅项目计划应保留正文的本人视角和项目筛选');
     ok(has(html, '已逾期未完成') && has(html, '未来 30 天到期') && has(html, '关键节点（未到期）'), '我的条线缺少三段必盯清单');
     ok(has(html, '我负责的节点') && has(html, 'data-milestone="1"') && !has(html, 'ml_fc_1') && !has(html, 'ml_note_1'), '我的条线应保留节点原文和来源，不重复提供已撤直接编辑入口');
     ok(!has(html, '专业流水线') && !has(html, 'reporter-flow-stages'), '我的条线仍显示已撤销的专业流水线');
@@ -616,8 +618,8 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     noCameraUi(html, '住宅 PM 项目档案');
     await App.view('cams'); html = root.innerHTML;
     noCameraUi(html, '住宅 PM 访问已撤销的监控页');
-    ok(has(main(html), '我的工作台') && has(main(html), '住宅项目') && has(main(html), '幕墙分包进场'), '住宅 PM 访问已撤销的监控页应回落本人的个人概览');
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料', '历史记录']), '撤销监控入口影响了住宅 PM 四项主导航');
+    ok(has(main(html), '个人概览') && has(main(html), '住宅项目') && has(main(html), '幕墙分包进场'), '住宅 PM 访问已撤销的监控页应回落本期填报且保留本人节点');
+    ok(navLabels(html, ['本期填报', '项目资料']), '撤销监控入口影响了住宅 PM 主导航');
     console.log('PM render OK');
   }
 
@@ -638,7 +640,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     let html = root.innerHTML;
     ok(identityRole(html) === '提报人' && DB.profiles[0].role === 'pm', '商业场景账号应使用统一提报人身份和原 pm 角色');
     const formHtml = html;   /* 商业填报页快照（供 DUMP 用） */
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料', '历史记录']), '商业 PM 主导航应保留四个整合入口');
+    ok(navLabels(html, ['本期填报', '项目资料']), '商业 PM 主导航应整合为本期填报和项目资料');
     ok(!has(nav(html), '批量导入计划') && !has(main(html), 'App.openAdminPlans'), '商业提报人不能看到管理员代填导入入口');
     noCameraUi(html, '商业 PM 填报页');
     noReporterPageHeading(html, '商业填报');
@@ -677,7 +679,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     noReporterPageHeading(html, '商业已撤项目列表入口');
     ok(!has(main(html), 'App.msSet('), '商业项目资料基线仍可重复编辑');
     noCameraUi(html, '商业 PM 已撤项目列表入口');
-    ok(!has(nav(html), '项目列表') && has(main(html), '我的工作台') && has(main(html), '事项进展状态统计'), '商业旧项目列表入口未回落本人工作台');
+    ok(!has(nav(html), '项目列表') && has(main(html), '个人概览') && has(main(html), '事项进展状态统计'), '商业旧项目列表入口应回落本人填报');
     await App.view('form'); html = root.innerHTML;
     ok(has(main(html), '土建工程（东地块）') && has(main(html), 'bi_nm_0'), '商业当前填报入口未保留本人模块与事项');
 
@@ -689,7 +691,7 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     /* 2026-10-14 新增：我的条线按本人专业条线过滤（示例土建负责人 = 工程） */
     await App.view('mline'); html = root.innerHTML;
     noReporterPageHeading(html, '商业条线节点');
-    ok(has(main(html), '我的条线：') && has(main(html), 'id="reporter-line-project"') && has(main(html), '工程'), '商业条线应保留正文项目筛选和本人专业范围');
+    ok(has(main(html), '项目计划 ·') && has(main(html), 'id="reporter-line-project"') && has(main(html), '工程'), '商业项目计划应保留正文项目筛选和本人专业范围');
     ok(has(html, '只看本专业的节点'), '商业 PM 我的条线未标注条线口径');
     ok(has(html, '东地块地上主体结构封顶'), '我的条线未列出本专业节点');
     ok(!has(html, '正式开业'), '我的条线混入其它条线（商管运营）的节点');
@@ -697,18 +699,18 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     /* 个人中心（商业）：倒计时 + 状态统计 + 优先级 + 四块（移交为可登记卡） */
     await App.view('center'); html = root.innerHTML;
     noReporterPageHeading(html, '商业个人概览');
-    ok(has(html, '我的工作台') && has(html, '示例土建负责人'), '商业个人中心标题缺失');
+    ok(has(html, '个人概览') && has(html, '示例土建负责人'), '商业本期填报缺少本人概览');
     ok(has(html, '距 2027-09-30'), '商业个人中心缺少开业倒计时');
     ok(has(html, '事项进展状态统计'), '商业个人中心缺少状态统计');
     ok(has(html, '待处理事项清单') && has(html, '类别') && has(html, '提出人') && has(html, '事项申报'), '商业个人中心缺少统一待办列和事项申报入口');
     ok(has(html, '2020-01-01') && has(html, '完成／延期申报'), '商业待办应保留原到期时间和逐项申报，不因取消优先级重复表丢失办理入口');
-    const pendingWork = main(html).slice(main(html).indexOf('<h3>待处理事项'));
+    const pendingWork = main(html).match(/四、待处理事项清单[\s\S]*?<\/section>/)?.[0] || '';
     ok(has(pendingWork, '<b>实名会议重点</b>') && has(pendingWork, '会议推进中') && has(pendingWork, '确认西地块土建工作面移交时间'), '商业待处理事项应显示实名会议与他人需求并保留格式和进展');
     ok(!has(pendingWork, '幕墙材料封样') && !has(pendingWork, '景观-西地块定标配合') && !has(pendingWork, '东地块地上主体结构封顶'), '商业待处理事项不应重复汇总月度计划和基准节点');
     ok(!has(html, '当月到期事项') && !has(html, '月度计划事项') && !has(html, '其他专业需协调'), '商业个人中心右栏仍残留三块只读汇总卡');
     /* 2026-10-14：右栏整体取消（移交登记 / 发起协调 / 近期台账），页面单栏铺满 */
     ok(!has(html, '工作面移交登记') && !has(html, '保存移交登记'), '商业个人中心右栏仍残留移交登记卡');
-    ok(!has(html, '<aside') && !has(html, '保存协调') && has(html,'我的事项申请'), '商业个人中心应保留本人申请并撤销旧右栏录入卡');
+    ok(!has(html, '<aside') && !has(html, '保存协调') && has(html,'历史记录'), '商业个人概览应保留历史记录入口');
     ok(!has(html, '我的近期台账'), '商业个人中心右栏仍残留近期台账');
     ok(!has(html, 'bh_what_0'), '商业个人中心右栏仍残留移交登记行');
     ok(!has(html, 'class="rail"'), '商业个人中心仍渲染右栏容器');
@@ -723,14 +725,14 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     ok(!has(html, '总裁交代 · 本周需关注的工作') && has(html, '会议事项要求'), '商业个人中心应按会议要求分类，不重新引入旧总裁交代分区');
     ok(!has(html, '项目总安排 · 本周工作安排') && has(html, '他人协调我的事项'), '商业个人中心应按他人协调分类，不重新引入旧项目总安排分区');
     await App.view('coordination');
-    ok(has(main(root.innerHTML), '我发起的协调事项审核') && has(main(root.innerHTML), '协调申请'), '发起协调及审核应继续在独立协调申请入口办理');
+    ok(has(main(root.innerHTML), '我发起的协调事项审核') && !has(main(root.innerHTML), '即时协调') && has(main(root.innerHTML), '三、需要协调事项'), '第三部分应提供协调填报并保留发起人审核');
     await App.view('center'); html = root.innerHTML;
     noCameraUi(html, '商业 PM 工作台');
     const centerHtml = html;
     await App.view('cams'); html = root.innerHTML;
     noCameraUi(html, '商业 PM 访问已撤销的监控页');
-    ok(has(main(html), '我的工作台') && has(main(html), '示例土建负责人') && has(main(html), '实名会议重点') && !has(main(html), '西地块总包清单编制'), '商业 PM 访问已撤销的监控页应回落本人的个人概览，保留本人关键事项且不混入他人台账');
-    ok(navLabels(html, ['工作台', '本期填报', '项目资料', '历史记录']), '撤销监控入口影响了商业 PM 四项主导航');
+    ok(has(main(html), '个人概览') && has(main(html), '示例土建负责人') && has(main(html), '实名会议重点') && !has(main(html), '西地块总包清单编制'), '商业 PM 访问已撤销的监控页应回落本人填报并按原权限显示');
+    ok(navLabels(html, ['本期填报', '项目资料']), '撤销监控入口影响了商业 PM 主导航');
     await App.openProjectDetail('p3'); await App.detailTab('history'); html = root.innerHTML;
     ok(has(main(html), '幕墙材料封样') && has(main(html), '景观-西地块定标配合') && has(main(html), '示例供应商调整铝型材合同，卡在招采'), '工作台收敛后月度计划正文和进展仍应完整保留在项目历史');
     ok(has(main(html), '<span class="mk-red">屋面临近完成</span>'), '旧手填节点的标红反馈仍应完整保留在原报告历史');
@@ -745,6 +747,36 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     }
     if (originalTasks === undefined) delete DB.reporter_tasks; else DB.reporter_tasks = originalTasks;
     console.log('PM 商业 render OK');
+  }
+
+  /* 周次标签和已提交的 ISO 周期指向同一周，历史选项仍能读回原报告。 */
+  {
+    const original = DB.reports;
+    const monday = new Date(SHANGHAI_TODAY);
+    monday.setDate(monday.getDate() + 1 - (monday.getDay() || 7));
+    const priorMonday = new Date(monday);
+    priorMonday.setDate(priorMonday.getDate() - 7);
+    const dateText = date => date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate());
+    const weekLabel = date => '第' + isoWeek(date) + '周（' + weekRange(date) + '）';
+    const other = original.find(row => row.id === 'r3b');
+    const own = original.find(row => row.id === 'r3a');
+    DB.reports = original.concat(
+      { ...other, id: 'r3b-iso', period: dateText(monday) },
+      { ...own, id: 'r3a-iso-prior', period: dateText(priorMonday),
+        biz: { ...own.biz, items: [{ mod: '工程', name: 'ISO 历史报告事项', due: dateText(priorMonday) }] } }
+    );
+    try {
+      const { App, root } = await run('pm-com');
+      const picker = html => html.match(/<select id="pmPeriod"[^>]*>(.*?)<\/select>/s)?.[1] || '';
+      const options = picker(root.innerHTML);
+      ok(options.split('>' + PERIOD + '</option>').length === 2 && !options.includes('value="' + dateText(monday) + '"'), '周期下拉应归并同周的 ISO 与周次标签');
+      ok(options.includes('value="' + dateText(priorMonday) + '">' + weekLabel(priorMonday)), '历史周次应保留本人报告的原周期值');
+      await App.period(dateText(priorMonday));
+      ok(picker(root.innerHTML).includes('value="' + dateText(priorMonday) + '" selected'), '切换历史周次后应保留原周期选中状态');
+      ok(has(main(root.innerHTML), 'ISO 历史报告事项'), '归并后仍应按原周期值读回本人历史报告');
+    } finally {
+      DB.reports = original;
+    }
   }
 
   /* 仅负责商业的项目总只显示商业总览，详情不新增填报、主数据或总裁写入能力。 */
@@ -821,11 +853,12 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
     const previousDate = new Date(SHANGHAI_TODAY); previousDate.setDate(previousDate.getDate() - 7);
     const previousPeriod = '第' + isoWeek(previousDate) + '周（' + weekRange(previousDate) + '）';
     const originalReports = DB.reports;
+    const previousSave = '2026-01-08T10:00:00Z';
     DB.reports = [...originalReports, {
       ...originalReports[0], id: 'r-history', period: previousPeriod,
       change_text: '历史周期正文 **历史加粗**', node_items: [],
       history: [{ at: '2026-01-09T00:00:00Z', by: 'u-pm', data: {
-        ...originalReports[0], period: previousPeriod, change_text: '历史版本原文', node_items: []
+        ...originalReports[0], id: 'r-history', period: previousPeriod, updated_at: previousSave, change_text: '历史版本原文', node_items: []
       } }]
     }];
     DB.leader_reviews = [
@@ -857,6 +890,13 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
       await App.detailTab('history'); html = root.innerHTML;
       ok(has(main(html), '历史版本原文') && has(main(html), '历史版本 1'), '项目详情未保留版本原文');
       ok(!has(main(html), '幕墙样板通过验收') && !has(main(html), '<b>进度可控</b>'), '历史版本页混入其他周期正文');
+      await App.openProfessionalOverview('r-history',previousSave); html = root.innerHTML;
+      ok(has(main(html),'data-report-version="1"') && has(main(html),'历史版本原文') && !has(main(html),'历史周期正文'), '本专业总览应打开精确的住宅历史版本');
+      App.professionalOverviewVersion(2); html = root.innerHTML;
+      ok(has(main(html),'data-report-version="2"') && has(main(html),'历史周期正文') && !has(main(html),'历史版本原文'), '本专业总览未切换到当前版本');
+      await App.openProfessionalOverview('r3b'); html = root.innerHTML;
+      ok(!has(main(html),'西地块总包清单编制') && has(main(html),'当前账号无法读取该报告的所选版本'), '本专业总览暴露了未授权的其他报告');
+      await App.openProjectDetail('p1'); await App.detailPeriod(previousPeriod);
       await App.detailTab('data'); html = root.innerHTML;
       ok(has(main(html), '示例住宅总图') && !has(main(html), 'App.masterSave'), 'PM 详情资料未保持项目资料和只读约束');
       await App.fillProject('p1', previousPeriod); html = root.innerHTML;
@@ -879,6 +919,34 @@ function identityRole(html) { return String(html).match(/<span class="rl">([^<]*
       delete DB.leader_notes;
     }
     console.log('Project detail render OK');
+  }
+
+  {
+    const originals = DB.reports;
+    const scoped = {...originals[0], id:'r-scope-overview', line:'工程', report_scope_id:'example-unified', scope_project_ids:['p1','p2'],
+      biz:{form_version:2, items:[
+        {project_id:'p1',mod:'粉刷',name:'一期原事项'},
+        {project_id:'p2',mod:'粉刷',name:'二期原事项'},
+        {project_id:'p1',mod:'回填',name:'一期另一模块'},
+        {project_id:'p1',mod:'粉刷',name:'一期同模块后录事项',prog:'保留该行格式'},
+        {project_id:'p1',mod:'',name:'无法判断模块的事项'}
+      ]},
+      rich_text:{v:1,fields:{'biz.items.3.prog':{ops:[{insert:'保留该行格式',attributes:{bold:true}}]}}}};
+    DB.reports = [...originals, scoped];
+    try {
+      const full = await run('pm',{pmDiscipline:'工程',extraProjectIds:['p2'],richText:true});
+      await full.App.openProfessionalOverview(scoped.id);
+      const html = main(full.root.innerHTML);
+      ok(has(html,'实际项目／分期') && has(html,'示例住宅一号') && has(html,'示例住宅二号') && has(html,'一期原事项') && has(html,'二期原事项'), '统一住宅总览应保留两条事项的实际分期');
+      ok((html.match(/rowspan="2"/g) || []).length===1 && (html.match(/class="overview-cell-module"[^>]*>粉刷<\/td>/g) || []).length===2,
+        '同一分期跨行模块应合并，相同模块跨实际分期仍分开');
+      ok(html.indexOf('一期原事项')<html.indexOf('一期同模块后录事项') && html.indexOf('一期同模块后录事项')<html.indexOf('一期另一模块'),
+        '模块按首次出现顺序归并，并保持组内输入次序');
+      ok(has(html,'<strong>保留该行格式</strong>') && has(html,'未分类'), '排序应保留原事项富文本，无法归类的事项应注明未分类');
+      const partial = await run('pm',{pmDiscipline:'工程'});
+      await partial.App.openProfessionalOverview(scoped.id);
+      ok(!has(main(partial.root.innerHTML),'二期原事项') && has(main(partial.root.innerHTML),'当前账号无法读取该报告的所选版本'), '缺少住宅分期权限时不能读取完整统一范围快照');
+    } finally { DB.reports = originals; }
   }
 
   ok(DB.projects[0].camera_url === '主入口塔吊|https://cam.example.com/p1\n地下室|https://cam.example.com/p1b', '撤销监控展示不应改写存量项目监控数据');

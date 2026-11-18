@@ -24,7 +24,7 @@ import {makeAdminPlanWorkbook as workbook,adminPlanSheet as sheet,adminPlanRow a
 const ops={id:'demo-ops'},designer={id:'design-fixed'},wild={id:'design-wild'},architect={id:'design-architect'},line='设计部';
 const item={source_id:'design-one',mod:'图纸',name:'建筑与机电整体更新图',due:'2026-11-25'};
 const denied=error=>[400,403].includes(error.status);
-async function fixture(t,{through=33}={}){
+async function fixture(t,{through}={}){
  const db=await initializedDatabase({through}),beforeClose=[];t.after(async()=>{for(const close of beforeClose)await close();await db.close();});const admin=testPool(db,null),pool=testPool(db);await seedDemo(admin);
  await admin.query("INSERT INTO public.projects(id,name,project_type) VALUES('hf','匿名弘坊范围','com')");
  for(const [id,biz]of [[designer.id,line],[wild.id,'*'],[architect.id,'建筑结构设计'],['design-electrical','机电设计'],['design-interior','精装设计'],['design-unassigned',null],['design-outsider',line]]){

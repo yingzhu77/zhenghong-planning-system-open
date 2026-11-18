@@ -75,6 +75,42 @@
     tools.toolbar.style.left = Math.max(left + 8, Math.min(left + width - toolbarBox.width - 8, x)) + 'px';
     tools.toolbar.style.top = Math.max(top + 8, Math.min(top + height - toolbarBox.height - 8, y)) + 'px';
   }
+  function formatSelection(q, range, action) {
+    var format = q.getFormat(range), red = global.ZHRichText.RED;
+    var attrs = action === 'clear' ? { bold: false, color: false }
+      : action === 'bold' ? { bold: format.bold !== true } : { color: format.color === red ? false : red };
+    q.formatText(range.index, range.length, attrs, 'user');
+  }
+  function selectionKeys(event, entry) {
+    if (event.altKey && event.key === 'F10' && entry.range.length) {
+      entry.refresh();
+      if (floating && floating.active === entry) floating.toolbar.querySelector('button').focus();
+      event.preventDefault();
+    } else if (event.key === 'Escape' && floating?.active === entry) hideSelection();
+  }
+  function bindSelection(q, editable, composing) {
+    var entry = {
+      input: q.root, quill: q, range: { index: 0, length: 0 }, editable: editable,
+      refresh: function () { showSelection(entry, q.getSelection() || entry.range, composing()); },
+      format: function (action) {
+        if (!editable() || composing() || !entry.range.length) return;
+        var range = entry.range;
+        q.setSelection(range, 'silent');
+        q.history.cutoff();
+        formatSelection(q, range, action);
+        q.history.cutoff();
+        q.setSelection(range, 'silent');
+        entry.refresh();
+      }
+    };
+    q.on('editor-change', function (event, range) {
+      if (event !== 'selection-change') return;
+      if (range) { entry.range = range; showSelection(entry, range, composing()); }
+      else if (floating?.active === entry && !floating.toolbar.contains(document.activeElement)) hideSelection();
+    });
+    q.root.addEventListener('keydown', function (event) { selectionKeys(event, entry); });
+    return { hide: function () { if (floating?.active === entry) hideSelection(); } };
+  }
   function mount(root, binding) {
     if (!global.Quill || !global.ZHRichText || !root.querySelectorAll) return;
     var model = global.ZHRichText;
@@ -138,8 +174,7 @@
         if (personal && !range.length) return hideSelection();
         var format = q.getFormat(range); q.setSelection(range, 'silent'); q.history.cutoff();
         if (range.length) {
-          var attrs = action === 'clear' ? { bold: false, color: false } : action === 'bold' ? { bold: format.bold !== true } : { color: format.color === model.RED ? false : model.RED };
-          q.formatText(range.index, range.length, attrs, 'user');
+          formatSelection(q, range, action);
         } else if (action === 'clear') { q.format('bold', false, 'user'); q.format('color', false, 'user'); }
         else q.format(action === 'bold' ? 'bold' : 'color', action === 'bold' ? format.bold !== true : format.color === model.RED ? false : model.RED, 'user');
         q.history.cutoff(); q.setSelection(range, 'silent'); lastRange = range; entry.range = range; sync(true); state(range);
@@ -159,11 +194,7 @@
       });
       q.on('text-change', function () { if (!composing) sync(true); state(); });
       q.root.addEventListener('focusin', function () { if (!personal) hideSelection(); });
-      q.root.addEventListener('keydown', function (event) {
-        if (personal && event.altKey && event.key === 'F10' && lastRange.length) {
-          state(lastRange); if (floating && !floating.toolbar.hidden) floating.toolbar.querySelector('button').focus(); event.preventDefault();
-        } else if (personal && event.key === 'Escape') { hideSelection(); }
-      });
+      if (personal) q.root.addEventListener('keydown', function (event) { selectionKeys(event, entry); });
       q.root.addEventListener('compositionstart', function () { composing = true; if (personal) hideSelection(); });
       q.root.addEventListener('compositionend', function () { composing = false; queueMicrotask(function () { if (!input.isConnected) return; q.update('user'); sync(true); state(); }); });
       toolbar.addEventListener('click', function (event) { var button = event.target.closest('button'); if (button) applyFormat(button.dataset.format); });
@@ -178,5 +209,5 @@
     mounted.forEach(function (entry, input) { if (input.isConnected) entry.sync(false); else mounted.delete(input); });
     if (floating && floating.active && !floating.active.input.isConnected) hideSelection();
   }
-  global.ZHRichEditor = { mount: mount, flush: flush };
+  global.ZHRichEditor = { mount: mount, flush: flush, bindSelection: bindSelection };
 })(window);

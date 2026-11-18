@@ -23,19 +23,12 @@ function dueDate(value) {
   if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value || value.startsWith('0000')) throw new HttpError(400, '截止日期不是有效日期');
   return value;
 }
+const taskTextFields = ['title','what','progress'];
 function richText(input, row, existing) {
-  if (input === undefined) {
-    const fields = Object.fromEntries(Object.entries(existing?.rich_text?.fields || {}).filter(([key]) => ['what', 'progress'].includes(key) && existing[key] === row[key]));
-    return Object.keys(fields).length ? { v: 1, fields } : {};
-  }
-  if (!object(input)) throw new HttpError(400, '文字格式内容不正确', 'invalid_rich_text');
-  if (!Object.keys(input).length) return {};
-  if (input.v !== 1 || !object(input.fields) || Object.keys(input).some((key) => !['v', 'fields'].includes(key)) || Object.keys(input.fields).some((key) => !['what', 'progress'].includes(key))) throw new HttpError(400, '会议事项仅支持内容和进展的文字格式', 'invalid_rich_text');
-  const fields = {};
-  for (const [key, delta] of Object.entries(input.fields)) {
-    fields[key] = validateRichText('leader_notes', { v: 1, fields: { what: delta } }, { what: row[key] }).fields.what;
-  }
-  return { v: 1, fields };
+  if (input !== undefined) return validateRichText('reporter_task',input,row);
+  const fields = Object.fromEntries(Object.entries(existing?.rich_text?.fields || {})
+    .filter(([key]) => taskTextFields.includes(key) && existing[key] === row[key]));
+  return Object.keys(fields).length ? {v:1,fields} : {};
 }
 async function actor(client, user, pid, roles = ['pm', 'ops']) {
   const profile = await getProfile(client, user.id);
@@ -109,9 +102,12 @@ export async function saveReporterTask(pool, user, request) {
     }
     const formatted = richText(request.rich_text, row, existing);
     if (profile.role === 'pm') {
-      const original = existing.rich_text?.fields?.what;
-      if (formatted.fields?.what && JSON.stringify(formatted.fields.what) !== JSON.stringify(original)) throw new HttpError(403, '会议事项内容格式由运营维护');
-      if (original) { formatted.v = 1; formatted.fields = { ...formatted.fields, what: original }; }
+      for (const key of ['title','what']) {
+        const original = existing.rich_text?.fields?.[key];
+        if (formatted.fields?.[key] && JSON.stringify(formatted.fields[key]) !== JSON.stringify(original))
+          throw new HttpError(403, '会议事项标题和内容格式由运营维护');
+        if (original) { formatted.v=1; formatted.fields={...formatted.fields,[key]:original}; }
+      }
     }
     const format = JSON.stringify(formatted);
     if (!id) return (await client.query('INSERT INTO public.reporter_tasks (id,project_id,owner_id,owner_name,title,what,due,status,progress,rich_text,meeting_kind,proposer_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING ' + columns,

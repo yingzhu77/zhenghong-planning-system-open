@@ -17,10 +17,9 @@ const ops={id:'demo-ops'},reporter={id:'demo-pm-res'},plain={id:'ordinary-member
 const denied=error=>[403,404].includes(error.status),session='d'.repeat(64),otherSession='e'.repeat(64);
 const password='Library123!';
 async function fixture(t){
- const db=await initializedDatabase({through:23}),admin=testPool(db,null),pool=testPool(db);
+ const db=await initializedDatabase(),admin=testPool(db,null),pool=testPool(db);
  const dir=await mkdtemp(path.join(os.tmpdir(),'management-library-'));
  t.after(async()=>{await rm(dir,{recursive:true,force:true});await db.close();});
- await db.exec(await readFile(new URL('../db/024-management-viewers.sql',import.meta.url),'utf8'));
  await seedDemo(admin);
  await createUser(admin,{userId:viewer.id,email:'all.project.viewer@example.invalid',name:'匿名只读人员',role:'viewer',password:'682941'});
  await createUser(admin,{userId:plain.id,email:'ordinary.member@example.invalid',name:'匿名项目人员',role:'pm',projects:['demo-res'],discipline:'工程',password:'682941'});
@@ -39,6 +38,24 @@ function multipart(relative,bytes){
   Buffer.from('--'+boundary+'\r\nContent-Disposition: form-data; name="path"\r\n\r\n'+relative+'\r\n--'+boundary+'\r\nContent-Disposition: form-data; name="file"; filename="anonymous.png"\r\nContent-Type: image/png\r\n\r\n'),
   bytes,Buffer.from('\r\n--'+boundary+'--\r\n')])};
 }
+
+test('project-scoped viewer can unlock assigned watermarked materials but cannot read, upload or alter another project',async t=>{
+ const f=await fixture(t),scoped={id:'scoped-library-viewer'};
+ await createUser(f.admin,{userId:scoped.id,email:'scoped.library@example.invalid',name:'匿名项目查看人',role:'viewer',viewerScope:'projects',projects:['demo-com'],password:'anonymous-pass'});
+ const listed=await listProjectLibrary(f.pool,scoped,{project_id:'demo-com'},session);
+ assert.equal(listed.items.length,1);assert.equal(listed.can_upload,false);assert.equal(listed.can_manage,false);
+ await unlockProjectLibrary(f.pool,scoped,{project_id:'demo-com',password},session);
+ const file=await loadProjectDocument(f.pool,scoped,f.dir,f.docs['demo-com'].id,{sessionKey:session,inline:true});
+ assert.equal(file.type,'image/png');assert.notDeepEqual(file.buffer,f.image);
+ await assert.rejects(listProjectLibrary(f.pool,scoped,{project_id:'demo-res'},session),denied);
+ await assert.rejects(unlockProjectLibrary(f.pool,scoped,{project_id:'demo-res',password},session),denied);
+ await assert.rejects(loadProjectDocument(f.pool,scoped,f.dir,f.docs['demo-res'].id,{sessionKey:session}),denied);
+ await assert.rejects(uploadProjectDocument(f.pool,scoped,f.dir,{project_id:'demo-com',filename:'rejected.png'},f.image),denied);
+ await assert.rejects(setLibraryPassword(f.pool,scoped,{project_id:'demo-com',password:'Changed123!'}),denied);
+ await assert.rejects(withdrawProjectDocument(f.pool,scoped,{id:f.docs['demo-com'].id}),denied);
+ await f.admin.query('DELETE FROM public.project_members WHERE user_id=$1',[scoped.id]);
+ await assert.rejects(loadProjectDocument(f.pool,scoped,f.dir,f.docs['demo-com'].id,{sessionKey:session}),denied);
+});
 
 test('viewer lists and unlocks both projects, receives watermarked files and keeps session/password/withdrawal checks',async t=>{
  const f=await fixture(t);

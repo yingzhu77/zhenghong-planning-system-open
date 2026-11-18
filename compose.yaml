@@ -48,6 +48,20 @@ services:
       - ./db/033-monthly-plan-summaries.sql:/docker-entrypoint-initdb.d/033-monthly-plan-summaries.sql:ro
       - ./db/034-shenzhen-merged-reporting.sql:/docker-entrypoint-initdb.d/034-shenzhen-merged-reporting.sql:ro
       - ./db/035-admin-monthly-batch-withdrawal.sql:/docker-entrypoint-initdb.d/035-admin-monthly-batch-withdrawal.sql:ro
+      - ./db/036-project-reporting-professions.sql:/docker-entrypoint-initdb.d/036-project-reporting-professions.sql:ro
+      - ./db/037-project-scoped-viewers.sql:/docker-entrypoint-initdb.d/037-project-scoped-viewers.sql:ro
+      - ./db/038-hongfang-weekly-collaboration.sql:/docker-entrypoint-initdb.d/038-hongfang-weekly-collaboration.sql:ro
+      - ./db/039-weekly-collaboration-scopes.sql:/docker-entrypoint-initdb.d/039-weekly-collaboration-scopes.sql:ro
+      - ./db/040-materials-only-viewers.sql:/docker-entrypoint-initdb.d/040-materials-only-viewers.sql:ro
+      - ./db/041-weekly-collaboration-items.sql:/docker-entrypoint-initdb.d/041-weekly-collaboration-items.sql:ro
+      - ./db/042-shared-monthly-plans.sql:/docker-entrypoint-initdb.d/042-shared-monthly-plans.sql:ro
+      - ./db/043-personnel-directory.sql:/docker-entrypoint-initdb.d/043-personnel-directory.sql:ro
+      - ./db/044-weekly-report-withdrawal.sql:/docker-entrypoint-initdb.d/044-weekly-report-withdrawal.sql:ro
+      - ./db/045-weekly-collaboration-supplements.sql:/docker-entrypoint-initdb.d/045-weekly-collaboration-supplements.sql:ro
+      - ./db/046-weekly-collaboration-followups.sql:/docker-entrypoint-initdb.d/046-weekly-collaboration-followups.sql:ro
+      - ./db/047-weekly-collaboration-outbound.sql:/docker-entrypoint-initdb.d/047-weekly-collaboration-outbound.sql:ro
+      - ./db/048-reported-completion.sql:/docker-entrypoint-initdb.d/048-reported-completion.sql:ro
+      - ./db/049-filling-text-format.sql:/docker-entrypoint-initdb.d/049-filling-text-format.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s

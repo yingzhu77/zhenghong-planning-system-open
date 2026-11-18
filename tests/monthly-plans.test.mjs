@@ -92,7 +92,7 @@ test('a confirmed month requires its exact plan even without client metadata and
   const report = await save(f, period, linked(plan), reportRich);
   assert.equal(report.biz.items[0].blocker, '待协调材料');
   const updated = await save(f, period, linked(plan, {items: [{...item, prog: '本周更新进展', blocker: '卡点已解决'}]}), reportRich);
-  assert.equal(updated.biz.items[0].blocker, '卡点已解决'); assert.equal(updated.history.length, 1);
+  assert.equal(updated.biz.items[0].blocker, '卡点已解决'); assert.equal(updated.history.length, (report.history?.length ?? 0) + 1);
   const variants = [linked(plan, {items: [{...item, name: '篡改事项'}]}), linked(plan, {items: [{...item, mod: '其他模块'}]}),
     linked(plan, {items: [{...item, due: '2026-12-01'}]}), linked(plan, {items: [{...item, source_id: 'other-id'}]}), linked(plan, {items: []}),
     linked(plan, {monthly_plan_month: '2026-12'}), linked(plan, {monthly_plan_id: '00000000-0000-4000-8000-000000000000'}), {items: [{...item, prog: ''}]}];

@@ -9,7 +9,6 @@ import {normalizeMonthlyPlanSummary,queryMonthlyPlanSummaries} from './monthly-p
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-const lines = [...new Set([...BUSINESS_MODULES,...RESIDENTIAL_DISCIPLINES])];
 function shape(value, allowed) {
   if (!object(value) || Object.keys(value).some(k => !allowed.includes(k))) throw new HttpError(400,'管理员月计划请求格式不正确','invalid_admin_monthly_plan');
 }
@@ -34,12 +33,12 @@ async function context(client,user,{project_type,month}) {
     FROM public.profiles p JOIN public.project_members m ON m.user_id=p.user_id
     JOIN public.projects j ON j.id=m.project_id
     LEFT JOIN app_private.report_scopes s ON s.anchor_project_id=j.id
-    CROSS JOIN LATERAL unnest(CASE WHEN j.project_type='com' THEN CASE WHEN p.biz_line='*' THEN $1::text[] ELSE ARRAY[p.biz_line]||ARRAY(SELECT g.line FROM public.commercial_module_grants g WHERE g.user_id=p.user_id AND g.project_id=j.id AND g.line IS DISTINCT FROM p.biz_line) END ELSE ARRAY[p.discipline] END) l(line)
+    CROSS JOIN LATERAL unnest((CASE WHEN j.project_type='com' THEN CASE WHEN p.biz_line='*' THEN $1::text[] ELSE ARRAY[p.biz_line]||ARRAY(SELECT g.line FROM public.commercial_module_grants g WHERE g.user_id=p.user_id AND g.project_id=j.id AND g.line IS DISTINCT FROM p.biz_line) END ELSE ARRAY[p.discipline] END)
+      ||ARRAY(SELECT g.line FROM public.project_reporting_grants g WHERE g.user_id=p.user_id AND g.project_id=j.id)) l(line)
     WHERE p.status='approved' AND p.role='pm' AND ($2::text IS NULL OR j.project_type=$2)
       AND (s.id IS NULL OR $3::date>=date_trunc('month',s.effective_week)::date)
       AND app_private.can_assign_monthly_plan(p.user_id,j.id,l.line,s.id)
-    ORDER BY j.sort_order,j.id,l.line,p.name,p.user_id`,[BUSINESS_MODULES,project_type??null,planMonth])).rows
-    .filter(target=>target.project_type!=='com'||businessModulesForProject(target.project_id).includes(target.line));
+    ORDER BY j.sort_order,j.id,l.line,p.name,p.user_id`,[BUSINESS_MODULES,project_type??null,planMonth])).rows;
   const valid=new Set(targets.map(targetKey));
   const plans=(await client.query(`SELECT ${MONTHLY_PLAN_COLUMNS.split(',').map(c=>c==='confirmed_by AS owner_id'?'p.confirmed_by AS owner_id':c==='plan_month::text AS plan_month'?'p.plan_month::text AS plan_month':'p.'+c).join(',')},st.in_use
     FROM public.monthly_plans p JOIN public.projects j ON j.id=p.project_id
@@ -51,6 +50,10 @@ async function context(client,user,{project_type,month}) {
   const summaries=await queryMonthlyPlanSummaries(client,{month,project_type});
   const project_professions=targets.some(t=>t.project_id==='szzz'&&t.report_scope_id==='shenzhen-shangmugu-residential')
     ?[{project_id:'szzz',report_scope_id:'shenzhen-shangmugu-residential',line:'良安田项目',assigned:targets.some(t=>t.project_id==='szzz'&&t.report_scope_id==='shenzhen-shangmugu-residential'&&t.line==='良安田项目')}]:[];
+  const custom=(await client.query(`SELECT j.id AS project_id,s.id AS report_scope_id,l.line FROM public.projects j
+    LEFT JOIN app_private.report_scopes s ON s.anchor_project_id=j.id
+    CROSS JOIN LATERAL unnest(j.reporting_professions) l(line) WHERE ($1::text IS NULL OR j.project_type=$1)`,[project_type??null])).rows;
+  for(const row of custom)project_professions.push({...row,assigned:targets.some(t=>t.project_id===row.project_id&&t.report_scope_id===row.report_scope_id&&t.line===row.line)});
   return {targets,plans,summaries,project_professions};
 }
 export async function getAdminPlanContext(pool,user,request={}) {
@@ -60,13 +63,15 @@ export async function getAdminPlanContext(pool,user,request={}) {
   return withIdentity(pool,user.id,client=>context(client,user,request));
 }
 
-export function adminPlanLineHint(row,projectId,type) {
+export function adminPlanLineHint(row,projectId,type,projectProfessions=[]) {
+  if(projectProfessions.some(profession=>profession.line===String(row.source?.sheet ?? '').trim()))return row.source.sheet;
   const source=planProfession(row.source?.sheet,type,projectId);
   return source?.line==='良安田项目'?row.source.sheet:row.line_hint;
 }
-export function matchAdminPlanTarget(targets,lineHint,projectId=targets[0]?.project_id) {
+export function matchAdminPlanTarget(targets,lineHint,projectId=targets[0]?.project_id,projectProfessions=[]) {
   const type=targets[0]?.project_type,profession=planProfession(lineHint,type,projectId);
-  const line=profession&&(type!=='com'||businessModulesForProject(targets[0]?.project_id).includes(profession.line))?profession.line:null;
+  const exact=[...targets,...projectProfessions].find(target=>target.line===String(lineHint ?? '').trim());
+  const line=exact?.line ?? (profession&&(type!=='com'||businessModulesForProject(targets[0]?.project_id).includes(profession.line))?profession.line:null);
   const candidates=line?targets.filter(t=>t.line===line):targets;
   // Workbook work-responsible names describe the work, not platform accounts.
   // Only the selected project's actual professional grants identify a reporter.
@@ -84,11 +89,12 @@ export async function previewAdminPlanRows(pool,user,request) {
   return withIdentity(pool,user.id,async client=>{
     const all=await context(client,user,{month:request.month});
     const targets=all.targets.filter(t=>t.project_id===request.project_id && (t.report_scope_id||null)===(request.report_scope_id||null));
+    const project_professions=all.project_professions.filter(p=>p.project_id===request.project_id&&(p.report_scope_id||null)===(request.report_scope_id||null));
     if (!targets.length) throw new HttpError(403,'该项目没有可代编的提报人或缺少合并范围授权','admin_monthly_plan_forbidden');
     const rows=request.rows.map(row=>{
       // Parser provenance is preserved in this ephemeral preview only. Saving
       // accepts the normal monthly-plan fields, never workbook formulas/code.
-      const match=matchAdminPlanTarget(targets,adminPlanLineHint(row,request.project_id,targets[0]?.project_type),request.project_id);
+      const match=matchAdminPlanTarget(targets,adminPlanLineHint(row,request.project_id,targets[0]?.project_type,project_professions),request.project_id,project_professions);
       const hint=!match.line&&suggestPlanProfession(row,targets[0]?.project_type),suggestion=hint&&matchAdminPlanTarget(targets,hint.line);
       const warnings=Array.isArray(row.warnings)?row.warnings.map(w=>object(w)&&w.code==='reporter_missing'
         ?{...w,message:'原表工作责任人为空，仅供参考；系统提报人按项目和专业匹配'}:w):[];
@@ -97,14 +103,14 @@ export async function previewAdminPlanRows(pool,user,request) {
       else if(!match.owner_id)warnings.push('该项目此专业暂无获授权提报人，请核对专业或账号授权');
       return {...row,...match,profession_suggestion:suggestion?.line?{line:suggestion.line,owner_id:suggestion.owner_id,reason:hint.reason,requires_confirmation:true}:null,warnings};
     });
-    return {month:request.month,targets,plans:all.plans.filter(p=>p.project_id===request.project_id && (p.report_scope_id||null)===(request.report_scope_id||null)),summaries:all.summaries.filter(p=>p.project_id===request.project_id && (p.report_scope_id||null)===(request.report_scope_id||null)),project_professions:all.project_professions.filter(p=>p.project_id===request.project_id&&(p.report_scope_id||null)===(request.report_scope_id||null)),rows};
+    return {month:request.month,targets,plans:all.plans.filter(p=>p.project_id===request.project_id && (p.report_scope_id||null)===(request.report_scope_id||null)),summaries:all.summaries.filter(p=>p.project_id===request.project_id && (p.report_scope_id||null)===(request.report_scope_id||null)),project_professions,rows};
   });
 }
 
 function normalizePlan(value,operation,index) {
   shape(value,['project_id','report_scope_id','line','owner_id','month','items','rich_text','expected_plan_id']);
   identifier(value.project_id,'项目');identifier(value.owner_id,'提报人');monthlyPlanMonth(value.month);
-  if (!lines.includes(value.line)) throw new HttpError(400,'请选择有效的专业或模块','invalid_admin_monthly_plan');
+  identifier(value.line,'专业或模块');
   if (value.report_scope_id!=null) identifier(value.report_scope_id,'统一填报范围');
   if (!Object.hasOwn(value,'expected_plan_id') || value.expected_plan_id!==null && (typeof value.expected_plan_id!=='string' || !uuid.test(value.expected_plan_id))) throw new HttpError(400,'请重新读取月计划后保存','invalid_admin_monthly_plan');
   if (!Array.isArray(value.items)) throw new HttpError(400,'月计划须为事项列表','invalid_admin_monthly_plan');
@@ -123,6 +129,12 @@ export async function saveAdminMonthlyPlans(pool,user,request) {
   if (new Set(summaries.map(p=>JSON.stringify([targetKey(p),p.month]))).size!==summaries.length) throw new HttpError(400,'同一提报人同月专业汇总不能重复提交','invalid_monthly_summary');
   return withIdentity(pool,user.id,async client=>{
     await operator(client,user);
+    const custom=[...plans,...summaries].filter(row=>!BUSINESS_MODULES.includes(row.line)&&!RESIDENTIAL_DISCIPLINES.includes(row.line));
+    if(custom.length){
+      const projects=(await client.query('SELECT id,reporting_professions FROM public.projects WHERE id=ANY($1::text[])',[custom.map(row=>row.project_id)])).rows;
+      if(custom.some(row=>!projects.find(project=>project.id===row.project_id)?.reporting_professions?.includes(row.line)))
+        throw new HttpError(400,'请选择有效的专业或模块','invalid_admin_monthly_plan');
+    }
     try { return (await client.query(withSummaries?'SELECT app_private.save_admin_monthly_plan_bundle($1,$2::jsonb,$3::jsonb) AS result':'SELECT app_private.save_admin_monthly_plans($1,$2::jsonb) AS result',withSummaries?[operation,JSON.stringify(plans),JSON.stringify(summaries)]:[operation,JSON.stringify(plans)])).rows[0].result; }
     catch(error) {
       if (error.code==='42501') throw new HttpError(403,'目标提报人当前没有此项目或专业的完整授权','admin_monthly_plan_forbidden');

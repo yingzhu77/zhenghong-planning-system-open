@@ -11,7 +11,6 @@ import { previewCompletion, requestCompletion, listCompletions, reviewCompletion
 import { completionStatistics } from '../server/completion-statistics.mjs';
 
 const migration = await readFile(new URL('../db/022-coordination-rich-text.sql', import.meta.url), 'utf8');
-const workbench = await readFile(new URL('../web/coordination-workbench.js', import.meta.url), 'utf8');
 const richModel = await readFile(new URL('../web/rich-text.js', import.meta.url), 'utf8');
 const origin = { id: 'rich-coord-origin' }, owner = { id: 'rich-coord-owner' }, outsider = { id: 'rich-coord-outsider' }, ops = { id: 'rich-coord-ops' };
 const what = '核对材料与交付结果';
@@ -102,58 +101,4 @@ test('coordination completion preview, initiator review, statistics and immutabl
   assert.equal(stats.totals.completed, 1); assert.equal(stats.totals.source_changed, 0);
   const sandbox = {}; sandbox.window = sandbox; vm.createContext(sandbox); vm.runInContext(richModel, sandbox);
   assert.match(sandbox.ZHRichText.field(reread.source_snapshot, 'what'), /<strong>核对材料<\/strong>.*rt-red/);
-});
-
-function workbenchHarness(handler) {
-  const S = { uid: origin.id, session: {}, profile: { role: 'pm' }, pmProject: 'p1', view: 'coordination', coordinationTasks: [], projects: [{ id: 'p1' }, { id: 'p2' }] };
-  const calls = [], elements = {}, sandbox = { document: { getElementById: id => elements[id] || null }, crypto: { randomUUID } };
-  sandbox.window = sandbox; vm.createContext(sandbox); vm.runInContext(richModel, sandbox); vm.runInContext(workbench, sandbox);
-  const api = sandbox.CoordinationWorkbench, model = sandbox.ZHRichText;
-  const cfg = { S, esc: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
-    richCopy: model.copy, richCollect: value => model.collect(plain(value)), richItem: model.field, render() {}, toast() {}, flush() {},
-    request: async (url, body) => { calls.push({ url, body: plain(body) }); return handler ? handler(url, body) : { data: { ...plain(body), author_id: S.uid, source_key: 'coord:' + body.project_id + ':' + body.id } }; } };
-  api.configure(cfg);
-  function seed(pid = S.pmProject) { api.seed(pid, [], [{ user_id: owner.id, role: 'pm', name: '匿名承办人' }]); api.change(pid, 'owner_id', owner.id); }
-  seed(); return { S, api, model, cfg, calls, elements, seed };
-}
-
-test('workbench rich binding preserves failed drafts, retries the same source and displays stored formatting', async () => {
-  let fail = true;
-  const h = workbenchHarness((url, body) => fail ? { error: { code: 'HTTP_503', message: '匿名保存中断' } }
-    : { data: { ...plain(body), author_id: origin.id, owner_name: '匿名承办人', source_key: 'coord:' + body.project_id + ':' + body.id } });
-  const html = h.api.render('p1'); assert.match(html, /<textarea[^>]+data-rich/);
-  assert.equal(h.api.binding('coordination_what_%zz'), null);
-  const binding = h.api.binding('coordination_what_p1'); binding.set(delta);
-  await h.api.create('p1'); assert.equal(h.calls.length, 1);
-  assert.deepEqual(h.calls[0].body.rich_text, format); assert.equal(h.calls[0].body.what, what);
-  assert.deepEqual(plain(binding.get()), delta); assert.match(h.api.render('p1'), /匿名保存中断/);
-  fail = false; await h.api.create('p1'); assert.deepEqual(h.calls[1].body, h.calls[0].body);
-  assert.match(h.api.render('p1'), /<strong>核对材料<\/strong>.*rt-red/);
-  assert.equal(h.api.binding('coordination_what_p1').get(), undefined);
-  binding.set({ ops: [{ insert: '不能写回已保存的新草稿' }] });
-  assert.doesNotMatch(h.api.render('p1'), /不能写回已保存的新草稿/);
-});
-
-test('coordination bindings keep project drafts separate and cannot write after identity change or during a pending create', async () => {
-  let finish;
-  const h = workbenchHarness((url, body) => new Promise(resolve => { finish = () => resolve({ data: { ...plain(body), author_id: origin.id } }); }));
-  const original = h.api.binding('coordination_what_p1'); original.set(delta);
-  h.S.pmProject = 'p2'; h.api.configure(h.cfg); h.seed('p2');
-  original.set({ ops: [{ insert: '旧项目编辑器迟到输入' }] }); assert.equal(original.get(), null);
-  h.api.binding('coordination_what_p2').set({ ops: [{ insert: '项目二正文', attributes: { bold: true } }] });
-  h.S.pmProject = 'p1'; h.api.configure(h.cfg);
-  assert.deepEqual(plain(h.api.binding('coordination_what_p1').get()), delta);
-  h.S.view = 'form'; original.set({ ops: [{ insert: '旧视图迟到输入' }] }); assert.equal(original.get(), null);
-  h.S.view = 'coordination'; h.S.pmLine = 'another-module';
-  original.set({ ops: [{ insert: '旧模块迟到输入' }] }); assert.equal(original.get(), null);
-  h.S.pmLine = undefined;
-  assert.deepEqual(plain(h.api.binding('coordination_what_p1').get()), delta);
-  const pending = h.api.create('p1'); original.set({ ops: [{ insert: '不能修改发送中的内容' }] });
-  assert.equal(h.calls[0].body.what, what); assert.deepEqual(plain(original.get()), delta);
-  h.S.uid = 'new-user'; h.S.session = {};
-  assert.equal(original.get(), null, 'an old editor stops reading before the new session is configured');
-  h.api.configure(h.cfg);
-  original.set({ ops: [{ insert: '不能串入新账号' }] }); finish(); await pending;
-  assert.equal(h.S.coordinationTasks.length, 0); assert.equal(original.get(), null);
-  assert.doesNotMatch(h.api.render('p1'), /不能串入新账号|项目二正文|核对材料/);
 });

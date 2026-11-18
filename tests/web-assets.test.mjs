@@ -4,10 +4,22 @@ import { cp, mkdtemp, rm, appendFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { get } from 'node:http';
+import { gunzipSync } from 'node:zlib';
 import { webAssets } from '../server/web-assets.mjs';
 import { createApp } from '../server/app.mjs';
 
 const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
+function rawGet(url,headers={}) {
+  return new Promise((resolve,reject) => {
+    get(url,{headers},response=>{
+      const chunks=[];
+      response.on('data',chunk=>chunks.push(chunk));
+      response.on('end',()=>resolve({status:response.statusCode,headers:response.headers,body:Buffer.concat(chunks)}));
+      response.on('error',reject);
+    }).on('error',reject);
+  });
+}
 test('public assets use content versions in responsive background sources and preload', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'planning-assets-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -50,6 +62,19 @@ test('only versioned public assets are immutable; HTML revalidates and APIs stay
   assert.equal(home.headers.get('cache-control'), 'no-cache, max-age=0, must-revalidate');
   const html = await home.text();
   const manifest = JSON.parse(html.match(/id="planning-assets"[^>]*>(.*?)<\/script>/s)[1]);
+  for (const url of ['/',manifest['app.js']]) {
+    const plain=await rawGet(base+url,{'Accept-Encoding':'gzip;q=0, identity'});
+    const zipped=await rawGet(base+url,{'Accept-Encoding':'gzip'});
+    assert.equal(plain.status,200);
+    assert.equal(zipped.status,200);
+    assert.equal(plain.headers['content-encoding'],undefined);
+    assert.equal(zipped.headers['content-encoding'],'gzip');
+    assert.equal(zipped.headers.vary,'Accept-Encoding');
+    assert.deepEqual(gunzipSync(zipped.body),plain.body);
+    assert.ok(zipped.body.length<plain.body.length*.4);
+    assert.notEqual(zipped.headers.etag,plain.headers.etag);
+    assert.equal((await rawGet(base+url,{'Accept-Encoding':'gzip','If-None-Match':zipped.headers.etag})).status,304);
+  }
   for (const url of Object.values(manifest)) {
     const response = await fetch(base + url);
     assert.equal(response.status, 200, url);

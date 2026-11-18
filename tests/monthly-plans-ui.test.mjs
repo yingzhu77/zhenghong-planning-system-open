@@ -47,6 +47,36 @@ function report(id, period, item, extra = {}) {
     biz: { items: [item] }, ...extra };
 }
 
+function professionalHarness(storage=new Map()){
+  const h=harness((url,body)=>({data:plan({line:'工程',plan_month:body.month+'-01',report_scope_id:'merged',scope_project_ids:['p1','p2'],items:clone(body.items),rich_text:body.rich_text}),error:null}),storage);
+  h.S.projects.forEach(p=>p.project_type='res');h.S.pmLine='工程';h.S.profile.discipline='工程';
+  h.S.pmReportScope={id:'merged',project_ids:['p1','p2'],reporting_mode:'professional'};
+  h.sandbox.ReportScopes={allowed:()=>true,active:()=>true};
+  return h;
+}
+
+test('merged professional current-month confirmation uses the same table as commercial and keeps weekly feedback, child and formatting',async()=>{
+  const h=professionalHarness();
+  h.S.bizItems=[{source_id:'same-row',project_id:'p2',mod:'工程',name:'住宅本月事项',due:'2026-10-25',prog:'本周已完成复核',blocker:'待验收',_rich:{name:{ops:[{insert:'住宅本月事项',attributes:{bold:true}}]},prog:{ops:[{insert:'本周已完成复核',attributes:{bold:true}}]}}}];
+  assert.equal(h.api.inlineCurrent(),true);assert.equal(h.api.plannerHtml(),'');assert.match(h.api.toolbarHtml(),/MonthlyPlans.confirmCurrent/);
+  assert.equal(await h.api.confirmCurrent(),true);
+  assert.equal(h.calls[0].body.report_scope_id,'merged');assert.equal(h.calls[0].body.items[0].project_id,'p2');assert.equal(h.calls[0].body.items[0].prog,undefined);
+  assert.equal(h.calls[0].body.rich_text.fields['items.0.name'].ops[0].attributes.bold,true);
+  assert.equal(h.S.bizItems[0].prog,'本周已完成复核');assert.equal(h.S.bizItems[0].blocker,'待验收');assert.equal(h.S.bizItems[0]._rich.prog.ops[0].attributes.bold,true);
+  assert.equal(h.S.bizItems[0].monthly_plan_id,'confirmed-plan');assert.deepEqual(clone(h.api.metadata()),{monthly_plan_ids:['confirmed-plan']});assert.equal(h.api.locked(),true);
+  fillNext(h);assert.match(h.api.plannerHtml(),/下月独立事项/);assert.equal(h.S.bizItems[0].prog,'本周已完成复核');
+});
+
+test('older separate professional month drafts restore only into an empty form and remain preserved when a current form already has input',async()=>{
+  const key=JSON.stringify(['owner','p1','工程','2026-10','merged',JSON.stringify(['p1','p2'])]),storageKey='zh_monthly_plan_draft_v1_'+encodeURIComponent(key);
+  const raw=JSON.stringify({v:1,scope:JSON.parse(key),items:[{source_id:'original',project_id:'p2',mod:'工程',name:'旧版本月计划草稿',due:'2026-10-25',_rich:{name:{ops:[{insert:'旧版本月计划草稿',attributes:{bold:true}}]}}}]});
+  const storage=new Map([[storageKey,raw]]),empty=professionalHarness(storage);empty.api.prepare();assert.equal(empty.S.bizItems[0].name,'旧版本月计划草稿');assert.equal(empty.S.bizItems[0].project_id,'p2');
+  assert.equal(await empty.api.confirmCurrent(),true);assert.equal(storage.get(storageKey),raw);assert.match(empty.api.toolbarHtml(),/只读保留/);
+  const occupied=professionalHarness(storage);occupied.S.bizItems=[{source_id:'new',name:'当前周已有输入',prog:'不能丢的反馈'}];occupied.api.prepare();
+  assert.equal(occupied.S.bizItems[0].name,'当前周已有输入');assert.equal(occupied.S.bizItems[0].prog,'不能丢的反馈');assert.match(occupied.api.toolbarHtml(),/旧版本月计划草稿/);assert.equal(storage.get(storageKey),raw);
+  const broken=professionalHarness(new Map([[storageKey,'invalid json']]));broken.api.prepare();assert.match(broken.api.toolbarHtml(),/草稿读取失败/);assert.equal(broken.storage.get(storageKey),'invalid json');
+});
+
 test('commercial weekly core is a read-only projection of confirmed items and live feedback, preserving nodes and drafts', () => {
   const h = harness();
   h.S.monthlyPlans = [plan({items:[{source_id:'fixed-item',name:'本周固定事项',mod:'模块',due:'2026-10-23'}],
@@ -181,8 +211,9 @@ test('an unknown network response after next withdrawal preserves a new recovery
 test('a scoped current withdrawal stopped by form draft failure preserves original raw before any request',async()=>{
   const h=harness();vm.runInContext(fs.readFileSync(new URL('../web/report-scopes.js',import.meta.url),'utf8'),h.sandbox);h.sandbox.confirm=()=>true;
   h.S.projects[0].project_type='res';h.S.profile.discipline='工程';h.S.pmLine='工程';h.S.pmReportScope={id:'scope',anchor_project_id:'p1',project_ids:['p1'],reporting_mode:'professional'};
-  h.api.plannerHtml();h.api.edit(0,'name','当前专业的原草稿');h.api.binding('monthly_next_name_0').set({ops:[{insert:'当前专业的原草稿',attributes:{bold:true}}]});h.api.saveDraft();
-  const key=[...h.storage.keys()][0],raw=h.storage.get(key);h.S.monthlyPlans=[plan({line:'工程',report_scope_id:'scope',scope_project_ids:['p1']})];
+  const draftScope=['owner','p1','工程','2026-10','scope',JSON.stringify(['p1'])],key='zh_monthly_plan_draft_v1_'+encodeURIComponent(JSON.stringify(draftScope));
+  const raw=JSON.stringify({v:1,scope:draftScope,items:[{mod:'工程',name:'当前专业的原草稿',due:'',_rich:{name:{ops:[{insert:'当前专业的原草稿',attributes:{bold:true}}]}}}]});h.storage.set(key,raw);
+  h.S.monthlyPlans=[plan({line:'工程',report_scope_id:'scope',scope_project_ids:['p1']})];
   h.options.saveFormDraft=()=>false;h.api.configure(h.options);assert.equal(await h.api.withdrawCurrent(),false);
   assert.equal(h.calls.length,0);assert.equal(h.storage.get(key),raw);assert.match(h.api.toolbarHtml(),/<strong>当前专业的原草稿<\/strong>/);
 });
@@ -540,12 +571,12 @@ function monthlyAI(h, month='2026-10') {
   h.S.profile.status='approved'; h.options.saveFormDraft=()=>true;h.api.configure(h.options);
   return {context:{monthly_plans:h.api.aiContext()},candidate:{month,items:[{mod:'景观 / 一标段',name:'原始基准点移交、基层标高复核完成',due:'2026-11-15',progress:'9月30日启动',sources:['匿名景观.xlsx · 景观!D3']}]}};
 }
-test('reading AI month capabilities does not create empty stored drafts; scoped monthly additions stay outside weekly feedback',()=>{
+test('reading AI month capabilities creates no empty stored drafts; professional additions share the current table and preserve existing feedback',()=>{
   const h=harness();monthlyAI(h);assert.equal(h.api.saveDraft(),true);assert.equal(h.storage.size,0);
   vm.runInContext(fs.readFileSync(new URL('../web/report-scopes.js',import.meta.url),'utf8'),h.sandbox);
   h.S.projects[0].project_type='res';h.S.profile.discipline='工程';h.S.pmLine='工程';h.S.pmReportScope={id:'scope',anchor_project_id:'p1',project_ids:['p1'],reporting_mode:'professional'};
   h.S.bizItems=[{mod:'旧反馈',name:'本周保留文字',due:'',prog:'已填进展'}];const week=clone(h.S.bizItems),f=monthlyAI(h),result=h.api.aiApply(f.context,f.candidate);
-  assert.deepEqual(clone(h.S.bizItems),week);assert.match(h.api.plannerHtml(),/原始基准点移交/);assert.equal(h.calls.length,0);
+  assert.deepEqual(clone(h.S.bizItems[0]),week[0]);assert.equal(h.S.bizItems[1].name,'原始基准点移交、基层标高复核完成');assert.equal(h.api.plannerHtml(),'');assert.equal(h.calls.length,0);
   h.api.aiUndo(result.transaction);assert.deepEqual(clone(h.S.bizItems),week);assert.equal(h.storage.size,0);
 });
 test('AI new month plans append to the unconfirmed local form, preserve original rich rows and can undo without confirming',()=>{

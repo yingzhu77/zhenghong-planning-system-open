@@ -35,12 +35,13 @@ async function fixture(role='viewer',cap=false){
       else if(body.view==='archive'){
         data.project_id=body.project_id || 'own';
         data.archive={project_master:[{project_id:data.project_id,fields:{city:data.project_id==='other'?'商业城市':'住宅城市',fitout:'建设标准',rich_text:{v:1,fields:{fitout:{ops:[{insert:'建设标准',attributes:{bold:true}}]}}}}}],project_phases:[],project_drawings:[],milestones:[]};
-      }else assert.equal(body.view,'projects');
+      }else if(body.view==='plans')data.month=body.month;
+      else assert.equal(body.view,'projects');
       return route.fulfill({contentType:'application/json',body:JSON.stringify({data})});
     }
     if(pathname==='/api/project-library/list')return route.fulfill({contentType:'application/json',body:JSON.stringify({data:{items:[{id:'file',title:'匿名资料',name:'anonymous.pdf',version:1,category:'计划资料',mime:'application/pdf',size:1024,uploaded_name:'匿名上传人',created_at:'2026-10-23T01:00:00Z',can_withdraw:true}],categories:['计划资料'],configured:true,unlocked:false,can_manage:true,can_upload:true}})});
     if(pathname==='/api/project-library/unlock')return route.fulfill({contentType:'application/json',body:JSON.stringify({data:{}})});
-    if(pathname==='/api/report-scopes/list')return route.fulfill({contentType:'application/json',body:JSON.stringify({data:[]})});
+    if(['/api/report-scopes/list','/api/commercial-module-grants','/api/project-reporting-grants','/api/monthly-summaries','/api/personnel-directory'].includes(pathname))return route.fulfill({contentType:'application/json',body:JSON.stringify({data:[]})});
     assert.fail('unexpected isolated route: '+pathname);
   }
   await page.route('**/*',async route=>{
@@ -49,7 +50,7 @@ async function fixture(role='viewer',cap=false){
     if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<!doctype html><html lang="zh-CN"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><div id="toast"></div></body></html>'});
     if(url.pathname==='/logo.png')return route.fulfill({contentType:'image/png',body:fs.readFileSync(new URL('logo.png',web))});
     if(!url.pathname.startsWith('/api/'))return route.fulfill({status:404,body:''});
-    const body=route.request().postDataJSON();calls.push({path:url.pathname,body});
+    const body=route.request().postDataJSON() || {};calls.push({path:url.pathname,body});
     if(behavior.hold===body.view){behavior.hold=null;behavior.held.push(()=>respond(route,body));return;}
     return respond(route,body);
   });
@@ -68,7 +69,7 @@ async function fixture(role='viewer',cap=false){
   await page.addScriptTag({content:source.slice(0,boundary)+'\nwindow.managementAudit={S,App,afterLogin,showPage,renderShell,configureReporter,planningNavItems,planningGroups,pageDataKeys,myProjects,isPlanningManager,isReviewer,canReadManagement,getDataState:()=>dataState};\n})();'});
   await page.evaluate(({role,cap,projects})=>{
     const S=window.managementAudit.S,profile={user_id:'anonymous',name:'匿名查看用户',role,status:'approved',management_viewer:cap};
-    Object.assign(S,{uid:'anonymous',session:{user:{id:'anonymous',profile}},profile,view:'managementCoord',pmProject:'own',pmPeriod:'2026-10-19',pmLine:'综合',reporterArchiveTab:'planning',projects:[projects[0]],pms:[{user_id:'anonymous',project_id:'own'}],reportScopes:[{id:'personal-scope'}],reports:[{id:'personal-report'}],reporterTasks:[{id:'personal-meeting'}],coordinationTasks:[{id:'personal-coord'}],completions:[{id:'personal-completion'}]});
+    Object.assign(S,{uid:'anonymous',session:{user:{id:'anonymous',profile}},profile,view:'managementCoord',pmProject:'own',pmPeriod:'2026-10-19',pmLine:'综合',reporterArchiveTab:'planning',projects:[projects[0]],pms:[{user_id:'anonymous',project_id:'own'}],reportScopes:[{id:'personal-scope',project_ids:['own'],anchor_project_id:'own',reporting_mode:'legacy'}],reports:[{id:'personal-report'}],reporterTasks:[{id:'personal-meeting'}],coordinationTasks:[{id:'personal-coord'}],completions:[{id:'personal-completion'}]});
     window.testDb={projects:[projects[0]],project_members:S.pms};
   },{role,cap,projects});
   return {browser,page,calls,errors,behavior};
@@ -82,8 +83,8 @@ test('viewer login and real navigation expose only read-only tasks and project f
     await page.evaluate(()=>window.managementAudit.afterLogin());
     await expect(page.locator('.management-reader')).toHaveAttribute('data-management-view','coordination');
     const state=await page.evaluate(()=>{const h=window.managementAudit;return {groups:h.planningGroups(h.planningNavItems()).map(x=>x.label),keys:h.planningNavItems().map(x=>x.k),data:h.pageDataKeys(),manager:h.isPlanningManager(),reviewer:h.isReviewer(),reads:window.dbReads};});
-    assert.deepEqual(state.groups,['事项管理','项目资料']);assert.deepEqual(state.data,[]);assert.equal(state.manager,false);assert.equal(state.reviewer,false);assert.deepEqual(state.reads,[]);
-    assert.deepEqual(state.keys,['managementCoord','managementCompletion','managementMeetings','managementArchive','managementLibrary']);
+    assert.deepEqual(state.groups,['计划总览','事项管理','项目资料']);assert.deepEqual(state.data,[]);assert.equal(state.manager,false);assert.equal(state.reviewer,false);assert.deepEqual(state.reads,[]);
+    assert.deepEqual(state.keys,['managementPlans','managementCoord','managementCompletion','managementMeetings','managementArchive','managementLibrary']);
     await expect(page.locator('#pmPeriod')).toHaveCount(0);await expect(page.locator('textarea,input[type="file"],[contenteditable="true"]')).toHaveCount(0);
     await expect(page.locator('.rt-red strong')).toHaveText('协调正文');await expect(page.locator('.management-reader-basis').first()).toContainText('当前周');
     await page.getByRole('button',{name:'加载更多记录',exact:true}).click();await expect(page.locator('.management-reader-record')).toHaveCount(3);
@@ -104,8 +105,11 @@ test('viewer login and real navigation expose only read-only tasks and project f
 test('PM capability keeps personal arrays, reporting scope and own library while the independent snapshot, meeting, archive and shared-library pages have no write actions',async()=>{
   const h=await fixture('pm',true);const {page}=h;
   try{
-    const before=await page.evaluate(()=>{const h=window.managementAudit,S=h.S;window.personalSnapshot=JSON.stringify([S.projects,S.pms,S.reports,S.reportScopes,S.reporterTasks,S.coordinationTasks,S.completions,S.pmProject,S.pmPeriod,S.pmLine]);return {keys:h.planningNavItems().map(x=>x.k),my:h.myProjects(),manager:h.isPlanningManager()};});
-    assert.deepEqual(before.keys.slice(0,7),['center','mline','coordination','form','master','history','library']);assert.equal(before.my.length,1);assert.equal(before.manager,false);
+    const before=await page.evaluate(()=>{const h=window.managementAudit,S=h.S;window.personalSnapshot=JSON.stringify([S.projects,S.pms,S.reports,S.reportScopes,S.reporterTasks,S.coordinationTasks,S.completions,S.pmProject,S.pmPeriod,S.pmLine]);return {items:h.planningNavItems(),my:h.myProjects(),manager:h.isPlanningManager()};});
+    assert.deepEqual(before.items.slice(0,6).map(item=>[item.k,item.group]),[
+      ['form','form'],['professionalOverview','form'],['history','form'],['master','projects'],['mline','projects'],['library','projects']
+    ]);
+    assert.equal(before.my.length,1);assert.equal(before.manager,false);
     await page.evaluate(()=>window.managementAudit.showPage());
     await goto(h,'managementCompletion');await expect(page.locator('.management-reader')).toContainText('申报时快照与已保存审核记录');
     await expect(page.locator('.rt-red strong')).toHaveText('申报时原文');await expect(page.locator('.management-reader')).toContainText('原审核说明');
@@ -174,7 +178,10 @@ test('member administration labels viewers and changes only the management-read 
     await page.getByLabel('全项目只读',{exact:true}).check();
     await expect.poll(()=>page.evaluate(()=>window.dbWrites.length)).toBe(1);
     assert.deepEqual(await page.evaluate(()=>window.dbWrites[0]),{table:'profiles',payload:{management_viewer:true}});
+    await page.getByLabel('查看人内容范围',{exact:true}).selectOption('materials');
+    await expect.poll(()=>page.evaluate(()=>window.dbWrites.length)).toBe(2);
+    assert.deepEqual(await page.evaluate(()=>window.dbWrites[1]),{table:'profiles',payload:{viewer_access:'materials'}});
     const current=await page.evaluate(()=>{const h=window.managementAudit;h.S.profile={role:'viewer',status:'approved'};return h.App.memberSet('anonymous-pm','management_viewer',false).then(()=>window.dbWrites.length);});
-    assert.equal(current,1);assert.deepEqual(h.errors,[]);
+    assert.equal(current,2);assert.deepEqual(h.errors,[]);
   }finally{await h.browser.close();}
 });

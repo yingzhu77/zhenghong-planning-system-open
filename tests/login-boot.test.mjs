@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../web/login-boot.js', import.meta.url), 'utf8');
 function fixture(failures = {}) {
-  const names = ['planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'app.js', 'overview-meetings.js', 'admin-plan-overview.js', 'admin-plan-overview.css', 'project-plan-statistics.js', 'project-plan-statistics.css', 'coordination-workbench.js', 'monthly-summaries.js', 'monthly-plans.js', 'completion-statistics.js', 'completion-statistics.css', 'completion-review.js', 'completion-review.css', 'report-attachments.js', 'report-attachments.css',
+  const names = ['planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'app.js', 'overview-meetings.js', 'admin-plan-overview.js', 'admin-plan-overview.css', 'project-plan-statistics.js', 'project-plan-statistics.css', 'monthly-summaries.js', 'monthly-plans.js', 'completion-statistics.js', 'completion-statistics.css', 'completion-review.js', 'completion-review.css', 'report-attachments.js', 'report-attachments.css',
     'reporter-tasks.js', 'reporter-tasks.css', 'reporter-workbench.css', 'reporter-archive.js', 'reporter-archive.css', 'project-knowledge.js', 'project-knowledge.css', 'admin-archive.js', 'admin-archive.css',
     'vendor/quill/quill.core.css', 'selection-format.css', 'vendor/quill/quill.js', 'rich-text.js', 'rich-editor.js', 'password-change.js', 'password-change.css', 'management-reader.js', 'management-reader.css'];
   const assets = Object.fromEntries(names.map(name => [name, '/assets/' + name])), downloads = [], removed = [], events = {};
@@ -32,7 +32,7 @@ const flushDownloads = () => new Promise(resolve => setImmediate(resolve));
 test('the real login loader parses and exports workflow, reporter and editor gates on first execution', async () => {
   assert.doesNotThrow(() => new vm.Script(source, {filename: 'login-boot.js'}));
   const f = fixture();
-  for (const name of ['ensureWorkflow', 'ensureReporter', 'ensureAdmin', 'ensureOverview', 'ensureCoordination', 'ensureStatistics', 'ensureProjectPlanStatistics', 'ensureManagementReader', 'ensureEditor', 'ensurePasswordChange', 'complete']) assert.equal(typeof f.boot[name], 'function');
+  for (const name of ['ensureWorkflow', 'ensureReporter', 'ensureAdmin', 'ensureOverview', 'ensureStatistics', 'ensureProjectPlanStatistics', 'ensureManagementReader', 'ensureEditor', 'ensurePasswordChange', 'complete']) assert.equal(typeof f.boot[name], 'function');
   assert.equal(f.boot.session, f.session); assert.deepEqual(f.downloads, ['/assets/planning-windows.js']);
   await flushDownloads();
   assert.deepEqual(f.downloads, ['/assets/planning-windows.js', '/assets/report-scopes.js', '/assets/baseline-core.js', '/assets/app.js'], 'calendar, stable reporting scope and read-only baseline helpers must finish before app hydration');
@@ -97,25 +97,6 @@ test('management reading loads on demand and can retry without loading editing c
   for (const name of ['management-reader.js', 'management-reader.css'])
     assert.equal(f.downloads.filter(url => url.endsWith('/' + name)).length, 2);
   assert.equal(f.downloads.some(url => /admin-archive|rich-editor|reporter-tasks/.test(url)), false);
-});
-
-test('the coordination workbench downloads only on demand and simultaneous requests share its single asset', async () => {
-  const f = fixture(); await flushDownloads();
-  assert.equal(f.downloads.some(url => url.includes('coordination-workbench')), false);
-  const before = f.downloads.slice();
-  await Promise.all([f.boot.ensureCoordination(), f.boot.ensureCoordination(), f.boot.ensureCoordination()]);
-  assert.deepEqual(f.downloads, [...before, '/assets/coordination-workbench.js']);
-  await f.boot.ensureCoordination();
-  assert.equal(f.downloads.filter(url => url.endsWith('/coordination-workbench.js')).length, 1);
-});
-
-test('a failed coordination workbench asset can retry without downloading unrelated components', async () => {
-  const f = fixture({ '/assets/coordination-workbench.js': 1 }); await flushDownloads();
-  const before = f.downloads.slice();
-  await assert.rejects(f.boot.ensureCoordination(), /组件下载失败/);
-  await Promise.all([f.boot.ensureCoordination(), f.boot.ensureCoordination()]);
-  assert.deepEqual(f.downloads, [...before, '/assets/coordination-workbench.js', '/assets/coordination-workbench.js']);
-  assert.ok(f.removed.includes('/assets/coordination-workbench.js'));
 });
 
 test('a failed calendar helper prevents app hydration and shows the existing login error', async () => {

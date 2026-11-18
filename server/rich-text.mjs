@@ -8,7 +8,10 @@ export const RICH_TEXT_PATHS = Object.freeze({
   leader_notes: /^what$/,
   milestones: /^note$/,
   coordination_tasks: /^what$/,
-  completion_requests: /^(?:completion_note|review_note)$/
+  completion_requests: /^(?:completion_note|review_note)$/,
+  collaboration_item: /^(?:mod|name)$/,
+  monthly_summary_item: /^(?:mod|name|progress)$/,
+  reporter_task: /^(?:title|what|progress)$/
 });
 const fail = (message = '文字格式内容不正确') => { throw new HttpError(400, message, 'invalid_rich_text'); };
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);

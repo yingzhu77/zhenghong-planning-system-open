@@ -2,6 +2,51 @@
 (function(global){
   'use strict';
   function esc(value){return String(value==null?'':value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  // A zero marks a cell covered by the first row of a consecutive module.
+  // Compare display markup so that distinct rich-text emphasis is retained.
+  function moduleRowSpans(modules,sources){
+    var spans=[],start=0;
+    modules.forEach(function(module,index){
+      if(index && module.trim() && module===modules[start] && (!sources || sources[index]===sources[start])){
+        spans[start]++;
+        spans.push(0);
+      }else{
+        start=index;
+        spans.push(1);
+      }
+    });
+    return spans;
+  }
+  function groupPlanRowsByModule(rows){
+    function label(value){return typeof value==='string'?value.trim().replace(/\s+/g,' '):'';}
+    var sources=new Map();
+    rows.forEach(function(row){
+      if(!sources.has(row.source))sources.set(row.source,[]);
+      sources.get(row.source).push(row);
+    });
+    return Array.from(sources.values()).flatMap(function(sourceRows){
+      var modules=new Map(),unclassified=[];
+      sourceRows.forEach(function(row){
+        var module=label(row.item.mod);
+        if(module && !modules.has(module))modules.set(module,[]);
+      });
+      sourceRows.forEach(function(row){
+        var module=label(row.item.mod),inferred=false;
+        if(!module){
+          // Infer only from an exact item heading and an existing module in
+          // the same report and actual project. Similar names remain separate.
+          var title=String(row.item.name || '').trim().split(/\r?\n/,1)[0];
+          var heading=/^【([^】]+)】|^([^：:]+)[：:]/.exec(title);
+          var candidate=label(heading?(heading[1] || heading[2]):title);
+          if(modules.has(candidate)){module=candidate;inferred=true;}
+        }
+        var grouped=Object.assign({},row,{module:module,inferredModule:inferred});
+        if(module)modules.get(module).push(grouped);
+        else unclassified.push(grouped);
+      });
+      return Array.from(modules.values()).flat().concat(unclassified);
+    });
+  }
   function plainLines(value){return String(value).split('\n').map(function(line){return line.trim().replace(/ +/g,' ');}).filter(Boolean).map(esc).join('<br>');}
   // Workbook spaces are layout, not table columns. Recognize explicit list
   // markers only outside parentheses; dates, decimals and building numbers
@@ -23,17 +68,28 @@
   function columnWidths(items,options){
     options=options || {};
     function width(value){return Array.from(String(value || '').replace(/\s+/g,' ')).reduce(function(total,char){return total+(/[^\x00-\xff]/.test(char)?1:.5);},0);}
-    function progress(value){return /^(?:未填写|未提交|本周未提交|本周尚未提交|暂无进展|[—-])$/.test(String(value || '').trim())?'':value;}
-    var sizes=[width('模块'),1,width('完成时间')*2,1],sourceSize=2;
-    (items || []).forEach(function(item){sizes[0]=Math.max(sizes[0],width(item.mod));sizes[1]=Math.max(sizes[1],width(item.name));sizes[2]=Math.max(sizes[2],width(item.due || '未设置')*2);sizes[3]=Math.max(sizes[3],width(progress(item.progress)));sourceSize=Math.max(sourceSize,width(item.source));});
-    var date={value:sizes[2]+3,unit:'ch'},prefix=[];
-    if(options.sequence)prefix.push({value:4,unit:'ch',cap:5});
+    function progress(value){var text=String(value || '').trim();return /^(?:未填写|未提交|本周未提交|本周尚未提交|暂无进展|[—-])$/.test(text)?'':text;}
+    var sizes=[width(options.sequence?'模块或类别':'模块'),1,width('完成时间')*2,0],sourceSize=2;
+    (items || []).forEach(function(item){
+      sizes[0]=Math.max(sizes[0],width(item.mod));sizes[1]=Math.max(sizes[1],width(item.name));
+      sizes[2]=Math.max(sizes[2],width(item.due || '未设置')*2);
+      sizes[3]=Math.max(sizes[3],width(progress(item.progress))+width(progress(item.blocker)));
+      sourceSize=Math.max(sourceSize,width(item.source));
+    });
+    var date={value:options.editableProgress?20:Math.min(sizes[2]+3,18),unit:'ch'},prefix=[];
+    if(options.sequence)prefix.push({value:6,unit:'ch',cap:7});
     if(options.source)prefix.push({value:2*Math.sqrt(sourceSize)+1,unit:'em',cap:18});
     function fixed(spec,part){var value=(spec.value*part).toFixed(3)+spec.unit;return spec.cap?'min('+value+', '+(spec.cap*part).toFixed(3)+'cqw)':value;}
-    var nameWeight=Math.log2(1+sizes[1]),progressWeight=Math.log2(1+sizes[3]),share=nameWeight/(nameWeight+progressWeight);
+    var nameWeight=Math.log2(1+sizes[1]),progressWeight=Math.log2(1+Math.max(1,sizes[3])),share=nameWeight/(nameWeight+progressWeight);
+    if(options.balanceProgress && (sizes[3] || options.editableProgress))share=Math.min(.65,Math.max(.35,share));
     var moduleWeight=Math.log2(1+sizes[0]),moduleShare=moduleWeight/(moduleWeight+nameWeight+progressWeight),metadata=prefix.concat([date]);
     function available(part){return 'calc('+(100*part).toFixed(3)+'cqw'+metadata.map(function(spec){return ' - '+fixed(spec,part);}).join('')+')';}
-    function moduleWidth(part){return 'min('+((sizes[0]+1.5)*part).toFixed(3)+'em, '+available(moduleShare*part)+')';}
+    function moduleWidth(part){
+      var content=((sizes[0]+1.5)*part).toFixed(3)+'em', room=available(moduleShare*part);
+      return options.editableProgress || options.sequence
+        ? 'clamp('+(7*part).toFixed(3)+'em, '+content+', '+room+')'
+        : 'min('+content+', '+room+')';
+    }
     function narrativeWidth(part){return 'calc('+available(part)+' - '+moduleWidth(part)+')';}
     return prefix.map(function(spec){return fixed(spec,1);}).concat([moduleWidth(1),narrativeWidth(share),fixed(date,1),narrativeWidth(1-share)]);
   }
@@ -66,6 +122,9 @@
       return !options.scopeId;
     });
   }
+  function summaryText(item,field,fallback){
+    return global.ZHRichText?.doc(item,field)?global.ZHRichText.field(item,field,fallback):narrative(item[field] || fallback);
+  }
   function html(rows,options){
     options=options || {};var projects=options.projects || [];
     function projectName(pid){var project=projects.find(function(value){return String(value.id)===String(pid);});return project?project.name:pid;}
@@ -74,10 +133,15 @@
     return '<div class="monthly-summary-groups">'+selected.map(function(summary){
       var scope=summary.report_scope_id?(summary.scope_project_ids || []).map(projectName).join('、'):projectName(summary.project_id);
       var caption=esc(scope)+' · '+esc(summary.month)+' · '+esc(summary.line)+' · '+esc(summary.owner_name || '未记录提报人');
-      return '<div class="tablewrap meeting-table-scroll monthly-summary-group" data-monthly-summary-id="'+esc(summary.id)+'"><table class="monthly-summary-table '+(options.projection?'meeting-plan-table':'overview-plan-table')+'"><caption>'+caption+'</caption>'+contentColumns(summary.items)+'<thead><tr>'+['模块','事项','完成时间','月度完成情况'].map(function(label){return '<th scope="col">'+label+'</th>';}).join('')+'</tr></thead><tbody>'+(summary.items || []).map(function(item){
-        return '<tr data-summary-source-id="'+esc(item.source_id)+'">'+[item.mod,item.name,item.due || '未设置',item.progress || '未填写'].map(function(value,index){return '<td data-label="'+['模块','事项','完成时间','月度完成情况'][index]+'">'+(index===1 || index===3?narrative(value):esc(value))+(index===3 && options.projection?attentionHtml(item,options):'')+'</td>';}).join('')+'</tr>';
+      var items=summary.items || [],modules=items.map(function(item){return summaryText(item,'mod','');}),spans=moduleRowSpans(modules);
+      var labels=['模块','事项','完成时间','月度完成情况'];
+      return '<div class="tablewrap meeting-table-scroll monthly-summary-group" data-monthly-summary-id="'+esc(summary.id)+'"><table class="monthly-summary-table '+(options.projection?'meeting-plan-table':'overview-plan-table')+'"><caption>'+caption+'</caption>'+contentColumns(items)+'<thead><tr>'+labels.map(function(label){return '<th scope="col">'+label+'</th>';}).join('')+'</tr></thead><tbody>'+items.map(function(item,index){
+        var span=spans[index],module=span?'<td data-label="模块"'+(span>1?' rowspan="'+span+'"':'')+'>'+modules[index]+'</td>':'';
+        return '<tr data-summary-source-id="'+esc(item.source_id)+'">'+module
+          +'<td data-label="事项">'+summaryText(item,'name','')+'</td><td data-label="完成时间">'+esc(item.due || '未设置')+'</td>'
+          +'<td data-label="月度完成情况">'+summaryText(item,'progress','未填写')+(options.projection?attentionHtml(item,options):'')+'</td></tr>';
       }).join('')+'</tbody></table></div>';
     }).join('')+'</div>';
   }
-  global.MonthlySummaries={select:select,html:html,narrative:narrative,columnWidths:columnWidths,contentColumns:contentColumns,attention:attention,attentionHtml:attentionHtml};
+  global.MonthlySummaries={select:select,html:html,narrative:narrative,columnWidths:columnWidths,contentColumns:contentColumns,moduleRowSpans:moduleRowSpans,groupPlanRowsByModule:groupPlanRowsByModule,attention:attention,attentionHtml:attentionHtml};
 })(window);

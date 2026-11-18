@@ -55,7 +55,10 @@ export async function completionStatistics(pool, user, request = {}) {
     if (actor?.status !== 'approved' || actor.role !== 'ops') throw new HttpError(403, '仅运营可查看员工完成统计', 'statistics_forbidden');
     const projects = (await client.query('SELECT id,name FROM public.projects ORDER BY sort_order,id')).rows;
     if (filters.project_id && !projects.some(project => project.id === filters.project_id)) throw new HttpError(403, '无权查看此项目', 'statistics_forbidden');
-    const employees = (await client.query("SELECT p.user_id,p.name,p.role,p.discipline,p.biz_line FROM public.profiles p JOIN app_private.auth_users a ON a.user_id=p.user_id WHERE p.status='approved' AND NOT a.disabled AND btrim(p.name)<>'' ORDER BY p.name,p.user_id")).rows;
+    const employees = (await client.query(`SELECT p.user_id,p.name,p.role,p.discipline,p.biz_line,d.division,d.team,d.title,d.sort_order
+      FROM public.profiles p JOIN app_private.auth_users a ON a.user_id=p.user_id
+      LEFT JOIN app_private.personnel_directory d ON d.user_id=p.user_id
+      WHERE p.status='approved' AND NOT a.disabled AND btrim(p.name)<>'' ORDER BY p.name,p.user_id`)).rows;
     const projectPeople = filters.project_id
       ? new Set((await client.query('SELECT user_id FROM app_private.project_people($1)', [filters.project_id])).rows.map(row => row.user_id)) : null;
     const selected = employees.filter(row => (!projectPeople || projectPeople.has(row.user_id))

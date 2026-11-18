@@ -144,7 +144,7 @@
     });});
   }
   function binding(id) {
-    var match=/^admin_plan_(mod|name)_(\d+)$/.exec(id),context=editorContext;
+    var match=/^admin_plan_(mod|name|progress)_(\d+)$/.exec(id),context=editorContext;
     if(!match || !context || context.key!==contextKey() || !allowed() || busy)return null;
     var field=match[1],row=context.rows[Number(match[2])];
     if(!row || mode==='manual' && !editable(currentTarget()) || mode==='saved' && savedLock(savedEntry()))return null;
@@ -508,6 +508,17 @@
     }catch(cause){if(generation===epoch && key===contextKey())error=cause.message || '计划保存失败；当前内容已保留，请重试。';return false;}
     finally{if(generation===epoch){busy=false;editorContext=null;render();}}
   }
+  function summaryItem(row,sourceId) {
+    var item={mod:String(row.mod || ''),name:String(row.name || ''),due:row.due || '',progress:String(row.progress || '')};
+    if(sourceId)item.source_id=sourceId;
+    if(!cfg.richCollect || !cfg.richCopy)return item;
+    var result=cfg.richCollect(cfg.richCopy(row,item,{mod:'mod',name:'name',progress:'progress'}));
+    var fields=Object.fromEntries(Object.entries(result.rich_text?.fields || {}).filter(function(pair){
+      return pair[1].ops.some(function(op){return op.attributes && Object.keys(op.attributes).length;});
+    }));
+    if(Object.keys(fields).length)result.rich_text={v:1,fields:fields};else delete result.rich_text;
+    return result;
+  }
   function monthBundlePayload() {
     var batch=currentBatch(),plans=[],summaries=[],total=0;
     if(!batch || batch.saved)throw new Error('请重新上传需要保存的月份文件。');
@@ -526,7 +537,7 @@
             plans.push(planPayload(group.target,items,plan?plan.id:null));
           }
           if(choice.summary){var prior=(catalog.summaries || []).find(function(row){return row.project_id===group.target.project_id && (row.report_scope_id || '')===(group.target.report_scope_id || '') && row.line===group.target.line && row.owner_id===group.target.owner_id && String(row.month).slice(0,7)===value;});
-            var snapshot={project_id:group.target.project_id,line:group.target.line,owner_id:group.target.owner_id,month:value,expected_summary_id:prior?prior.id:null,items:group.rows.map(function(row,index){return {source_id:'import_'+String(row.id || index).replace(/[^A-Za-z0-9_-]/g,'_')+'_'+index,mod:String(row.mod || ''),name:String(row.name || ''),due:row.due || '',progress:String(row.progress || '')};})};
+            var snapshot={project_id:group.target.project_id,line:group.target.line,owner_id:group.target.owner_id,month:value,expected_summary_id:prior?prior.id:null,items:group.rows.map(function(row,index){return summaryItem(row,'import_'+String(row.id || index).replace(/[^A-Za-z0-9_-]/g,'_')+'_'+index);})};
             if(group.target.report_scope_id)snapshot.report_scope_id=group.target.report_scope_id;summaries.push(snapshot);
           }
         });
@@ -613,7 +624,14 @@
     var record=savedCurrent(entry);if(!record)return '该记录已发生变化，请重新读取后核对；当前输入保留。';
     return entry.kind==='plan' && record.editable!==true?record.lock_reason || '已有周报或完成／延期申报引用，不能修改。':'';
   }
-  function savedItems(kind,record) { return (record.items || []).map(function(item,index){return kind==='plan'?itemFromPlan(record,item,index):copy(item);}); }
+  function savedItems(kind,record) {
+    return (record.items || []).map(function(item,index){
+      if(kind==='plan')return itemFromPlan(record,item,index);
+      var row=cfg.richCopy(item,copy(item),{mod:'mod',name:'name',progress:'progress'});
+      delete row.rich_text;
+      return row;
+    });
+  }
   function openSaved(kind,id) {
     if(!allowed() || busy || mode!=='saved' || !['plan','summary'].includes(kind))return false;
     flush();var record=savedRecords(kind).find(function(value){return value.id===id;});if(!record)return false;
@@ -635,7 +653,7 @@
     var summary=entry.kind==='summary',rows=entry.items.filter(function(row){return String(row.name || '').trim() || String(row.mod || '').trim() || row.due || summary && String(row.progress || '').trim();});
     if(!summary && !rows.length || rows.some(function(row){return !String(row.name || '').trim();})){error=summary?'每项月度汇总都需要事项内容。':'月计划至少保留一项，每项都需要事项内容。';render();return false;}
     var value,payload={plans:[]};
-    if(summary){value={project_id:entry.target.project_id,report_scope_id:entry.target.report_scope_id || null,line:entry.target.line,owner_id:entry.target.owner_id,month:month,expected_summary_id:entry.expected,items:rows.map(function(row){var item={mod:String(row.mod || ''),name:String(row.name || ''),due:row.due || '',progress:String(row.progress || '')};if(row.source_id)item.source_id=row.source_id;return item;})};payload.summaries=[value];}
+    if(summary){value={project_id:entry.target.project_id,report_scope_id:entry.target.report_scope_id || null,line:entry.target.line,owner_id:entry.target.owner_id,month:month,expected_summary_id:entry.expected,items:rows.map(function(row){return summaryItem(row,row.source_id);})};payload.summaries=[value];}
     else{value=planPayload(entry.target,rows,entry.expected);payload.plans=[value];}
     if(!global.confirm('确认修改 '+month+' · '+entry.target.line+' · '+(entry.target.owner_name || entry.target.confirmed_name || entry.target.owner_id)+' 的'+(summary?'月度完成汇总':'月计划')+'？\n原版本留档，本操作不会提交周报或执行完成审核。'))return false;
     var fingerprint=JSON.stringify(payload);if(!operation || operation.fingerprint!==fingerprint)operation={id:uuid(),fingerprint:fingerprint};payload.operation_id=operation.id;
@@ -663,15 +681,15 @@
     html+='<section id="admin-plan-saved-editor" tabindex="-1"><h3>'+esc(month)+' · '+esc(entry.target.line)+' · '+esc(entry.target.owner_name || entry.target.confirmed_name || entry.target.owner_id)+' · '+(summary?'修改月度完成汇总':'修改月计划')+'</h3>'+(lock?'<p class="admin-plan-locked">'+esc(lock)+'</p>':'');
     if(changed)html+='<p class="notice warn" role="alert">服务器记录版本已变化，当前输入保留，请核对后再保存。<button type="button" class="btn ghost sm" onclick="AdminPlans.savedLatest()"'+(busy?' disabled':'')+'>载入最新内容，保留原输入副本</button></p>';
     if(entry.recovery)html+='<details class="notice"><summary>载入前的未保存输入副本</summary>'+entry.recovery.map(function(row){return '<p>'+esc(row.mod)+' · '+esc(row.due)+'</p><div>'+(cfg.richItem && !summary?cfg.richItem(row,'name',row.name):esc(row.name))+'</div><p>'+esc(row.progress || '')+'</p>';}).join('')+'</details>';
-    html+='<div class="admin-plan-scroll"><table class="admin-plan-grid admin-plan-manual'+(summary?' has-progress':'')+'"><thead><tr><th>模块或工作类别</th><th>事项</th><th>计划完成时间</th>'+(summary?'<th>月度完成情况</th>':'')+'<th>操作</th></tr></thead><tbody>'+entry.items.slice(manualPage*pageSize,(manualPage+1)*pageSize).map(function(row,at){var index=manualPage*pageSize+at;return '<tr>'+inputRow(row,index,locked,summary)+(summary?'<td><textarea id="admin_plan_progress_'+index+'" aria-label="第'+(index+1)+'项月度完成情况" maxlength="10000" oninput="AdminPlans.edit('+index+',\'progress\',this.value)"'+(locked?' disabled':'')+'>'+esc(row.progress || '')+'</textarea></td>':'')+'<td><button type="button" class="btn ghost sm" onclick="AdminPlans.savedRemove('+index+')"'+(locked?' disabled':'')+'>删除</button></td></tr>';}).join('')+'</tbody></table></div>'+pager('saved',entry.items.length,manualPage)+'<div class="admin-plan-savebar"><button type="button" class="btn ghost" onclick="AdminPlans.savedAdd()"'+(locked?' disabled':'')+'>＋ 增加事项</button><button type="button" class="btn primary" onclick="AdminPlans.save()"'+(locked || changed?' disabled':'')+'>'+(busy?'保存中…':summary?'保存汇总修改':'保存计划修改')+'</button></div></section>';
+    html+='<div class="admin-plan-scroll"><table class="admin-plan-grid admin-plan-manual'+(summary?' has-progress':'')+'"><thead><tr><th>模块或工作类别</th><th>事项</th><th>计划完成时间</th>'+(summary?'<th>月度完成情况</th>':'')+'<th>操作</th></tr></thead><tbody>'+entry.items.slice(manualPage*pageSize,(manualPage+1)*pageSize).map(function(row,at){var index=manualPage*pageSize+at;return '<tr>'+inputRow(row,index,locked)+(summary?'<td><textarea data-rich id="admin_plan_progress_'+index+'" aria-label="第'+(index+1)+'项月度完成情况" maxlength="10000" oninput="AdminPlans.edit('+index+',\'progress\',this.value)"'+(locked?' disabled':'')+'>'+esc(row.progress || '')+'</textarea></td>':'')+'<td><button type="button" class="btn ghost sm" onclick="AdminPlans.savedRemove('+index+')"'+(locked?' disabled':'')+'>删除</button></td></tr>';}).join('')+'</tbody></table></div>'+pager('saved',entry.items.length,manualPage)+'<div class="admin-plan-savebar"><button type="button" class="btn ghost" onclick="AdminPlans.savedAdd()"'+(locked?' disabled':'')+'>＋ 增加事项</button><button type="button" class="btn primary" onclick="AdminPlans.save()"'+(locked || changed?' disabled':'')+'>'+(busy?'保存中…':summary?'保存汇总修改':'保存计划修改')+'</button></div></section>';
     return html+'</section>';
   }
   function options(values,selected,empty,label) { return '<option value="">'+esc(empty)+'</option>'+values.map(function(row){var value=typeof row==='string'?row:row.value,text=typeof row==='string'?row:row.label;return '<option value="'+esc(value)+'"'+(selected===value?' selected':'')+'>'+esc(label?label(row):text)+'</option>';}).join(''); }
   function targetOptions(selected,assignedLine) { return options(currentTargets().map(function(target){return {value:targetKey(target),label:target.line+' · '+target.owner_name};}),selected,'请选择专业 / 提报人')+unassignedProfessions().map(function(entry){return '<option value="'+esc(JSON.stringify(['unassigned-profession',project,entry.line]))+'" disabled'+(!selected && assignedLine===entry.line?' selected':'')+'>'+esc(professionLabel(entry.line))+'</option>';}).join(''); }
-  function inputRow(row,index,locked,plain) {
-    var disabled=locked?' disabled':'',rich=plain?'':' data-rich';
-    return '<td><textarea'+rich+' id="admin_plan_mod_'+index+'" aria-label="第'+(index+1)+'项模块" oninput="AdminPlans.edit('+index+',\'mod\',this.value)"'+disabled+'>'+esc(row.mod)+'</textarea></td>'
-      +'<td><textarea'+rich+' id="admin_plan_name_'+index+'" aria-label="第'+(index+1)+'项事项" oninput="AdminPlans.edit('+index+',\'name\',this.value)"'+disabled+'>'+esc(row.name)+'</textarea></td>'
+  function inputRow(row,index,locked) {
+    var disabled=locked?' disabled':'';
+    return '<td><textarea data-rich id="admin_plan_mod_'+index+'" aria-label="第'+(index+1)+'项模块" oninput="AdminPlans.edit('+index+',\'mod\',this.value)"'+disabled+'>'+esc(row.mod)+'</textarea></td>'
+      +'<td><textarea data-rich id="admin_plan_name_'+index+'" aria-label="第'+(index+1)+'项事项" oninput="AdminPlans.edit('+index+',\'name\',this.value)"'+disabled+'>'+esc(row.name)+'</textarea></td>'
       +'<td><input type="date" id="admin_plan_due_'+index+'" aria-label="第'+(index+1)+'项完成时间" value="'+esc(row.due)+'" oninput="AdminPlans.edit('+index+',\'due\',this.value)"'+disabled+'></td>';
   }
   function page(kind,delta) {
@@ -727,7 +745,7 @@
       +(isAI && state.manualDirty?'<p id="admin-plan-manual-apply" class="notice warn" tabindex="-1">手动纠正尚未应用，原 AI 预览仍保留。<button type="button" class="btn" onclick="AdminPlans.reviseAI(false)"'+(busy?' disabled':'')+'>应用手动纠正</button></p>':'')
       +(editing?'<h3>按专业批量分配</h3><div class="admin-plan-map">'+hints.map(function(group,index){var keys=Array.from(new Set(group.rows.map(function(row){return row.target_key;})));return '<article><label>'+esc(group.label)+' · '+group.rows.length+' 项<select aria-label="'+esc(group.label)+'批量归属" onchange="AdminPlans.mapGroup('+index+',this.value)"'+(busy?' disabled':'')+'>'+targetOptions(keys.length===1?keys[0]:'')+'</select></label></article>';}).join('')+'</div>':'')
       +('<div class="admin-plan-preview-filters"><label>查看专业<select id="admin-plan-filter-line" onchange="AdminPlans.filterPreview(\'line\',this.value)"'+(busy?' disabled':'')+'>'+options(professionGroups().map(function(group){return {value:group.line,label:professionLabel(group.line)};}),state.filterLine,'全部专业')+'</select></label><label class="admin-plan-pending-filter"><input id="admin-plan-filter-pending" type="checkbox" onchange="AdminPlans.filterPreview(\'pending\',this.checked)"'+(state.onlyPending?' checked':'')+(busy?' disabled':'')+'>只看待确认</label><span class="muted">显示 '+visible.length+' / '+imported.rows.length+' 项；筛选不改变导入范围</span></div>')
-      +'<div id="admin-plan-preview" class="admin-plan-scroll" tabindex="-1"><table class="admin-plan-grid admin-plan-preview'+(!editing?' is-readonly':'')+'"><thead><tr><th>导入</th><th>来源 / 说明</th><th>专业 / 提报人</th><th>模块</th><th>事项</th><th>完成时间</th>'+(batch?'<th>原表完成情况 / 月度反馈</th>':'')+'<th>待核对</th></tr></thead><tbody>'+visible.slice(previewPage*pageSize,(previewPage+1)*pageSize).map(function(entry){var row=entry.row,index=entry.index,issue=rowIssue(row),target=targetForRow(row);return '<tr'+(!row.included?' class="admin-plan-excluded"':'')+'><td><input type="checkbox" aria-label="导入第'+(index+1)+'项"'+(row.included?' checked':'')+(busy || !editing?' disabled':'')+' onchange="AdminPlans.include('+index+',this.checked)"></td><td class="admin-plan-source">'+sourceHtml(row)+'</td><td>'+(editing?'<select aria-label="第'+(index+1)+'项专业及提报人" onchange="AdminPlans.setMapping('+index+',this.value)"'+(busy?' disabled':'')+'>'+targetOptions(row.target_key,row.assigned_line)+'</select>':target?esc(target.line)+'<br><b>'+esc(target.owner_name)+'</b>':'<span class="admin-plan-error">'+esc(rowLine(row))+'<br>待确认提报人</span>')+'</td>'+(editing?inputRow(row,index,busy):'<td>'+richRow(row,'mod')+'</td><td>'+richRow(row,'name')+'</td><td>'+esc(row.due || '未设日期')+'</td>')+(batch?'<td>'+(editing?'<textarea aria-label="第'+(index+1)+'项月度完成情况" oninput="AdminPlans.edit('+index+',\'progress\',this.value)"'+(busy?' disabled':'')+'>'+esc(row.progress || '')+'</textarea>':esc(row.progress || '原表未填写'))+'</td>':'')+'<td><div class="admin-plan-row-issue">'+esc(issue)+'</div></td></tr>';}).join('')+'</tbody></table>'+(visible.length?'':'<p class="admin-plan-empty">当前筛选下没有事项，完整预览仍保留。</p>')+'</div>'+pager('excel',visible.length,previewPage)
+      +'<div id="admin-plan-preview" class="admin-plan-scroll" tabindex="-1"><table class="admin-plan-grid admin-plan-preview'+(!editing?' is-readonly':'')+'"><thead><tr><th>导入</th><th>来源 / 说明</th><th>专业 / 提报人</th><th>模块</th><th>事项</th><th>完成时间</th>'+(batch?'<th>原表完成情况 / 月度反馈</th>':'')+'<th>待核对</th></tr></thead><tbody>'+visible.slice(previewPage*pageSize,(previewPage+1)*pageSize).map(function(entry){var row=entry.row,index=entry.index,issue=rowIssue(row),target=targetForRow(row);return '<tr'+(!row.included?' class="admin-plan-excluded"':'')+'><td><input type="checkbox" aria-label="导入第'+(index+1)+'项"'+(row.included?' checked':'')+(busy || !editing?' disabled':'')+' onchange="AdminPlans.include('+index+',this.checked)"></td><td class="admin-plan-source">'+sourceHtml(row)+'</td><td>'+(editing?'<select aria-label="第'+(index+1)+'项专业及提报人" onchange="AdminPlans.setMapping('+index+',this.value)"'+(busy?' disabled':'')+'>'+targetOptions(row.target_key,row.assigned_line)+'</select>':target?esc(target.line)+'<br><b>'+esc(target.owner_name)+'</b>':'<span class="admin-plan-error">'+esc(rowLine(row))+'<br>待确认提报人</span>')+'</td>'+(editing?inputRow(row,index,busy):'<td>'+richRow(row,'mod')+'</td><td>'+richRow(row,'name')+'</td><td>'+esc(row.due || '未设日期')+'</td>')+(batch?'<td>'+(editing?'<textarea data-rich id="admin_plan_progress_'+index+'" aria-label="第'+(index+1)+'项月度完成情况" oninput="AdminPlans.edit('+index+',\'progress\',this.value)"'+(busy?' disabled':'')+'>'+esc(row.progress || '')+'</textarea>':(row.progress?richRow(row,'progress'):'原表未填写'))+'</td>':'')+'<td><div class="admin-plan-row-issue">'+esc(issue)+'</div></td></tr>';}).join('')+'</tbody></table>'+(visible.length?'':'<p class="admin-plan-empty">当前筛选下没有事项，完整预览仍保留。</p>')+'</div>'+pager('excel',visible.length,previewPage)
       +(groups.length && !(isAI && state.saved)?'<section id="admin-plan-save-range" tabindex="-1"><h3>保存范围</h3><div class="admin-plan-map">'+groups.map(function(group,index){var plan=existing(group.target);return '<article class="admin-plan-existing"><b>'+esc(group.target.line)+' · '+esc(group.target.owner_name)+' · '+group.rows.length+' 项</b>'+(plan?plan.editable!==true?'<span class="admin-plan-error">'+esc(plan.lock_reason || '已有计划已被引用，不允许修改')+'</span>':'<span>已有 '+(plan.items || []).length+' 项计划</span><label>已有计划处理<select aria-label="'+esc(group.target.owner_name)+'已有计划处理" onchange="AdminPlans.choice('+esc(JSON.stringify(group.key))+',this.value)"'+(busy?' disabled':'')+'>'+options([{value:'append',label:'保留已有事项，追加本次事项'},{value:'replace',label:'用本次事项替换未引用计划'}],importChoices.get(group.key) || '','请选择追加或替换')+'</select></label>':'<span class="muted">新建该提报人的月计划</span>')+'</article>';}).join('')+'</div></section>':'')
       +(isAI && !state.saved?blockersHtml():'')
       +'<div class="admin-plan-savebar"><span class="muted">'+(batch?'按上方月份勾选保存；月度汇总与每周填报分别保留。':isAI && state.saved?'已保存本次计划。':'将保存 '+groups.length+' 份月计划，'+selected+' 项已选事项。未勾选项不导入。')+'</span><button type="button" class="btn primary" onclick="AdminPlans.save()"'+((batch?busy || batch.saved:busy || unresolved || !selected || planBlocked || imported.rows.some(function(row){return !!rowIssue(row);}) || isAI && (state.saved || blockers().length))?' disabled':'')+'>'+(busy?'处理中…':batch?batch.saved?'本次已保存':'确认保存所选月份':isAI?state.saved?'本次已导入':'一次确认导入全部计划':'确认保存所选计划')+'</button></div>';

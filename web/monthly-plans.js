@@ -13,7 +13,11 @@
   function memberKey(ids) { return JSON.stringify((ids || []).map(String).slice().sort()); }
   function reportScope() { return S.pmReportScope || null; }
   function professionalScope() { return !!(reportScope() && reportScope().reporting_mode === 'professional'); }
-  function planLine() { return reportScope() ? (S.profile || {}).discipline : S.pmLine; }
+  function inlineCurrentPlan() { return !reportScope() || professionalScope() && !scopedLegacyReport(); }
+  function planLine() { return reportScope() && !professionalScope() ? (S.profile || {}).discipline : S.pmLine; }
+  function canUseResidentialLine() {
+    return cfg.canUseResidentialLine ? cfg.canUseResidentialLine(planLine(),S.pmProject) : (S.profile || {}).discipline === planLine();
+  }
   function planOwner(plan) { return plan && (plan.owner_id || plan.confirmed_by); }
   function ownPlan(plan) { return planOwner(plan) === S.uid; }
   function matchingScope(plan) {
@@ -25,14 +29,14 @@
     var project = (S.projects || []).filter(function (p) { return p.id === S.pmProject; })[0];
     var selected = reportScope();
     if (selected) return !!(project && project.project_type !== 'com' && (professionalScope() ? S.pmLine === planLine() : S.pmLine === '综合')
-      && residentialLines.includes(planLine()) && global.ReportScopes && global.ReportScopes.allowed(selected, S.projects)
+      && canUseResidentialLine() && global.ReportScopes && global.ReportScopes.allowed(selected, S.projects)
       && global.ReportScopes.active(selected, S.pmPeriod, S.pmReport && (S.pmReport.submitted_at || S.pmReport.created_at)));
-    return !!(project && S.pmLine && (project.project_type === 'com' || !S.pmReportScope && S.pmLine !== '综合' && S.pmLine === (S.profile || {}).discipline));
+    return !!(project && S.pmLine && (project.project_type === 'com' || !S.pmReportScope && S.pmLine !== '综合' && canUseResidentialLine()));
   }
   function canConfirm() {
     var profile = S.profile || {};
     var project=(S.projects || []).filter(function(p){return p.id===S.pmProject;})[0];
-    return enabled() && profile.role === 'pm' && (project.project_type==='com' ? cfg.canUseBusinessLine?cfg.canUseBusinessLine(S.pmLine,S.pmProject):profile.biz_line === '*' || profile.biz_line === S.pmLine : profile.discipline === planLine());
+    return enabled() && profile.role === 'pm' && (project.project_type!=='com' || (cfg.canUseBusinessLine?cfg.canUseBusinessLine(S.pmLine,S.pmProject):profile.biz_line === '*' || profile.biz_line === S.pmLine));
   }
   function monthOf(date) { return /^\d{4}-(0[1-9]|1[0-2])/.test(String(date || '')) ? String(date).slice(0, 7) : ''; }
   function shiftMonth(value, count) {
@@ -76,7 +80,7 @@
       && !(report.biz && report.biz.monthly_plan_id) ? report : null;
   }
   function needsRefresh(target) { return referenceConflicts.has(draftKey(target || month())) || conflicts.has(draftKey(target || month())) && !planFor(target || month()); }
-  function locked() { return reportScope() ? !scopedLegacyReport() && (!!currentScopePlans().length || !!(S.pmReport && S.pmReport.biz && S.pmReport.biz.monthly_plan_ids && S.pmReport.biz.monthly_plan_ids.length)) : !!current() || needsRefresh(); }
+  function locked() { return reportScope() ? !scopedLegacyReport() && (!!currentScopePlans().length || inlineCurrentPlan() && needsRefresh() || !!(S.pmReport && S.pmReport.biz && S.pmReport.biz.monthly_plan_ids && S.pmReport.biz.monthly_plan_ids.length)) : !!current() || needsRefresh(); }
   function metadata() {
     if(referenceConflicts.has(draftKey(month())))return {};
     if (reportScope()) {
@@ -164,6 +168,13 @@
     if(!enabled())return false;
     var key=draftKey(month()),saved=S.draft && S.draft.monthlyPlanReferences;
     if(saved && typeof saved[key]==='string')references.set(key,saved[key]);
+    // Older merged forms used a separate local month editor. Restore its rows
+    // only into an empty current form; retain the original storage for review.
+    if(professionalScope() && inlineCurrentPlan() && !current()
+      && !(S.bizItems || []).some(function(row){return row.name || row.mod || row.due || row.prog || row.blocker;})){
+      var previous=drafts.get(key) || readDraft(key);
+      if(previous.some(function(row){return row.name || row.mod || row.due;}))S.bizItems=JSON.parse(JSON.stringify(previous));
+    }
     return apply();
   }
   function storageKey(key) { return 'zh_monthly_plan_draft_v1_' + encodeURIComponent(key); }
@@ -190,7 +201,7 @@
   }
   function nextRows() { return draftRows(nextMonth()); }
   function aiClone(value) { return JSON.parse(JSON.stringify(value)); }
-  function aiRows(target) { return target === month() && !reportScope() ? S.bizItems || [] : drafts.has(draftKey(target)) ? drafts.get(draftKey(target)) : readDraft(draftKey(target)); }
+  function aiRows(target) { return target === month() && inlineCurrentPlan() ? S.bizItems || [] : drafts.has(draftKey(target)) ? drafts.get(draftKey(target)) : readDraft(draftKey(target)); }
   function aiSnapshot(target) {
     var key = draftKey(target), raw = global.localStorage.getItem(storageKey(key));
     if (draftReadErrors.has(key)) throw new Error(draftReadErrors.get(key));
@@ -223,7 +234,7 @@
     if (!added) return {count:0, message:'这些事项已在月计划草稿中，未重复添加。'};
     next = next.filter(function(row) { return row.name || row.mod || row.due || row.prog || row.blocker || row._rich && Object.keys(row._rich).some(function(field){return (row._rich[field].ops || []).some(function(op){return typeof op.insert==='string' && op.insert.trim();});}); });
     if(next.length > 500) throw new Error('月计划合计超过500项，请分批核对后再加入。');
-    var raw = global.localStorage.getItem(storageKey(draftKey(target))), normal = target === month() && !reportScope(), hadDraft=drafts.has(draftKey(target));
+    var raw = global.localStorage.getItem(storageKey(draftKey(target))), normal = target === month() && inlineCurrentPlan(), hadDraft=drafts.has(draftKey(target));
     function assign(value) { if (normal) S.bizItems = aiClone(value); else drafts.set(draftKey(target), aiClone(value)); }
     editorContext = null;
     try {
@@ -242,7 +253,7 @@
   function aiUndo(transaction) {
     var target = transaction && transaction.month, current = aiContext().find(function(plan) { return plan.month === target; });
     if (!transaction || transaction.kind !== 'monthly_plan' || transaction.scope !== scope() || !current || current.signature !== transaction.after) throw new Error('月计划已有后续修改、已确认或范围变化，不能直接撤销。');
-    var normal = target === month() && !reportScope(), after = aiClone(aiRows(target));
+    var normal = target === month() && inlineCurrentPlan(), after = aiClone(aiRows(target));
     editorContext = null;
     if (normal) S.bizItems = aiClone(transaction.before); else drafts.set(draftKey(target), aiClone(transaction.before));
     try {
@@ -261,7 +272,7 @@
     if(!enabled() || ![month(),nextMonth()].includes(target))return;
     views.set(draftKey(month()), target===nextMonth()?'next':'current');cfg.render();
   }
-  function editorMonth() { return reportScope() ? selectedMonth() : nextMonth(); }
+  function editorMonth() { return inlineCurrentPlan() ? nextMonth() : selectedMonth(); }
   function saveDraft() {
     if (!cfg || !S || !S.uid) return true;
     capture(); lastDraftError = '';
@@ -392,7 +403,7 @@
         if (stillHere(readToken)) cfg.render();
       }
     }
-    var items = payloadRows(reportScope() ? draftRows(target) : which === 'next' ? nextRows() : S.bizItems || []);
+    var items = payloadRows(which === 'next' ? nextRows() : inlineCurrentPlan() ? S.bizItems || [] : draftRows(target));
     if (!items) return false;
     if (!items.length) { cfg.toast('请先填写月计划事项。', 'err'); return false; }
     var payload = { project_id: S.pmProject, line: planLine(), month: target, items: items };
@@ -411,9 +422,14 @@
       }
       var plan = result.data;
       S.monthlyPlans = (S.monthlyPlans || []).filter(function (row) { return row.id !== plan.id; }).concat([plan]);
+      if(target===month() && professionalScope() && inlineCurrentPlan() && sameConfirmation(plan,payload)){
+        (S.bizItems || []).forEach(function(row){
+          if(!row.monthly_plan_id && plan.items.some(function(item){return item.source_id===row.source_id;}))row.monthly_plan_id=plan.id;
+        });
+      }
       if(target===month()){references.set(draftKey(target),referenceToken(reportScope()?currentScopePlans():[plan]));referenceConflicts.delete(draftKey(target));}
       if (target === month()) apply();
-      if(sameConfirmation(plan,payload) && token.draftRawReadable)discardDraft(target,token.draftRaw);
+      if(sameConfirmation(plan,payload) && token.draftRawReadable && !(professionalScope() && target===month() && inlineCurrentPlan()))discardDraft(target,token.draftRaw);
       try { await reloadConfirmed(token, target); } catch (error) { if (stillHere(token)) flush(); }
       if (!stillHere(token)) return false;
       if (!planFor(target)) S.monthlyPlans = (S.monthlyPlans || []).concat([plan]);
@@ -458,7 +474,7 @@
     }
     // Keep a recovery copy before sending the request: an interrupted response
     // must not strand the original next-month input after a successful withdrawal.
-    if (which === 'next' || reportScope()) {
+    if (which === 'next' || !inlineCurrentPlan()) {
       recoveringWithdrawals.add(key); drafts.set(key,hasOriginal?originalRows:(plan.items || []).map(function(item,index){return planItem(plan,item,index);}));
       if (!saveDraft()) { restoreOriginal(); cfg.toast('本机恢复草稿未能保存，尚未撤回；请先复制计划内容后重试。','err'); return false; }
     }
@@ -482,8 +498,11 @@
       S.monthlyPlans=(S.monthlyPlans || []).filter(function(row){return row.id!==plan.id;});
       references.delete(key);referenceConflicts.delete(key);
       conflicts.delete(key); draftReadErrors.delete(key); recoveringWithdrawals.delete(key);
-      if(hasOriginal && (which==='next' || reportScope()) && cfg.saveFormDraft){preserveUnmatched(originalRows,[]);drafts.set(key,(plan.items || []).map(function(item,index){return planItem(plan,item,index);}));}
-      if(which!=='next' && !reportScope() && !S.bizItems.length)S.bizItems=(plan.items || []).map(function(item,index){return planItem(plan,item,index);});
+      if(hasOriginal && (which==='next' || !inlineCurrentPlan()) && cfg.saveFormDraft){preserveUnmatched(originalRows,[]);drafts.set(key,(plan.items || []).map(function(item,index){return planItem(plan,item,index);}));}
+      if(which!=='next' && inlineCurrentPlan()){
+        if(!S.bizItems.length)S.bizItems=(plan.items || []).map(function(item,index){return planItem(plan,item,index);});
+        if(professionalScope())S.bizItems.forEach(function(row){if(row.monthly_plan_id===plan.id)delete row.monthly_plan_id;});
+      }
       if(reportScope())apply();
       var saved=cfg.saveFormDraft ? cfg.saveFormDraft(true) : saveDraft();
       if(!saved && hasOriginal)restoreOriginal();
@@ -508,25 +527,26 @@
     return '<div class="monthly-plan-toolbar">'
       + '<div class="actions"><button type="button" aria-pressed="'+(!next)+'" class="btn' + (!next ? ' primary' : '') + '" onclick="MonthlyPlans.select(\'current\')">本月 ' + esc(month()) + '</button>'
       + '<button type="button" aria-pressed="'+next+'" class="btn' + (next ? ' primary' : '') + '" onclick="MonthlyPlans.select(\'next\')">准备下月 ' + esc(nextMonth()) + '</button>'
-      + (!selected && !plan && canConfirm() ? '<button type="button" class="btn primary" onclick="MonthlyPlans.confirmCurrent()"' + (working ? ' disabled' : '') + '>' + (needsRefresh() ? working ? '读取中…' : '重新读取本月确认版' : working ? '确认中…' : '确认本月计划') + '</button>' : '')
+      + (inlineCurrentPlan() && !plan && canConfirm() ? '<button type="button" class="btn primary" onclick="MonthlyPlans.confirmCurrent()"' + (working ? ' disabled' : '') + '>' + (needsRefresh() ? working ? '读取中…' : '重新读取本月确认版' : working ? '确认中…' : '确认本月计划') + '</button>' : '')
       + (!next ? withdrawButton(plan,'current') : '')
       + '</div><p class="muted">' + (selected ? '本专业：'+esc(planLine())+(professionalScope()?'。本专业独立编制月计划和提报本周进展。':'。各专业分别编制月计划，本周综合报告仍共用原入口。') : '')
       + (plan ? legacy ? '既有周报快照，计划列保持原样；每周填写进展和卡点。' : esc(month()) + ' 月计划已确认 · ' + esc(plan.confirmed_by_name || plan.confirmed_name || '') + (plan.confirmed_at ? ' · ' + esc(plan.confirmed_at) : '') : needsRefresh() ? '该月计划已经确认，确认版尚未读到；原输入已保留，请重新读取。' : esc(month()) + ' 月计划尚未确认，确认前可编辑。') + '</p>'
-      + (selected ? '<p class="muted">月底可汇报本月完成情况，同时准备下月计划；切换只改变计划编制区，不覆盖下方'+(professionalScope()?'本专业':'综合')+'进展和本机草稿。'
+      + (selected ? '<p class="muted">'+(inlineCurrentPlan()?'本月计划和当周进展在同一张表填写；确认后计划列固定。下月计划在下方单独准备，不覆盖本周进展。':'月底可汇报本月完成情况，同时准备下月计划；切换只改变计划编制区，不覆盖下方综合进展和本机草稿。')
         + (scopedLegacyReport() ? '本周已有报告保持原计划快照，确认月计划不会自动改绑。' : S.pmReport ? '已提交'+(professionalScope()?'本专业':'综合')+'报告保留原计划范围，后确认的专业计划不会改写该期报告。' : '')+'</p>' : '')
       + (incomplete ? '<p class="notice warn" role="alert">本周引用的专业月计划尚未完整读取，原进展已保留；请刷新确认权限后再提交。</p>' : '')
       + (referenceConflicts.has(draftKey(month()))?'<p class="notice warn" role="alert">月计划版本已更新，当前原草稿及反馈保留，尚未绑定新计划。请核对后读取最新计划。<button type="button" class="btn" onclick="MonthlyPlans.acceptUpdated()">保留原草稿并读取最新计划</button></p>':'')
+      + (inlineCurrentPlan() && draftReadErrors.has(draftKey(month()))?'<p class="notice warn" role="alert">'+esc(draftReadErrors.get(draftKey(month())))+'</p>':'')
       + retainedDraftHtml(selectedMonth(),planFor(selectedMonth())) + unmatchedHtml() + '</div>';
   }
   function itemName(record, path, fallback) { return cfg.richItem ? cfg.richItem(record, path, fallback) : esc(fallback); }
   function retainedDraftHtml(target, plan) {
-    if(!plan)return '';
+    if(!plan && !(professionalScope() && inlineCurrentPlan() && target===month()))return '';
     var key=draftKey(target),raw=null;
     try{raw=global.localStorage.getItem(storageKey(key));}catch(error){return '<p class="notice warn">本机原月计划草稿读取失败，原数据未清除，请保留原文核对。</p>';}
     if(!drafts.has(key) && raw==null)return '';
     var rows=drafts.has(key)?drafts.get(key):readDraft(key);
     if(!rows.some(function(row){return row.name || row.mod || row.due;}))return '';
-    return '<details class="monthly-unmatched-items"><summary>'+esc(target)+' 本机未提交的原月计划草稿（只读保留）</summary><p class="muted">服务器已有确认计划，以下原输入保留供核对，不会自动合并或覆盖。</p>'
+    return '<details class="monthly-unmatched-items"><summary>'+esc(target)+' 本机未提交的原月计划草稿（只读保留）</summary><p class="muted">'+(plan?'服务器已有确认计划，':'')+'以下原输入保留供核对，不会覆盖当前表格。</p>'
       +rows.map(function(row){return '<article><b>'+itemName(row,'mod',row.mod || '未填写模块')+'</b><div>'+itemName(row,'name',row.name || '未填写事项')+'</div><span>'+esc(row.due || '未设日期')+'</span></article>';}).join('')
       +(raw!=null?'<details><summary>原草稿备份</summary><textarea readonly rows="6" aria-label="原月计划草稿备份">'+esc(raw)+'</textarea></details>':'')+'</details>';
   }
@@ -538,12 +558,12 @@
         + '</div><div>卡点：' + itemName(row, 'blocker', row.blocker || '未填写') + '</div></article>';
     }).join('') + '</aside>' : '';
   }
-  function plannerHtml() {
+  function plannerHtml(nextOnly) {
     if (!enabled()) return '';
-    var target = selectedMonth(), next = target === nextMonth();
+    var target = nextOnly ? nextMonth() : selectedMonth(), next = target === nextMonth();
     var ownPlan = planFor(target), savedIds = S.pmReport && S.pmReport.biz && S.pmReport.biz.monthly_plan_ids;
     var visibleInReport = ownPlan && (!S.pmReport || Array.isArray(savedIds) && savedIds.includes(ownPlan.id));
-    if (!next && (!reportScope() || visibleInReport)) return '';
+    if (!next && (inlineCurrentPlan() || visibleInReport)) return '';
     var plan = planFor(target), working = busy.has(draftKey(target)), awaiting = needsRefresh(target), editable = !plan && !awaiting && canConfirm() && !working;
     var rows = plan ? plan.items || [] : draftRows(target);
     editorContext = { scope: scope(), session: S.session, month:target };
@@ -711,7 +731,9 @@
           return '<tr><td data-label="模块">' + esc(row.plan.line) + (row.item.mod ? ' / ' + itemName(row.plan, 'items.' + row.index + '.mod', row.item.mod) : '')
             + '</td><td data-label="节点事项">' + itemName(row.plan, 'items.' + row.index + '.name', row.item.name)
             + '<div class="muted">' + esc(monthOf(row.plan.plan_month)) + ' 已确认月计划</div></td><td data-label="计划完成时间">' + esc(row.item.due)
-            + '</td><td data-label="当周进展">' + progress + (feedback && feedback.legacy ? '<div class="muted">沿用既有周报反馈，原报告及审批关联保留</div>' : '')
+            + '</td><td data-label="当周进展">' + progress
+            + (global.CompletionReview?.reportedStatus?.(sourceKey(row.plan,row.item), {owner_id:planOwner(row.plan),report:feedback?.record,readOnly:true}) || '')
+            + (feedback && feedback.legacy ? '<div class="muted">沿用既有周报反馈，原报告及审批关联保留</div>' : '')
             + (feedback && feedback.draft ? '<div class="muted">本页反馈，修改后需提交同步管理端</div>' : '')
             + '</td><td data-label="遇到卡点">' + (feedback ? feedback.item.blocker ? itemName(feedback.record, feedback.prefix + 'blocker', feedback.item.blocker) : '未填写卡点' : '本周未反馈') + '</td></tr>';
         }).join('') : '<tr><td colspan="5" class="empty">' + (plans.length ? '本窗口暂无到期的已确认月计划事项。' : '该模块暂无已确认月计划，未确认内容不作为自动汇总来源。') + '</td></tr>') + '</tbody></table></div>';
@@ -785,7 +807,7 @@
         }).join('') + '</tbody></table></div>' : '<p class="muted">该月暂无已确认计划或可见历史填报。</p>')
       + '</div></section>';
   }
-  global.MonthlyPlans = { configure: configure, prepare: prepare, apply: apply, current: current, locked: locked, needsRefresh: needsRefresh, metadata: metadata,
+  global.MonthlyPlans = { configure: configure, prepare: prepare, apply: apply, current: current, locked: locked, needsRefresh: needsRefresh, metadata: metadata, inlineCurrent:inlineCurrentPlan,
     aiContext:aiContext, aiApply:aiApply, aiUndo:aiUndo, aiView:aiView,
     month: month, selectedMonth: selectedMonth, toolbarHtml: toolbarHtml, introHtml: toolbarHtml, plannerHtml: plannerHtml, previousHtml: previousHtml, planReferences:planReferences, acceptUpdated:acceptUpdated,
     capture: capture, binding: binding, saveDraft: saveDraft, draftError: draftError, select: select, edit: edit, addNext: addNext, removeNext: removeNext, confirmCurrent: confirmCurrent, confirmNext: confirmNext, withdrawCurrent: withdrawCurrent, withdrawNext: withdrawNext,

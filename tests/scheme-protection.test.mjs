@@ -38,11 +38,12 @@ async function fixture(t) {
   const registryPath = path.join(uploadDir, 'scheme-protection', 'registry.json'); await mkdir(path.dirname(registryPath), { recursive: true });
   const saveRegistry = () => writeFile(registryPath, JSON.stringify(registry)); await saveRegistry();
   const ops = accounts.find(account => account.id === 'demo-ops');
-  for (const [id, status] of [['scheme-viewer', 'approved'], ['scheme-pending', 'pending']]) {
+  for (const [id, status] of [['scheme-viewer', 'approved'], ['scheme-pending', 'pending'], ['materials-viewer', 'approved']]) {
     await admin.query('INSERT INTO app_private.auth_users(user_id,email,password_hash) SELECT $1,$2,password_hash FROM app_private.auth_users WHERE user_id=$3', [id, id + '@example.invalid', ops.id]);
     await admin.query("INSERT INTO public.profiles(user_id,name,role,status) VALUES($1,'匿名方案查看人','viewer',$2)", [id, status]);
     accounts.push({ id, email: id + '@example.invalid', password: ops.password });
   }
+  await admin.query("UPDATE public.profiles SET viewer_access='materials' WHERE user_id='materials-viewer'");
   const app = createApp({ pool, config: { uploadDir, authCodeSecret: randomBytes(32).toString('hex'), readOnly: false,
     publicOrigin: '', cookieSecure: false, mailer: { configured: false } } });
   server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
@@ -63,7 +64,7 @@ async function fixture(t) {
 
 test('scheme original and old full-page links are blocked for every permitted reader while only the registered crop is served', { timeout: 60000 }, async t => {
   const f = await fixture(t), cropUrl = '/api/scheme-previews/' + pid + '/' + f.sha + '.webp';
-  for (const role of ['demo-ops', 'demo-president', 'demo-pm-res', 'scheme-viewer']) {
+  for (const role of ['demo-ops', 'demo-president', 'demo-pm-res', 'scheme-viewer', 'materials-viewer']) {
     for (const name of [original, oldPreview]) for (const method of ['GET', 'HEAD']) {
       const response = await f.call('/api/files/' + name + '?download=1', { role, method, headers: { Range: 'bytes=0-100' } });
       assert.equal(response.status, 403, role + ' ' + method + ' ' + name);

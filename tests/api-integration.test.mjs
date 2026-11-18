@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createApp } from '../server/app.mjs';
+import { withIdentity } from '../server/database.mjs';
 import { initializedDatabase, testPool } from './helpers/pglite-pool.mjs';
 import { seedDemo } from '../scripts/seed-demo.mjs';
 import { hashTemporaryPassword } from '../server/password.mjs';
@@ -33,7 +34,7 @@ test('first-password requirement gates every business API and private file route
     assert.equal(blocked.status, 403, route);
     assert.equal((await blocked.json()).error.code, 'PASSWORD_CHANGE_REQUIRED', route);
   }
-  for (const route of ['/api/report-attachments/unknown', '/api/files/drawings/project/unknown.png']) {
+  for (const route of ['/api/personnel-directory', '/api/report-attachments/unknown', '/api/files/drawings/project/unknown.png']) {
     const blocked = await fetch(base + route, { headers: { cookie } });
     assert.equal(blocked.status, 403, route);
     assert.equal((await blocked.json()).error.code, 'PASSWORD_CHANGE_REQUIRED', route);
@@ -47,9 +48,12 @@ test('first-password requirement gates every business API and private file route
 });
 
 test('full self-host HTTP flow uses runtime RLS: login, reporting, revisions, leaders and private files', async (t) => {
-  const db = await initializedDatabase(); t.after(() => db.close());
+  const db = await initializedDatabase({ through: 42 }); t.after(() => db.close());
   const admin = testPool(db, null);
   const accounts = await seedDemo(admin);
+  const migration = await readFile(new URL('../db/043-personnel-directory.sql', import.meta.url), 'utf8');
+  await db.exec(migration);
+  await db.exec(migration);
   const uploadDir = await mkdtemp(path.join(os.tmpdir(), 'zh-weekly-test-'));
   t.after(() => rm(uploadDir, { recursive: true, force: true }));
   const pool = testPool(db);
@@ -75,6 +79,43 @@ test('full self-host HTTP flow uses runtime RLS: login, reporting, revisions, le
   assert.equal((await fetch(base + '/')).status, 200);
   for (const secretPath of ['/.env', '/db/002-import.sql', '/.local/demo-accounts.json', '/server/auth.mjs']) assert.equal((await fetch(base + secretPath)).status, 404);
   assert.equal((await call('/api/health')).body.data.status, 'ok');
+  assert.equal((await call('/api/weekly-collaboration/next-week', {}, 'anonymous')).status, 401);
+  assert.deepEqual((await call('/api/weekly-collaboration/next-week', {}, 'pm-res')).body.data, { week: null, rooms: [] });
+  await admin.query(`INSERT INTO app_private.personnel_directory(user_id,division,team,title,sort_order)
+    VALUES ('demo-pm-res','示例项目部','示例工程组','工程师',10)`);
+  assert.equal((await call('/api/personnel-directory', undefined, 'anonymous')).status, 401);
+  for (const role of ['pm-res', 'president', 'pzo']) {
+    const denied = await call('/api/personnel-directory', undefined, role);
+    assert.equal(denied.status, 403, role);
+    assert.equal(denied.body.error.code, 'personnel_directory_forbidden');
+  }
+  const directory = await call('/api/personnel-directory');
+  assert.equal(directory.status, 200);
+  assert.equal(directory.response.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(directory.body.data, [
+    { user_id: 'demo-pm-res', division: '示例项目部', team: '示例工程组', title: '工程师', sort_order: 10 }
+  ]);
+  assert.deepEqual((await call('/api/personnel-admin-access', undefined, 'pm-res')).body.data, { projects: [] });
+  assert.equal((await call('/api/project-personnel', undefined, 'pm-res')).status, 403);
+  await admin.query("UPDATE public.profiles SET role='viewer',viewer_scope='projects',viewer_access='materials' WHERE user_id='demo-pm-com'");
+  await admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES('demo-pm-com','demo-res','viewer')");
+  await admin.query("INSERT INTO app_private.project_personnel_admins(user_id,project_id) VALUES('demo-pm-com','demo-res')");
+  const localAccess = (await call('/api/personnel-admin-access', undefined, 'pm-com')).body.data.projects;
+  assert.deepEqual(localAccess.map(p=>p.project_id), ['demo-res']);
+  const localPeople = await call('/api/project-personnel', undefined, 'pm-com');
+  assert.equal(localPeople.status, 200);
+  assert.ok(localPeople.body.data.some(p=>p.user_id==='demo-pm-res' && p.team==='示例工程组'));
+  assert.ok(localPeople.body.data.every(p=>!Object.hasOwn(p,'email') && p.projects.every(j=>j.project_id==='demo-res')));
+  await admin.query("DELETE FROM app_private.project_personnel_admins WHERE user_id='demo-pm-com'");
+  await admin.query("DELETE FROM public.project_members WHERE user_id='demo-pm-com' AND project_id='demo-res'");
+  await admin.query("UPDATE public.profiles SET role='pm',viewer_scope='all',viewer_access='full' WHERE user_id='demo-pm-com'");
+  await withIdentity(pool, 'demo-pm-res', async client => {
+    assert.deepEqual((await client.query('SELECT user_id FROM app_private.personnel_directory')).rows, []);
+  });
+  await assert.rejects(withIdentity(pool, 'demo-ops', client => client.query(
+    "UPDATE app_private.personnel_directory SET division='外部修改' WHERE user_id='demo-pm-res'"
+  )), error => error.code === '42501');
+  assert.equal((await query({ table: 'personnel_directory' })).status, 400);
   assert.equal((await query({ table: 'projects' }, 'anonymous')).status, 401);
   assert.equal((await query({ table: 'app_private.auth_users' })).status, 400);
   assert.equal((await query({ table: 'projects', filters: [null] })).status, 400);

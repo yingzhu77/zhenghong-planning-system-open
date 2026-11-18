@@ -1,6 +1,6 @@
 import { HttpError } from './errors.mjs';
 import { getProfile, reportWeekStart, withIdentity } from './database.mjs';
-import { resolveWritableResidentialLine } from './report-lines.mjs';
+import { hasProjectReportingGrant, RESIDENTIAL_DISCIPLINES, resolveWritableResidentialLine } from './report-lines.mjs';
 
 export async function configuredReportScopes(client) {
   return (await client.query("SELECT id,name,anchor_project_id,project_ids,effective_week::text AS effective_week,COALESCE(to_jsonb(s)->>'reporting_mode','comprehensive') AS reporting_mode FROM app_private.report_scopes s ORDER BY id")).rows;
@@ -58,7 +58,8 @@ export async function resolveReportScope(client, user, row, existing, period, pi
     const profile = await getProfile(client, user.id), line = existing?.line ?? row.line;
     if (line === '综合') {
       if (!existing?.report_scope_id || existing.author_id !== user.id) throw new HttpError(403, '合并项目请按本人专业提报；原综合报告保留原作者', 'residential_discipline_forbidden');
-    } else if (resolveWritableResidentialLine(profile, line) !== line || line !== profile?.discipline) {
+    } else if (RESIDENTIAL_DISCIPLINES.includes(line) ? resolveWritableResidentialLine(profile, line) !== line
+      : !await hasProjectReportingGrant(client,user.id,pid,line)) {
       throw new HttpError(403, '只能填报本人获授权的住宅专业', 'residential_discipline_forbidden');
     }
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ['report-scope:' + scope.id + ':' + week + ':' + line + ':' + user.id]);

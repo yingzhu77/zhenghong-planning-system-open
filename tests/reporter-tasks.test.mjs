@@ -35,7 +35,7 @@ test('meeting follow-up migration is repeatable and leaves reports, users and pr
 
 test('assigned meeting matters save revisions, preserve rich text and source history without inflating list reads', async (t) => {
   const { pool } = await fixture(t);
-  const initial = matter(); initial.rich_text = format({ what: delta(initial.what) });
+  const initial = matter(); initial.rich_text = format({ title:delta(initial.title),what: delta(initial.what) });
   const saved = await saveReporterTask(pool, operator, initial);
   assert.equal(saved.owner_id, user.id);
   assert.equal(saved.owner_name, '演示住宅经理');
@@ -46,12 +46,14 @@ test('assigned meeting matters save revisions, preserve rich text and source his
   const changed = await saveReporterTask(pool, user, matter({ id: saved.id, expected_revision: 1, status: 'in_progress', progress: '已整理资料' }));
   assert.equal(changed.revision, 2);
   assert.deepEqual(changed.rich_text, saved.rich_text);
+  await assert.rejects(saveReporterTask(pool,user,matter({id:saved.id,expected_revision:2,
+    rich_text:format({title:{ops:[{insert:initial.title,attributes:{bold:true}}]}})})),status(403));
   await assert.rejects(saveReporterTask(pool, user, matter({ id: saved.id, expected_revision: 1, progress: '覆盖并发保存' })), (error) => error.status === 409 && error.code === 'revision_conflict');
   await assert.rejects(saveReporterTask(pool, user, matter({ id: saved.id, expected_revision: 2, status: 'completed' })), status(400));
   const done = await saveReporterTask(pool, operator, matter({ id: saved.id, expected_revision: 2, status: 'in_progress', progress: '会议确认资料已整理', what: '已确认验收资料' }));
   assert.equal(done.revision, 3);
   assert.equal(done.completed_at, null);
-  assert.deepEqual(done.rich_text, {});
+  assert.deepEqual(done.rich_text,format({title:delta(initial.title)}));
   const listed = await listReporterTasks(pool, user, { project_id: 'demo-res' });
   assert.equal(listed.length, 1);
   assert.equal(listed[0].status, 'in_progress');
@@ -72,7 +74,7 @@ test('meeting matter boundary rejects forged actors, impossible dates, mismatche
   const { pool } = await fixture(t);
   for (const payload of [null, [], matter({ owner_id: 'demo-pm-com' }), matter({ title: ' ' }), matter({ what: '\u0000' }),
     matter({ due: '2026-02-30' }), matter({ due: '2025-02-29' }), matter({ due: '0000-01-01' }), matter({ status: '任意状态' }),
-    matter({ rich_text: format({ what: delta('不同正文') }) }), matter({ rich_text: format({ title: delta('会中跟踪事项') }) }),
+    matter({ rich_text: format({ what: delta('不同正文') }) }), matter({ rich_text: format({ title: delta('与标题不一致') }) }),
     matter({ rich_text: format({ what: { ops: [{ insert: '确认验收资料\n周五反馈', attributes: { link: 'https://invalid.example' } }] } }) })]) {
     await assert.rejects(saveReporterTask(pool, operator, payload), status(400));
   }

@@ -81,7 +81,7 @@ test('scope validates actual milestone project, exact source keys and transactio
   const saved=(await submitCurrent({biz:{nodes:[{milestone_id:node.id,project_id:'zhx2',name:'同名基准'}],followups:[followup]}}))[0];assert.equal(saved.biz.nodes[0].project_id,'zhx2');assert.equal(saved.biz.followups[0].source_key,'meeting:klq:'+task.id);assert.equal((await f.admin.query('SELECT progress FROM public.reporter_tasks WHERE id=$1',[task.id])).rows[0].progress,'新进展');
 });
 test('group attachments keep independent identity, immutable history links and require every member ACL',async t=>{
-  const f=await fixture(t),dir=await mkdtemp(path.join(os.tmpdir(),'scope-attachments-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+  const f=await fixture(t,44),dir=await mkdtemp(path.join(os.tmpdir(),'scope-attachments-'));t.after(()=>rm(dir,{recursive:true,force:true}));
   const input={project_id:'zhx1',period,line:'综合',filename:'隔离凭证.png'};
   const old=await uploadReportAttachment(f.pool,{id:'full'},dir,input,png);
   const grouped=await uploadReportAttachment(f.pool,{id:'full'},dir,{...input,report_scope_id:scopeId},png);
@@ -97,7 +97,7 @@ test('group attachments keep independent identity, immutable history links and r
 });
 
 test('explicit inaccessible draft cleanup frees only the owner unreferenced group files after a non-anchor revocation',async t=>{
-  const f=await fixture(t),dir=await mkdtemp(path.join(os.tmpdir(),'scope-revoked-drafts-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+  const f=await fixture(t,44),dir=await mkdtemp(path.join(os.tmpdir(),'scope-revoked-drafts-'));t.after(()=>rm(dir,{recursive:true,force:true}));
   const input={project_id:'zhx1',period,line:'综合',filename:'隔离草稿.png'};
   const original=await uploadReportAttachment(f.pool,{id:'full'},dir,input,png);
   const historical=await uploadReportAttachment(f.pool,{id:'full'},dir,{...input,report_scope_id:scopeId},png);

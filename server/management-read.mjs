@@ -4,10 +4,14 @@ import { sanitizeSchemeRows } from './scheme-protection.mjs';
 
 const forbidden = () => { throw new HttpError(403, '当前账号没有管理查看权限', 'management_read_forbidden'); };
 const invalid = () => { throw new HttpError(400, '管理查看请求格式不正确', 'invalid_management_read'); };
-const views = new Set(['projects', 'coordination', 'completions', 'meetings', 'archive']);
+const views = new Set(['projects', 'coordination', 'completions', 'meetings', 'archive', 'plans']);
 
 export function hasManagementRead(profile) {
   return profile?.status === 'approved' && (profile.role === 'viewer' || profile.role === 'pm' && profile.management_viewer === true);
+}
+
+export function materialsOnly(profile) {
+  return profile?.role === 'viewer' && profile.viewer_access === 'materials';
 }
 
 // Internal server helper only. Neither the GUC name nor its value comes from a
@@ -15,7 +19,7 @@ export function hasManagementRead(profile) {
 export function withManagementRead(pool, user, callback, { required = false } = {}) {
   return withIdentity(pool, user.id, async client => {
     const profile = await getProfile(client, user.id);
-    if (hasManagementRead(profile)) await client.query("SELECT set_config('app.management_read','on',true)");
+    if (hasManagementRead(profile)) await client.query('SELECT set_config($1,\'on\',true)', [materialsOnly(profile) ? 'app.material_read' : 'app.management_read']);
     else if (required) forbidden();
     return callback(client, profile);
   });
@@ -23,7 +27,9 @@ export function withManagementRead(pool, user, callback, { required = false } = 
 
 function readRequest(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)
-    || Object.keys(request).some(key => !['view', 'project_id', 'limit', 'cursor'].includes(key)) || !views.has(request.view)) invalid();
+    || Object.keys(request).some(key => !['view', 'project_id', 'limit', 'cursor','month'].includes(key)) || !views.has(request.view)) invalid();
+  if(request.month!==undefined && (request.view!=='plans' || typeof request.month!=='string' || !/^[1-9][0-9]{3}-(0[1-9]|1[0-2])$/.test(request.month)))invalid();
+  const month=request.view==='plans'?(request.month || new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit'}).format(new Date())):undefined;
   const project = request.project_id ?? '';
   if (typeof project !== 'string' || project.length > 200 || /[\u0000-\u001f\u007f]/.test(project) || project !== project.trim()) invalid();
   const limit = request.limit ?? 100;
@@ -32,13 +38,14 @@ function readRequest(request) {
   if (request.cursor !== undefined) {
     if (typeof request.cursor !== 'string' || request.cursor.length > 2000 || !/^[A-Za-z0-9_-]+$/.test(request.cursor)) invalid();
     try { cursor = JSON.parse(Buffer.from(request.cursor, 'base64url').toString()); } catch { invalid(); }
-    if (!cursor || Object.keys(cursor).sort().join(',') !== 'created_at,key,project_id,view'
+    if (!cursor || Object.keys(cursor).sort().join(',') !== (request.view==='plans'?'created_at,key,month,project_id,view':'created_at,key,project_id,view')
       || cursor.view !== request.view || cursor.project_id !== project || typeof cursor.created_at !== 'string'
+      || request.view==='plans' && cursor.month!==month
       || !Number.isFinite(Date.parse(cursor.created_at)) || typeof cursor.key !== 'string' || !cursor.key
       || cursor.key.length > 500 || /[\u0000-\u001f\u007f]/.test(cursor.key)) invalid();
   }
-  if (cursor && ['projects', 'archive'].includes(request.view)) invalid();
-  return { view: request.view, project_id: project, limit, cursor };
+    if (cursor && ['projects', 'archive'].includes(request.view)) invalid();
+  return { view: request.view, project_id: project, limit, cursor,month };
 }
 
 const coordinationSql = `
@@ -101,14 +108,26 @@ const meetingsSql = `SELECT t.created_at,t.id::text AS sort_key,t.project_id,ARR
     'created_at',t.created_at,'updated_at',t.updated_at,'history',t.history,'read_only',true) AS data
   FROM public.reporter_tasks t`;
 
-async function archive(client, projectId, options) {
+const plansSql = `SELECT p.confirmed_at AS created_at,p.id::text AS sort_key,p.project_id,
+  COALESCE(p.scope_project_ids,ARRAY[p.project_id]) AS scope_project_ids,
+  jsonb_build_object('id',p.id,'project_id',p.project_id,'line',p.line,'owner_name',p.confirmed_name,
+    'month',to_char(p.plan_month,'YYYY-MM'),'items',p.items,'rich_text',p.rich_text,
+    'confirmed_at',p.confirmed_at,'read_only',true,
+    'reports',(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',r.id,'period',r.period,
+      'submitted_at',r.submitted_at,'biz',r.biz,'rich_text',r.rich_text) ORDER BY r.submitted_at DESC,r.id DESC),'[]'::jsonb)
+      FROM public.reports r WHERE r.project_id=p.project_id AND r.author_id=p.confirmed_by AND r.line=p.line
+        AND r.submitted_at IS NOT NULL AND app_private.report_month_start(r.period,r.submitted_at)=p.plan_month
+        AND (r.biz->>'monthly_plan_id'=p.id::text OR COALESCE(r.biz->'monthly_plan_ids','[]'::jsonb) ? p.id::text))) AS data
+  FROM public.monthly_plans p WHERE p.plan_month=($2::text||'-01')::date`;
+
+async function archive(client, projectId, options, restricted) {
   if (!projectId) return { project_master: [], project_phases: [], project_drawings: [], milestones: [] };
   const master = (await client.query('SELECT project_id,fields,note,updated_at FROM public.project_master WHERE project_id=$1', [projectId])).rows;
   const phases = (await client.query(`SELECT id,project_id,name,area,gfa,units_total,units_launched,units_sold,
     avg_price,value,plan_handover,sort_order FROM public.project_phases WHERE project_id=$1 ORDER BY sort_order,id`, [projectId])).rows;
   const drawings = (await client.query(`SELECT id,project_id,kind,name,path,url,uploaded_by,sort_order,created_at
     FROM public.project_drawings WHERE project_id=$1 ORDER BY sort_order,id`, [projectId])).rows;
-  const milestones = (await client.query(`SELECT id::text AS id,project_id,name,line,level,is_key,plan_date,
+  const milestones = restricted ? [] : (await client.query(`SELECT id::text AS id,project_id,name,line,level,is_key,plan_date,
     forecast_date,done,note,rich_text,discipline,biz_line FROM public.milestones WHERE project_id=$1 ORDER BY sort_order,id`, [projectId])).rows;
   return { project_master: await sanitizeSchemeRows(client, 'project_master', master, options), project_phases: phases,
     project_drawings: await sanitizeSchemeRows(client, 'project_drawings', drawings, options), milestones };
@@ -116,22 +135,25 @@ async function archive(client, projectId, options) {
 
 export async function managementRead(pool, user, request = {}, options = {}) {
   const filters = readRequest(request);
-  return withManagementRead(pool, user, async client => {
+  return withManagementRead(pool, user, async (client,profile) => {
+    if (materialsOnly(profile) && !['projects','archive'].includes(filters.view)) forbidden();
     const projects = (await client.query(`SELECT id,name,COALESCE(project_type,'res') AS project_type,
       COALESCE(display_group,name) AS display_group FROM public.projects ORDER BY sort_order,id`)).rows;
     if (filters.project_id && !projects.some(project => project.id === filters.project_id)) forbidden();
-    const result = { projects, project_id: filters.project_id || '', rows: [], has_more: false, next_cursor: null, read_only: true };
+    const result = { projects, project_id: filters.project_id || '', rows: [], has_more: false, next_cursor: null, read_only: true,
+      read_scope:profile.role==='viewer' && profile.viewer_scope==='projects'?'projects':'all' };
+    if(filters.view==='plans')result.month=filters.month;
     if (filters.view === 'projects') return result;
     if (filters.view === 'archive') {
       result.project_id = filters.project_id || projects[0]?.id || '';
-      result.archive = await archive(client, result.project_id, options);
+      result.archive = await archive(client, result.project_id, options, materialsOnly(profile));
       return result;
     }
-    const source = { coordination: coordinationSql, completions: completionSql, meetings: meetingsSql }[filters.view];
-    const values = [filters.project_id], conditions = ["($1::text='' OR project_id=$1 OR (project_id IS NULL AND $1=ANY(scope_project_ids)))"];
+    const source = { coordination: coordinationSql, completions: completionSql, meetings: meetingsSql,plans:plansSql }[filters.view];
+    const values = [filters.project_id,...(filters.view==='plans'?[filters.month]:[])], conditions = ["($1::text='' OR project_id=$1 OR (project_id IS NULL AND $1=ANY(scope_project_ids)))"];
     if (filters.cursor) {
       values.push(filters.cursor.created_at, filters.cursor.key);
-      conditions.push('(created_at,sort_key COLLATE "C")<($2::timestamptz,$3::text COLLATE "C")');
+      conditions.push('(created_at,sort_key COLLATE "C")<($'+(values.length-1)+'::timestamptz,$'+values.length+'::text COLLATE "C")');
     }
     values.push(filters.limit + 1);
     const found = (await client.query(`WITH items AS (${source})
@@ -144,7 +166,7 @@ export async function managementRead(pool, user, request = {}, options = {}) {
     if (result.has_more) {
       const last = page.at(-1);
       result.next_cursor = Buffer.from(JSON.stringify({ view: filters.view, project_id: filters.project_id,
-        created_at: last.sort_at, key: last.sort_key })).toString('base64url');
+        created_at: last.sort_at, key: last.sort_key,...(filters.view==='plans'?{month:filters.month}:{}) })).toString('base64url');
     }
     if (filters.view === 'coordination') result.report_period_basis = 'current_shanghai_week';
     if (filters.view === 'completions') result.data_basis = 'request_snapshot';

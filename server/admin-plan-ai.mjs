@@ -75,6 +75,9 @@ async function scopeSnapshot(pool,user,scopeId){
   if(!scopeId)return null;
   return withIdentity(pool,user.id,async c=>(await c.query('SELECT id,anchor_project_id,project_ids FROM app_private.report_scopes WHERE id=$1',[scopeId])).rows[0]??null);
 }
+function matchSessionProfession(session,hint){
+  return matchAdminPlanTarget(session.targets,hint,session.project_id,session.project_professions || []);
+}
 function refreshRouting(s,previousTargets){
   if(s.confirmed)return;
   const allowed=new Set(s.targets.map(targetKey)),previous=new Set(previousTargets.map(targetKey));
@@ -85,15 +88,15 @@ function refreshRouting(s,previousTargets){
   for(const row of s.rows){
     const strict=s.strict.get(row.id),before=fingerprint(row);
     if(row.match_basis==='manual'){
-      row.candidate_targets=matchAdminPlanTarget(s.targets,row.line).candidate_targets;
+      row.candidate_targets=matchSessionProfession(s,row.line).candidate_targets;
       // An explicit choice remains explicit, but never survives revoked access.
       if(previous.has(targetKey(row))&&!allowed.has(targetKey(row)))changed=true;
     }else{
-      const hint=adminPlanLineHint(strict||row,s.project_id,s.targets[0]?.project_type);
-      const match=matchAdminPlanTarget(s.targets,strict?hint:hint||row.line||row.mod||rowRegion(s,row)?.sheet,s.project_id);
+      const hint=adminPlanLineHint(strict||row,s.project_id,s.targets[0]?.project_type,s.project_professions);
+      const match=matchSessionProfession(s,strict?hint:hint||row.line||row.mod||rowRegion(s,row)?.sheet);
       Object.assign(row,match);
       if(row.profession_suggestion){
-        const suggestion=matchAdminPlanTarget(s.targets,row.profession_suggestion.line);
+        const suggestion=matchSessionProfession(s,row.profession_suggestion.line);
         row.profession_suggestion=suggestion.line?{...row.profession_suggestion,line:suggestion.line,owner_id:suggestion.owner_id}:null;
       }
       if(fingerprint(row)!==before)changed=true;
@@ -247,8 +250,8 @@ function normalizedOutput(s,value,initial=false){
       }
       // A known source profession takes precedence over model routing. Work
       // responsible names never select an account, including among peers.
-      let match=matchAdminPlanTarget(s.targets,adminPlanLineHint(strict||{...r,line_hint:r.mod},s.project_id,s.targets[0]?.project_type),s.project_id);
-      if(!strict&&!match.line)match=matchAdminPlanTarget(s.targets,region.sheet);
+      let match=matchSessionProfession(s,adminPlanLineHint(strict||{...r,line_hint:r.mod},s.project_id,s.targets[0]?.project_type,s.project_professions));
+      if(!strict&&!match.line)match=matchSessionProfession(s,region.sheet);
       const hint=!match.line&&suggestPlanProfession(r,s.targets[0]?.project_type);
       const suggestionLine=hint?.line||strict?.profession_suggestion?.line||proposal.line;
       const suggested=!match.line&&suggestionLine?matchAdminPlanTarget(s.targets,suggestionLine):null;

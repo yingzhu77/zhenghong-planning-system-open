@@ -11,10 +11,11 @@ import {previewCompletion,requestCompletion} from '../server/completions.mjs';
 import {loadPlanningAIFacts,assertPlanningAIFactAccess} from '../server/planning-ai-data.mjs';
 import {planProfession,workbookProfessionHint,suggestPlanProfession} from '../server/plan-professions.mjs';
 import {RESIDENTIAL_DISCIPLINES,residentialDisciplinesForProject} from '../server/report-lines.mjs';
+import {addProjectReportingProfession,grantProjectReportingProfession,listProjectReportingGrants} from '../server/project-reporting-professions.mjs';
 
 const ops={id:'demo-ops'},pm={id:'demo-pm-com'},peer={id:'admin-plan-peer'},line='土建工程（东地块）';
 const item={source_id:'original-item',mod:'工程',name:'正式月度计划',due:'2026-11-25'};
-async function fixture(t,{through=33}={}) {
+async function fixture(t,{through}={}) {
   const db=await initializedDatabase({through});t.after(()=>db.close());const admin=testPool(db,null),pool=testPool(db);await seedDemo(admin);
   await admin.query("INSERT INTO public.profiles(user_id,name,role,status,project_id,biz_line,discipline) VALUES($1,'匿名同专业提报人','pm','approved','demo-com',$2,'工程')",[peer.id,line]);
   await admin.query("INSERT INTO public.project_members(user_id,project_id) VALUES($1,'demo-com')",[peer.id]);
@@ -25,6 +26,47 @@ const save=(f,plans,operation_id=randomUUID())=>saveAdminMonthlyPlans(f.pool,ops
 const linked=p=>({monthly_plan_id:p.id,monthly_plan_month:'2026-11',items:p.items.map(i=>({...i,prog:'进展',blocker:''}))});
 const report=(f,user,p,period='2026-11-02')=>executeDatabase(f.pool,user,{table:'reports',operation:'upsert',onConflict:'project_id,period,line',values:{project_id:p.project_id,line:p.line,period,biz:linked(p)}});
 const denied=e=>e.status===403;
+
+test('036 preserves original rows and scoped custom grants require all members and authorize only their project',async t=>{
+  const f=await fixture(t,{through:35}),reporter={id:'demo-pm-res'},line='现场样板管理',scope='custom-scope',anchor='custom-anchor',phase='custom-phase';
+  const legacy=await confirmMonthlyPlan(f.pool,pm,{project_id:'demo-com',line:'土建工程（东地块）',month:'2026-11',items:[item]});
+  const snapshot=async()=>(await f.admin.query(`SELECT jsonb_build_object(
+    'reports',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM public.reports r),
+    'plans',(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM public.monthly_plans p),
+    'profiles',(SELECT jsonb_agg(to_jsonb(u) ORDER BY user_id) FROM public.profiles u),
+    'members',(SELECT jsonb_agg(to_jsonb(m) ORDER BY user_id,project_id) FROM public.project_members m)) AS rows`)).rows[0].rows;
+  const before=await snapshot(),migration=await readFile(new URL('../db/036-project-reporting-professions.sql',import.meta.url),'utf8');
+  await f.db.exec(migration);await f.db.exec(migration);
+  assert.deepEqual(await snapshot(),before);
+  assert.equal((await listMonthlyPlans(f.pool,pm,{project_id:'demo-com',line:legacy.line,month:'2026-11'}))[0].id,legacy.id);
+  await f.admin.query("INSERT INTO public.projects(id,name,project_type) VALUES($1,'匿名主期','res'),($2,'匿名二期','res')",[anchor,phase]);
+  await f.admin.query("INSERT INTO app_private.report_scopes(id,name,anchor_project_id,project_ids,effective_week,reporting_mode) VALUES($1,'匿名统一范围',$2,ARRAY[$2,$3],'2026-10-26','professional')",[scope,anchor,phase]);
+  await f.admin.query('INSERT INTO public.project_members(user_id,project_id) VALUES($1,$2)',[reporter.id,anchor]);
+  await assert.rejects(addProjectReportingProfession(f.pool,ops,{project_id:phase,line}),error=>error.code==='reporting_scope_required');
+  await assert.rejects(addProjectReportingProfession(f.pool,reporter,{project_id:anchor,line}),denied);
+  await addProjectReportingProfession(f.pool,ops,{project_id:anchor,line});
+  const grant={project_id:anchor,line,user_id:reporter.id};
+  await assert.rejects(grantProjectReportingProfession(f.pool,ops,grant),denied);
+  await f.admin.query('INSERT INTO public.project_members(user_id,project_id) VALUES($1,$2)',[reporter.id,phase]);
+  await grantProjectReportingProfession(f.pool,ops,grant);
+  await grantProjectReportingProfession(f.pool,ops,grant);
+  assert.deepEqual(await listProjectReportingGrants(f.pool,reporter),[grant]);
+  const scoped=await confirmMonthlyPlan(f.pool,reporter,{project_id:anchor,line,month:'2026-11',report_scope_id:scope,items:[{...item,project_id:phase}]});
+  const weekly={project_id:anchor,period:'2026-11-02',line,report_scope_id:scope,biz:{monthly_plan_ids:[scoped.id],
+    items:scoped.items.map(row=>({...row,monthly_plan_id:scoped.id,prog:'已核对',blocker:''}))}};
+  const [saved]=await executeDatabase(f.pool,reporter,{table:'reports',operation:'upsert',onConflict:'project_id,period,line,author_id',values:weekly});
+  assert.equal(saved.line,line);assert.deepEqual(saved.scope_project_ids,[anchor,phase]);assert.equal(saved.biz.items[0].project_id,phase);
+  const preview=await previewAdminPlanRows(f.pool,ops,{project_id:anchor,report_scope_id:scope,month:'2026-11',rows:[{name:item.name,line_hint:'原分类',source:{sheet:line}}]});
+  assert.equal(preview.rows[0].owner_id,reporter.id);
+  await addProjectReportingProfession(f.pool,ops,{project_id:'demo-com',line});
+  await assert.rejects(confirmMonthlyPlan(f.pool,pm,{project_id:'demo-com',line,month:'2026-11',items:[item]}),denied);
+  await grantProjectReportingProfession(f.pool,ops,{project_id:'demo-com',line,user_id:pm.id});
+  const commercial=await confirmMonthlyPlan(f.pool,pm,{project_id:'demo-com',line,month:'2026-11',items:[item]});
+  assert.equal((await report(f,pm,commercial))[0].line,line);
+  await f.admin.query('DELETE FROM public.project_members WHERE user_id=$1 AND project_id=$2',[reporter.id,phase]);
+  assert.deepEqual(await listProjectReportingGrants(f.pool,reporter),[]);
+  await assert.rejects(confirmMonthlyPlan(f.pool,reporter,{project_id:anchor,line,month:'2026-12',report_scope_id:scope,items:[item]}),denied);
+});
 
 test('深圳良安田待分配专业仅在本项目目录识别，保留原事项与计划且不能无授权保存',async t=>{
  assert.equal(RESIDENTIAL_DISCIPLINES.length,9);assert.equal(residentialDisciplinesForProject('szzz').at(-1),'良安田项目');assert.equal(residentialDisciplinesForProject('szgy').length,10);

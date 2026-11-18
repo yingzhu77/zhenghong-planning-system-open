@@ -107,12 +107,24 @@ test('projection selectors reject invalid payloads and display escapes source te
   model.projects.push({id:'res-b',name:'二期'});model.reports[0].report_scope_id='group';model.reports[0].scope_project_ids=['res-a','res-b'];
   model.reports[0].biz.items=[{project_id:'res-b',name:'原二期事项'},{name:'没有实际项目的原事项'}];
   const grouped=api.html(model);assert.match(grouped,/二期<small>/);assert.match(grouped,/统一范围 · 未明确子项目/);
+  model.target=api.target({...valid,type:'com',section:'followups'});
+  model.reports[0].biz.weekly_collaboration={week:'2026-11-02',revision:1};
+  model.reports[0].biz.followups=[
+    {project_id:'res-a',owner_name:'真实承办人<iframe>',source_type:'coord',what:'需要核对<script>',progress:'已反馈',status:'in_progress'},
+    {project_id:'res-b',owner_name:'不在投影范围的承办人',what:'不在投影范围的事项'}
+  ];
+  const followups=api.html(model);
+  assert.match(followups,/四、待处理事项清单/);
+  assert.match(followups,/真实承办人&lt;iframe&gt;/);
+  assert.match(followups,/需要核对&lt;script&gt;/);
+  assert.match(followups,/已反馈/);
+  assert.doesNotMatch(followups,/<script|<iframe|人员&lt;iframe&gt;|不在投影范围/);
 });
 
-test('monthly projection keeps narrative columns left aligned, compact long rows and once-per-group source captions across display sizes',async t=>{
+test('weekly projection centers plan headers and merged modules and balances real progress across display sizes',async t=>{
   const context={console};context.window=context;vm.createContext(context);
   for(const file of ['planning-windows.js','rich-text.js','monthly-summaries.js','meeting-view.js'])vm.runInContext(readFileSync(new URL(file,web),'utf8'),context);
-  const items=Array.from({length:12},(_,i)=>({mod:i%2?'移交事项':'砌筑工程',name:i%2?'屋面移交：示例一号楼与二号楼分批交接，确认施工界面和设备进场条件':'地下室设备房移交：生活水泵房、消防水泵房依计划完成并核对验收资料',due:'2026-10-31',prog:i%3?'按计划推进，已完成施工界面核对，待联合验收':'本周已完成现场核查，剩余事项按原计划推进',...(i===2?{blocker:'等待验收资料'}:{})}));
+  const items=Array.from({length:12},(_,i)=>({mod:i>=4 && i<8?'移交事项':'砌筑工程',name:i%2?'屋面移交：示例一号楼与二号楼分批交接，确认施工界面和设备进场条件':'地下室设备房移交：生活水泵房、消防水泵房依计划完成并核对验收资料',due:'2026-10-31',prog:i%3?'按计划推进，已完成施工界面核对，待联合验收':'本周已完成现场核查，剩余事项按原计划推进',...(i===2?{blocker:'等待验收资料'}:{})}));
   const report={project_id:'com-a',line:'土建工程',author_name:'示例填报人甲',biz:{items},rich_text:{v:1,fields:{'biz.items.0.prog':{ops:[{insert:items[0].prog,attributes:{bold:true,color:'#d81e06'}}]}}}};
   context.ZHRichText.attach(report);
   const model={target:context.MeetingView.target({type:'com',projectIds:['com-a'],period:'2026-10-26',line:'土建工程',section:'plans'}),projects:[{id:'com-a',name:'示例商业项目'}],readAt:'10:00:00',reports:[report],nodes:[],drawings:[],attachments:[]};
@@ -121,14 +133,15 @@ test('monthly projection keeps narrative columns left aligned, compact long rows
   await page.setContent('<!doctype html><html lang="zh-CN"><style>'+readFileSync(new URL('meeting-mode.css',web),'utf8')+'</style><body class="meeting-display"><div class="meeting-display-tools"><b>会议投影</b><span>跟随管理员选择</span></div><main>'+context.MeetingView.html(model)+'</main></body></html>');
   const table=page.locator('.meeting-plan-table');await expect(table.locator('th')).toHaveText(['模块','事项','完成时间','当周进展']);
   await expect(table.locator('caption')).toHaveText('示例商业项目示例填报人甲 · 土建工程');
-  await expect(table.locator('tbody tr')).toHaveCount(12);await expect(table.locator('tbody td')).toHaveCount(48);
+  await expect(table.locator('tbody tr')).toHaveCount(12);await expect(table.locator('td[rowspan="4"]')).toHaveText(['砌筑工程','移交事项','砌筑工程']);
   await expect(table.locator('.rt-red strong,strong.rt-red')).toHaveText(items[0].prog);await expect(table).toContainText('遇到卡点：等待验收资料');
   mkdirSync(artifacts,{recursive:true});
   for(const viewport of [{width:1920,height:1080},{width:1440,height:900},{width:390,height:844}]){
     await page.setViewportSize(viewport);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),true);
     if(viewport.width>700){
-      assert.equal(await table.locator('th,td').evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign==='left' && getComputedStyle(cell).verticalAlign==='top')),true);
+      assert.ok(await table.locator('th,td[data-label="模块"],td[data-label="完成时间"]').evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign==='center' && getComputedStyle(cell).verticalAlign==='middle')));
+      assert.ok(await table.locator('td[data-label="事项"],td[data-label="当周进展"]').evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign==='left' && getComputedStyle(cell).verticalAlign==='middle')));
       const bounds=await table.locator('th').evaluateAll(cells=>cells.map(cell=>cell.getBoundingClientRect().width));
       assert.ok(bounds[1]>bounds[0] && bounds[3]>bounds[2]);
       const head=await table.locator('thead').boundingBox();assert.ok(head.y<250,'compact heading leaves space for the report');
@@ -138,6 +151,24 @@ test('monthly projection keeps narrative columns left aligned, compact long rows
       assert.equal(await table.locator('td[data-label="事项"],td[data-label="当周进展"]').evaluateAll(cells=>cells.every(cell=>getComputedStyle(cell).textAlign==='left')),true);
     }
     await page.screenshot({path:path.join(artifacts,'display-four-columns-'+viewport.width+'.png')});
+  }
+  await page.setViewportSize({width:1440,height:900});
+  async function widthsAfterRead(prog,blocker){
+    const currentItems=items.slice(0,2).map((item,index)=>({...item,name:item.name.repeat(4),prog:index===0?prog:'',blocker:index===0?blocker:''}));
+    const html=context.MeetingView.html({...model,reports:[{...report,biz:{items:currentItems}}]});
+    await page.locator('main').evaluate((main,html)=>main.innerHTML=html,html);
+    return table.locator('th').evaluateAll(cells=>cells.map(cell=>cell.getBoundingClientRect().width));
+  }
+  const empty=await widthsAfterRead('');
+  assert.deepEqual(await widthsAfterRead('未填写'),empty);
+  const short=await widthsAfterRead('完成');
+  await expect(table.locator('tbody tr').first().locator('td[data-label="当周进展"]')).toHaveText('完成');
+  assert.ok(short[3]>empty[3] && short[1]<empty[1]);
+  await page.screenshot({path:path.join(artifacts,'projection-after-progress-1440.png')});
+  for(const widths of [short,await widthsAfterRead('本周已完成施工并核查验收资料。'.repeat(20)),await widthsAfterRead('', '等待验收资料')]){
+    const share=widths[3]/(widths[1]+widths[3]);
+    assert.ok(share>=.349 && share<=.651,'items and progress share the available narrative width');
+    assert.ok(Math.abs(widths[2]-empty[2])<1,'date column keeps its width');
   }
   model.target.type='res';model.target.line='';model.target.projectIds.push('res-b');model.projects.push({id:'res-b',name:'示例住宅二期'});
   model.reports=[{...report,report_scope_id:'unified',biz:{items:[{...items[0],project_id:'res-b'},{...items[1]}]}},{...report,author_name:'示例填报人乙',biz:{items:[items[2]]}}];
@@ -170,8 +201,11 @@ async function fixture(t){
   await admin.query("INSERT INTO app_private.auth_users(user_id,email,password_hash) VALUES($1,'meeting-owner@example.invalid','disposable-directory-only'),($2,'meeting-leader@example.invalid','disposable-directory-only')",[owner,leader]);
   await admin.query("INSERT INTO public.project_members(user_id,project_id,role_in_project) VALUES($1,'meeting-a','pm'),($1,'meeting-b','pm')",[owner]);
   for(const pid of ['meeting-a','meeting-b'])await executeDatabase(runtime.pool,{id:owner},{table:'reports',operation:'upsert',onConflict:'project_id,period,line',values:{project_id:pid,period:runtime.scope.period,line:'综合',
-    biz:{form_version:2,nodes:[],items:[{source_id:'meeting-item',mod:'工程',name:pid==='meeting-a'?'甲项目已提交事项':'乙项目已提交事项',due:runtime.scope.week,prog:'原进展需要保留'}],handover:[]},
-    rich_text:{v:1,fields:{'biz.items.0.prog':{ops:[{insert:'原进展需要保留',attributes:{bold:true,color:'#d81e06'}}]}}}}});
+    biz:{form_version:2,nodes:[],items:[{source_id:'meeting-item',mod:'工程',name:pid==='meeting-a'?'甲项目已提交事项':'乙项目已提交事项',due:runtime.scope.week,prog:'原进展需要保留'}],handover:[],
+      followups:[{project_id:pid,source_key:'coord:'+pid+':2d023ae3-95ec-4bab-8d28-df43eb07263c',source_type:'coord',
+        what:pid==='meeting-a'?'甲项目原协调事项':'乙项目原协调事项',owner_name:'示例协同组员',progress:'协调进展已提交',status:'in_progress'}]},
+    rich_text:{v:1,fields:{'biz.items.0.prog':{ops:[{insert:'原进展需要保留',attributes:{bold:true,color:'#d81e06'}}]},
+      'biz.followups.0.progress':{ops:[{insert:'协调进展已提交',attributes:{bold:true}}]}}}}});
   for(const [pid,name] of [['meeting-a','甲项目已确认事项'],['meeting-b','乙项目已确认事项']]){
     await confirmMonthlyPlan(runtime.pool,{id:owner},{project_id:pid,line:'工程',month:runtime.scope.month,
       items:[{source_id:'meeting-plan-item',mod:'工程',name,due:runtime.scope.week}],
@@ -201,6 +235,13 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
   await expect(mode).toBeDisabled();await expect(mode.locator('option')).toHaveCount(1);await expect(mode).toHaveValue('monthly');
   await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   await expect(display.locator('#meeting-screen')).not.toContainText('甲项目已提交事项');
+  const followups=display.locator('[data-projection-section="followups"]');
+  await expect(followups).toContainText('待处理事项清单');
+  await expect(followups).toContainText('甲项目原协调事项');
+  await expect(followups).toContainText('示例工程负责人');
+  await expect(followups).not.toContainText('示例协同组员');
+  await expect(followups.locator('strong')).toHaveText('协调进展已提交');
+  await expect(followups).not.toContainText('乙项目原协调事项');
   await expect(page.locator('.meeting-control')).toContainText('跟随中');
   await expect(display.locator('input,textarea,select:not(#meeting-profession),[contenteditable]')).toHaveCount(0);
   await expect(display.getByRole('combobox',{name:'投影专业'})).toBeEnabled();
@@ -220,6 +261,8 @@ test('two real windows follow selectors, pause safely, preserve rich drafts and 
   await expect(display.locator('#meeting-screen')).toContainText('甲项目已确认事项');
   assert.equal(await display.locator('#meeting-screen').innerHTML(),untouched);
   await page.locator('[data-meeting-toggle]').click();await expect(display.locator('#meeting-screen')).toContainText('乙项目已确认事项');
+  await expect(followups).toContainText('乙项目原协调事项');
+  await expect(followups).not.toContainText('甲项目原协调事项');
   await page.locator('[data-meeting-toggle]').click();await page.locator('#overviewFilter').selectOption('示例住宅甲');
   await expect(draft.locator('.ql-editor')).toContainText('尚未保存的领导要求');
   await expect(draft.locator('.ql-editor strong')).toContainText('尚未保存的领导要求');
@@ -273,6 +316,29 @@ test('commercial and historical selection follow, failed reads retry and delayed
   await expect(page.getByLabel('会议模式')).toHaveValue('weekly');
   await expect(display.locator('#meeting-screen')).toContainText('机房设备安装');
   await expect(display.locator('.meeting-topic')).toContainText('机电工程');
+  const overview=page.locator('table[data-section="plans"]').filter({hasText:'机房设备安装'});
+  const projection=display.locator('[data-projection-section="plans"] .meeting-plan-table').filter({hasText:'机房设备安装'});
+  for(const table of [overview,projection]){
+    await expect(table.locator('td[rowspan="2"]')).toHaveText('机电工程');
+    await expect(table.locator('tbody tr')).toHaveCount(2);
+    await expect(table.locator('tbody tr').nth(0)).toContainText('保留的原进展');
+    await expect(table.locator('tbody tr').nth(1)).toContainText('室外管网联调');
+    await expect(table.locator('tbody tr').nth(1)).toContainText('原进展：等待材料');
+  }
+  mkdirSync(artifacts,{recursive:true});
+  await overview.screenshot({path:path.join(artifacts,'module-groups-overview.png')});
+  await projection.screenshot({path:path.join(artifacts,'module-groups-projection.png')});
+  await page.setViewportSize({width:390,height:844});
+  await display.setViewportSize({width:390,height:844});
+  for(const table of [overview,projection]){
+    await expect(table.locator('td[rowspan="2"]')).toBeVisible();
+    await expect(table.locator('tbody tr').nth(1)).toContainText('室外管网联调');
+    assert.ok(await table.evaluate(node=>node.scrollWidth<=node.clientWidth+1));
+  }
+  await overview.screenshot({path:path.join(artifacts,'module-groups-overview-narrow.png')});
+  await projection.screenshot({path:path.join(artifacts,'module-groups-projection-narrow.png')});
+  await page.setViewportSize({width:1560,height:1050});
+  await display.setViewportSize({width:1560,height:1050});
   const old=new Date(f.runtime.scope.week+'T12:00:00Z');old.setUTCDate(old.getUTCDate()-7);const previous=old.toISOString().slice(0,10);
   await page.locator('#overviewPeriod').selectOption(previous);await expect(display.locator('#meeting-screen')).toContainText('设备安装完成50%');
   await expect(display.locator('#meeting-screen')).not.toContainText('保留的原进展');

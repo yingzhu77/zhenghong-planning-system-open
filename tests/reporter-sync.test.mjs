@@ -8,6 +8,7 @@ import { BUSINESS_MODULES } from '../server/commercial-modules.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const model = fs.readFileSync(path.join(root, 'web/rich-text.js'), 'utf8');
+const windowsSource = fs.readFileSync(path.join(root, 'web/planning-windows.js'), 'utf8');
 const source = fs.readFileSync(path.join(root, 'web/reporter-tasks.js'), 'utf8');
 const completionSource = fs.readFileSync(path.join(root, 'web/completion-review.js'), 'utf8');
 const BIZ_LINES = BUSINESS_MODULES;
@@ -65,6 +66,22 @@ test('sources respect project, owner, selected period and existing name/module m
   assert.equal(JSON.stringify(h.S.leaderNotes), notesBefore, 'retired leader records are preserved without becoming new pending sources');
   assert.equal(h.S.followupRows.some(row => row.source_key.startsWith('leader:')), false);
   assert.match(h.S.followupRows.find(row => row.what === '向本人协调').source_key, /p1:source:coord:coord-id$/);
+});
+
+test('explicit week labels determine whether late-submitted coordination sources belong to the selected period', () => {
+  const h=harness();
+  vm.runInContext(windowsSource,h.sandbox);
+  const assignment=[{id:'work',who_id:'owner',what:'实名协调事项'}];
+  h.S.reports=[
+    report('past',{period:'2026-10-12',submitted_at:'2026-10-20T08:00:00Z',coord_items:assignment}),
+    report('selected',{period:'2026-10-19',submitted_at:'2026-10-20T08:00:00Z',coord_items:assignment}),
+    report('future',{period:'2026-10-26',submitted_at:'2026-10-20T08:00:00Z',coord_items:assignment})
+  ];
+  h.S.pmPeriod='第43周（10.19–10.25）';
+  h.api.prepare();
+  assert.deepEqual(Array.from(h.S.followupRows,row=>row.source_key),[
+    'coord:p1:past:coord:work','coord:p1:selected:coord:work'
+  ]);
 });
 
 test('independent coordination reaches its exact owner without any report or selected-week dependency and preserves existing feedback',()=>{

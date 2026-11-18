@@ -34,7 +34,7 @@
     }else if(packet.type==='scroll' && loaded && ['next','previous','top'].includes(packet.direction)){
       var behavior=global.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth';
       if(packet.direction==='top')screen.scrollTo({top:0,behavior:behavior});else screen.scrollBy({top:(packet.direction==='next'?1:-1)*screen.clientHeight*.8,behavior:behavior});
-    }else if(packet.type==='following' && parentReady)status.textContent=packet.following?'跟随管理员选择':'已暂停跟随 · 保持当前内容';
+    }else if(packet.type==='following' && parentReady)status.textContent=packet.following?'':'已暂停跟随 · 保持当前内容';
   });
   async function check(){
     var owns=false;try{owns=parent && !parent.closed && parent.location.origin===location.origin && parent.MeetingController && parent.MeetingController.owns(id);}catch(error){}

@@ -9,7 +9,7 @@ const app = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8')
   .replace(/\(async function boot\(\) \{[\s\S]*?\}\)\(\);/, '');
 const fixtureSource = fs.readFileSync(new URL('./frontend-render.mjs', import.meta.url), 'utf8');
 const sample = vm.runInNewContext(fixtureSource.slice(fixtureSource.indexOf('function pad2'), fixtureSource.indexOf('\nfunction run(')) + ';DB;', {Date});
-const reporterModules = ['planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'reporter-tasks.js', 'completion-review.js', 'coordination-workbench.js', 'monthly-plans.js', 'monthly-summaries.js', 'report-attachments.js', 'reporter-archive.js', 'admin-archive.js']
+const reporterModules = ['planning-windows.js', 'report-scopes.js', 'baseline-core.js', 'reporter-tasks.js', 'completion-review.js', 'monthly-plans.js', 'monthly-summaries.js', 'report-attachments.js', 'reporter-archive.js', 'admin-archive.js']
   .map(name => [name, fs.readFileSync(new URL('../web/' + name, import.meta.url), 'utf8')]);
 const loginBoot = fs.readFileSync(new URL('../web/login-boot.js', import.meta.url), 'utf8');
 
@@ -59,7 +59,7 @@ function fixture(role = 'ops') {
   const tables = structuredClone(sample), calls = [], root = {innerHTML: '', querySelectorAll: () => []}, downloads = [], dom = new Map();
   const assets = Object.fromEntries(['app.js', 'reporter-tasks.js', 'reporter-tasks.css', 'reporter-workbench.css', 'completion-review.js', 'completion-review.css',
     'report-attachments.js', 'report-attachments.css', 'reporter-archive.js', 'reporter-archive.css', 'admin-archive.js', 'admin-archive.css', 'admin-overview.css',
-    'rich-text.js', 'rich-editor.js','planning-windows.js','report-scopes.js','baseline-core.js','coordination-workbench.js', 'monthly-plans.js', 'monthly-summaries.js', 'vendor/quill/quill.js', 'vendor/quill/quill.core.css'].map(key => [key, '/assets/' + key]));
+    'rich-text.js', 'rich-editor.js','planning-windows.js','report-scopes.js','baseline-core.js','monthly-plans.js', 'monthly-summaries.js', 'vendor/quill/quill.js', 'vendor/quill/quill.core.css'].map(key => [key, '/assets/' + key]));
   dom.set('planning-assets', {textContent: JSON.stringify(assets)}); dom.set('toast', {style: {}});
   const profile = {user_id: 'current', name: '当前演示用户', role, status: 'approved', project_id: 'p1', biz_line: '土建工程（东地块）'};
   tables.profiles = [profile, {user_id: 'other', name: '另一演示成员', role: 'pm', status: 'approved'}];
@@ -86,12 +86,13 @@ function fixture(role = 'ops') {
     localStorage: {getItem: () => null, setItem() {}, removeItem() {}}, Date, console, setTimeout: () => 1, clearTimeout() {},
     fetch: async (url, init) => {
       if(url==='/api/commercial-module-grants'){assert.equal(init.method,'GET');assert.equal(init.body,undefined);const operation={table:'@businessModuleGrants',operation:'select',query:{}};calls.push(operation);const result=await handler(operation);return {ok:!result?.error,json:async()=>result};}
+      if(url==='/api/project-reporting-grants'){assert.equal(init.method,'GET');assert.equal(init.body,undefined);const operation={table:'@projectReportingGrants',operation:'select',query:{}};calls.push(operation);const result=await handler(operation);return {ok:!result?.error,json:async()=>result};}
       if(url.startsWith('/api/monthly-summaries?month=')){
         assert.equal(init.method,'GET');assert.equal(init.body,undefined);
         const operation={table:'@monthlySummaries',operation:'select',query:{month:new URL(url,'http://anonymous.test').searchParams.get('month')}};calls.push(operation);const result=await handler(operation);return {ok:!result?.error,json:async()=>result};
       }
-      const sources = {'/api/report-scopes/list':'@reportScopes','/api/monthly-plans/list':'@monthlyPlans','/api/reporter-tasks/list': '@reporterTasks', '/api/project-people/list': '@projectPeople', '/api/completions/list': '@completions','/api/coordination-tasks/list':'@coordinationTasks','/api/coordination-tasks/create':'@coordinationCreate',
-        '/api/report-attachments/list': '@reportAttachments', '/api/project-plan-statistics':'@nodeStatistics'};
+      const sources = {'/api/report-scopes/list':'@reportScopes','/api/monthly-plans/list':'@monthlyPlans','/api/reporter-tasks/list': '@reporterTasks', '/api/project-people/list': '@projectPeople', '/api/completions/list': '@completions','/api/coordination-tasks/list':'@coordinationTasks',
+        '/api/report-attachments/list': '@reportAttachments', '/api/project-plan-statistics':'@nodeStatistics', '/api/weekly-collaboration/next-week':'@nextCollaboration'};
       assert.ok(sources[url], 'unexpected read endpoint: ' + url);
       const operation = {table: sources[url], operation: 'select', query: JSON.parse(init.body)};
       calls.push(operation);
@@ -136,7 +137,9 @@ test('every authorized page and detail tab renders the same content as a complet
 test('monthly completion summaries use month-scoped GET snapshots and a failed refresh never renders prior month content',async()=>{
   const f=fixture();f.S.view='presCom';f.S.overviewUI.period='2026-10-26';
   f.setHandler(operation=>operation.table==='@monthlySummaries'?{data:[{id:'summary-'+operation.query.month,project_id:'p3',month:operation.query.month,line:'机电工程',owner_id:'anonymous-owner',owner_name:'匿名提报人',items:[{source_id:'source',name:operation.query.month+'月度独立原文',progress:'已完成现场核查'}]}]}:{data:f.tables[operation.table] || []});
-  assert.equal(await f.loadPageData(),true);f.renderShell();assert.match(f.root.innerHTML,/2026-10月度独立原文/);assert.match(f.root.innerHTML,/不计作周报提交/);
+  assert.equal(await f.loadPageData(),true);f.renderShell();assert.match(f.root.innerHTML,/2026-10月度独立原文/);
+  assert.match(f.root.innerHTML,/class="card monthly-summary-section" data-summary-month="2026-10"/);
+  assert.match(f.root.innerHTML,/0 份所选周期填报/);
   const first=f.calls.filter(call=>call.table==='@monthlySummaries').length;await f.loadData(['monthlySummaries']);assert.equal(f.calls.filter(call=>call.table==='@monthlySummaries').length,first);
   f.S.overviewUI.period='2026-11-02';assert.equal(await f.loadData(['monthlySummaries']),true);f.renderShell();assert.match(f.root.innerHTML,/2026-11月度独立原文/);assert.doesNotMatch(f.root.innerHTML,/2026-10月度独立原文/);
   f.setHandler(operation=>operation.table==='@monthlySummaries'?{error:{message:'匿名网络中断'}}:{data:f.tables[operation.table] || []});assert.equal(await f.loadData(['monthlySummaries'],true),false);f.renderShell();assert.match(f.root.innerHTML,/月度汇总读取失败/);assert.doesNotMatch(f.root.innerHTML,/2026-11月度独立原文/);
@@ -148,6 +151,23 @@ test('commercial extra grants load as read-only session data and an authorizatio
   assert.equal(f.S.profile.biz_line,'建筑结构设计');assert.match(f.root.innerHTML,/我的商业专业/);assert.match(f.root.innerHTML,/<option value="建筑结构设计"/);assert.match(f.root.innerHTML,/<option value="设计部"/);await f.App.pmLineSet('设计部');assert.equal(f.S.pmLine,'设计部');
   f.setHandler(operation=>operation.table==='@businessModuleGrants'?{error:{message:'匿名授权接口中断'}}:{data:f.tables[operation.table] || []});assert.equal(await f.loadData(['businessModuleGrants'],true),false);f.renderShell();assert.equal(f.S.pmLine,'设计部');assert.match(f.root.innerHTML,/附加专业授权读取失败，原草稿保留/);assert.match(f.root.innerHTML,/App.submitReport\(\)" disabled/);assert.deepEqual(Array.from(f.window.MonthlyPlans.aiContext()),[]);
   f.resetPageData();assert.deepEqual(Array.from(f.S.businessModuleGrants),[]);
+});
+
+test('a failed custom grant read retains the selected project profession and blocks submission',async()=>{
+  const f=fixture('pm'),pid='p3',line='匿名专业';
+  f.tables.projects.find(project=>project.id===pid).reporting_professions=[line];
+  f.tables['@projectReportingGrants']=[{user_id:'current',project_id:pid,line}];
+  f.S.view='form';f.S.pmProject=pid;
+  assert.equal(await f.loadPageData(),true);
+  await f.preparePM();f.renderShell();
+  await f.App.pmLineSet(line);
+  assert.equal(f.S.pmLine,line);
+  f.setHandler(operation=>operation.table==='@projectReportingGrants'?{error:{message:'匿名项目授权读取中断'}}:{data:f.tables[operation.table] || []});
+  assert.equal(await f.loadData(['projectReportingGrants'],true),false);
+  await f.preparePM();f.renderShell();
+  assert.equal(f.S.pmLine,line);
+  assert.match(f.root.innerHTML,/项目专业授权读取失败，原草稿保留/);
+  assert.match(f.root.innerHTML,/App.submitReport\(\)" disabled/);
 });
 
 test('a monthly summary arriving after logout cannot populate another account snapshot',async()=>{
@@ -170,34 +190,17 @@ test('independent coordination loads before completion metadata and reaches PM w
   for (const pid of ['p1','p3']) {
     const f=fixture('pm'), id='10000000-0000-4000-8000-000000000201',key='coord:'+pid+':'+id;
     const row={id,project_id:pid,author_id:'other',author_name:'匿名协调发起人',owner_id:'current',owner_name:'当前演示用户',what:'无需周报的独立协调',due:'2026-11-01',created_at:'2026-10-21T08:00:00Z',source_key:key};
-    Object.assign(f.S,{view:'center',pmProject:pid,pmPeriod:'第1周'});
+    Object.assign(f.S,{view:'form',pmProject:pid,pmPeriod:''});
     f.setHandler(operation=>({data:operation.table==='reports'?[]:operation.table==='@coordinationTasks'?[row]:f.tables[operation.table] || [],error:null}));
     await f.loadPageData();await f.preparePM();f.renderShell();
     assert.ok(f.calls.findIndex(call=>call.table==='@coordinationTasks')<f.calls.findIndex(call=>call.table==='@completions'));
     assert.ok(f.completionSourceKeys().includes(key));
     assert.equal(f.window.ReporterTasks.sourceItems().filter(item=>item.source_key===key).length,1);
     assert.ok(f.S.followupRows.some(item=>item.source_key===key && item.source_type==='coord'));
-    assert.match(f.root.innerHTML,/无需周报的独立协调/);assert.match(f.root.innerHTML,/协调申请/);
+    assert.match(f.root.innerHTML,/无需周报的独立协调/);assert.doesNotMatch(f.root.innerHTML,/即时协调/);
     assert.equal(f.S.reports.length,0);assert.equal(f.calls.some(call=>call.operation!=='select'),false);
-    const reads=f.calls.length;f.configureReporter();f.renderShell();assert.equal(f.calls.length,reads,'composer reuses loaded people and task snapshots');
+    const reads=f.calls.length;f.configureReporter();f.renderShell();assert.equal(f.calls.length,reads,'rendering reuses loaded people and task snapshots');
   }
-});
-
-test('coordination creation integrates its source and clears rendered fields without creating or modifying a report',async()=>{
-  const f=fixture('pm');f.S.view='coordination';let created=null;
-  f.setHandler(operation=>{
-    if(operation.table==='@coordinationCreate')return {data:created={...operation.query,author_id:'current',author_name:'当前演示用户',owner_name:'当前演示用户',created_at:'2026-10-21T08:00:00Z',source_key:'coord:p1:'+operation.query.id},error:null};
-    return {data:operation.table==='reports'?[]:operation.table==='@coordinationTasks'?created?[created]:[]:f.tables[operation.table] || [],error:null};
-  });
-  await f.loadPageData();await f.preparePM();f.renderShell();
-  f.dom.set('coordination_owner_id_p1',{value:'current'});f.dom.set('coordination_what_p1',{value:'工作台即时发起'});f.dom.set('coordination_due_p1',{value:'2026-11-02'});
-  const reportDraft=JSON.stringify(f.S.coordRows);
-  await f.window.CoordinationWorkbench.create('p1');
-  assert.ok(created);assert.equal(f.S.coordinationTasks.length,1);assert.equal(f.S.reports.length,0);
-  assert.equal(JSON.stringify(f.S.coordRows),reportDraft);assert.ok(f.window.ReporterTasks.sourceItems().some(row=>row.source_key===created.source_key));
-  assert.match(f.root.innerHTML,/<textarea id="coordination_what_p1"[^>]*><\/textarea>/,'the old DOM cannot repopulate the newly cleared composer');
-  assert.equal(f.calls.filter(call=>call.table==='@coordinationCreate').length,1);
-  assert.equal(f.calls.some(call=>['reports','leader_notes'].includes(call.table) && call.operation!=='select'),false);
 });
 
 test('ops coordination page displays independent author, owner and deadline before any completion request, with no creator controls',async()=>{
@@ -238,7 +241,7 @@ test('logout clears table snapshots and late replies cannot restore the previous
 test('manual refresh fetches the visible page and invalidates other visited pages for later use', async () => {
   const f = fixture(); await f.loadData(Object.keys(f.dataSources)); f.calls.length = 0;
   f.S.view = 'members'; await f.loadPageData(true);
-  assert.deepEqual(f.calls.map(x => x.table).sort(), ['@businessModuleGrants', '@reportScopes', 'profiles', 'project_members', 'projects']);
+  assert.deepEqual(f.calls.map(x => x.table).sort(), ['@businessModuleGrants', '@projectReportingGrants', '@reportScopes', 'profiles', 'project_members', 'projects']);
   f.calls.length = 0; f.S.view = 'master'; await f.loadPageData();
   assert.deepEqual(f.calls.map(x => x.table).sort(), ['milestones', 'project_drawings', 'project_master', 'project_phases']);
 });
@@ -265,9 +268,9 @@ test('review and attachment reads are limited to their actual page consumers', a
   assert.ok(form.calls.some(call => call.table === '@reporterTasks'));
   assert.ok(form.calls.some(call => call.table === '@completions'));
   assert.ok(form.calls.some(call => call.table === '@reportAttachments'));
-  for (const view of ['mline', 'center']) {
+  for (const view of ['mline', 'master']) {
     const f = fixture('pm'); f.S.view = view; await f.loadPageData();
-    assert.ok(f.calls.some(call => call.table === '@completions'), view);
+    assert.equal(f.calls.some(call => call.table === '@completions'), view==='mline', view);
     assert.equal(f.calls.some(call => call.table === '@reportAttachments'), false, view);
   }
   for (const role of ['ops', 'president', 'pzo']) {
@@ -646,7 +649,7 @@ test('native changes with a delayed new scope cannot autosave old DOM after 700m
           const projects = [{id: 'p1', name: '匿名项目甲', project_type: residential ? 'res' : 'com'}, {id: 'p2', name: '匿名项目乙', project_type: 'res'}];
           const initialLine = residential ? '综合' : '土建工程（东地块）';
           const make = (id, pid, line, period, name) => ({id, project_id: pid, line, period, author_id: 'anonymous', author_name: '匿名填报人',
-            updated_at: '2020-01-01T00:00:00Z', node_items: [], coord_items: [], biz: {form_version: 2, nodes: [], items: [{name, prog: ''}], attachments: [], followups: []}});
+            submitted_at: '2020-01-01T00:00:00Z', updated_at: '2020-01-01T00:00:00Z', node_items: [], coord_items: [], biz: {form_version: 2, nodes: [], items: [{name, prog: ''}], attachments: [], followups: []}});
           window.fixtureTables.projects = projects;
           window.fixtureTables.project_members = projects.map(p => ({project_id: p.id, user_id: 'anonymous'}));
           window.fixtureTables.reports = [make(1, 'p1', initialLine, period, '旧范围计划'), make(2, 'p1', '机电工程', period, '新范围计划'),
@@ -661,7 +664,10 @@ test('native changes with a delayed new scope cannot autosave old DOM after 700m
         if (entry === 'module') await page.locator('#planBizLine').selectOption('机电工程');
         else if (entry === 'period') await page.locator('#pmPeriod').selectOption('第42周');
         else if (entry === 'project') await page.locator('#planProject').selectOption('p2');
-        else await page.locator('.planning-mainnav').getByRole('button', {name: '历史记录', exact: true}).click();
+        else {
+          await page.locator('.planning-mainnav .planning-primary-trigger').filter({hasText:'本期填报'}).click();
+          await page.locator('.planning-dropdown[aria-label="本期填报子菜单"]').getByRole('button', {name: '本期专业汇总', exact: true}).click();
+        }
         await page.waitForFunction(() => window.waitingForAttachmentRead === true);
         await browserExpect(page.locator('[role="status"]')).toContainText('正在加载填报页面');
         await browserExpect(page.locator('#bi_nm_0')).toHaveCount(0);
@@ -675,7 +681,8 @@ test('native changes with a delayed new scope cannot autosave old DOM after 700m
         await page.evaluate(() => window.releaseAttachmentRead());
         await page.waitForFunction(() => !window.scopeTest.S.pmScopeTransition);
         if (entry === 'history') {
-          await page.locator('.planning-mainnav').getByRole('button', {name: '本期填报', exact: true}).click();
+          await page.locator('.planning-mainnav .planning-primary-trigger').filter({hasText:'本期填报'}).click();
+          await page.locator('.planning-dropdown[aria-label="本期填报子菜单"]').getByRole('button', {name: '本期填报', exact: true}).click();
           await browserExpect(page.locator('#bi_nm_0')).toHaveValue('旧范围尚未提交的输入');
         } else {
           await browserExpect(page.locator('#bi_nm_0')).toHaveValue('新范围计划');

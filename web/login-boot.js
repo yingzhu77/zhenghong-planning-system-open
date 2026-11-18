@@ -1,8 +1,8 @@
 /* Hydrate the existing login shell without discarding early user input. */
 (function (global) {
   'use strict';
-  var assets = JSON.parse(document.getElementById('planning-assets').textContent);
-  var ready = false, pending = null, editorPromise = null, adminPromise = null, adminPlansPromise = null, overviewPromise = null, statisticsPromise = null, planStatisticsPromise = null, managementPromise = null, coordinationPromise = null, monthlyPromise = null, libraryPromise = null, passwordPromise = null, planningAIPromise = null, reporterPromises = {}, workflowPromises = {};
+  var assets = JSON.parse(document.getElementById('planning-assets').textContent), monthlySummariesPromise = null;
+  var ready = false, pending = null, editorPromise = null, adminPromise = null, adminPlansPromise = null, overviewPromise = null, statisticsPromise = null, planStatisticsPromise = null, managementPromise = null, monthlyPromise = null, libraryPromise = null, passwordPromise = null, planningAIPromise = null, reporterPromises = {}, workflowPromises = {};
   var shell = document.querySelector('[data-initial-login]');
   function act(action, value) {
     if (!ready) { pending = [action, value]; return; }
@@ -39,8 +39,14 @@
   var cloud = global.WorkBuddyCloud.createWorkBuddyCloud();
   global.PlanningBoot = {
     assets: assets,
+    ensureMonthlySummaries: function () {
+      if (!monthlySummariesPromise) monthlySummariesPromise = script(assets['monthly-summaries.js']).catch(function (error) {
+        monthlySummariesPromise = null; throw error;
+      });
+      return monthlySummariesPromise;
+    },
     ensureMeetingController: function () {
-      if (!global.PlanningBoot.meetingPromise) global.PlanningBoot.meetingPromise = Promise.all([style(assets['meeting-mode.css']), script(assets['monthly-summaries.js']), script(assets['meeting-view.js'])])
+      if (!global.PlanningBoot.meetingPromise) global.PlanningBoot.meetingPromise = Promise.all([style(assets['meeting-mode.css']), global.PlanningBoot.ensureMonthlySummaries(), script(assets['meeting-view.js'])])
         .then(function(){return script(assets['meeting-controller.js']);})
         .catch(function(error){global.PlanningBoot.meetingPromise=null;throw error;});
       return global.PlanningBoot.meetingPromise;
@@ -91,7 +97,7 @@
       return adminPromise;
     },
     ensureOverview: function(){
-      if(!overviewPromise)overviewPromise=Promise.all([script(assets['overview-meetings.js']),script(assets['admin-plan-overview.js']),script(assets['monthly-summaries.js']),style(assets['admin-plan-overview.css'])]).catch(function(error){overviewPromise=null;throw error;});
+      if(!overviewPromise)overviewPromise=Promise.all([script(assets['overview-meetings.js']),script(assets['admin-plan-overview.js']),global.PlanningBoot.ensureMonthlySummaries(),style(assets['admin-plan-overview.css'])]).catch(function(error){overviewPromise=null;throw error;});
       return overviewPromise;
     },
     ensureStatistics:function(){
@@ -105,10 +111,6 @@
     ensureManagementReader:function(){
       if(!managementPromise)managementPromise=Promise.all([style(assets['management-reader.css']),script(assets['management-reader.js'])]).catch(function(error){managementPromise=null;throw error;});
       return managementPromise;
-    },
-    ensureCoordination:function(){
-      if(!coordinationPromise)coordinationPromise=script(assets['coordination-workbench.js']).catch(function(error){coordinationPromise=null;throw error;});
-      return coordinationPromise;
     },
     ensureMonthlyPlans:function(){
       if(!monthlyPromise)monthlyPromise=script(assets['monthly-plans.js']).catch(function(error){monthlyPromise=null;throw error;});
@@ -132,6 +134,16 @@
   global.PlanningBoot.ensureProjectLibrary=function(){
     if(!libraryPromise)libraryPromise=Promise.all([style(assets['project-library.css']),script(assets['project-library.js'])]).catch(function(error){libraryPromise=null;throw error;});
     return libraryPromise;
+  };
+  var collaborationPromise, collaborationEditorPromise;
+  global.PlanningBoot.ensureWeeklyCollaboration=function(edit){
+    if(!collaborationPromise)collaborationPromise=Promise.all([style(assets['weekly-collaboration.css']),script(assets['weekly-collaboration.js'])])
+      .catch(function(error){collaborationPromise=null;throw error;});
+    if(!edit)return collaborationPromise;
+    if(!collaborationEditorPromise)collaborationEditorPromise=global.PlanningBoot.ensureEditor()
+      .then(function(){return script(assets['vendor/weekly-collaboration.js']);})
+      .catch(function(error){collaborationEditorPromise=null;throw error;});
+    return Promise.all([collaborationPromise,collaborationEditorPromise]);
   };
   script(assets['planning-windows.js']).then(function(){return Promise.all([script(assets['report-scopes.js']),script(assets['baseline-core.js'])]);}).then(function(){return script(assets['app.js']);}).catch(function () {
     var message = document.getElementById('msg');

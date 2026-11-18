@@ -5,13 +5,14 @@ import { validateReportAttachmentReferences } from './report-attachments.mjs';
 import { BUSINESS_MODULES, businessModulesForProject, resolveWritableBusinessLine, withBusinessModuleGrants } from './commercial-modules.mjs';
 import { resolveCompletionSource, reportCoordinationSourceItem } from './completion-sources.mjs';
 import { resolveReportScope } from './report-scopes.mjs';
-import { resolveWritableResidentialLine } from './report-lines.mjs';
+import { hasProjectReportingGrant, resolveWritableResidentialLine } from './report-lines.mjs';
 import { preserveSchemeMaster, sanitizeSchemeRows } from './scheme-protection.mjs';
+import { annotateReportProgress, completeFromReport } from './reported-completions.mjs';
 
 const fields = (text) => text.split(/\s+/).filter(Boolean);
 export const TABLES = Object.freeze({
-  projects: fields('id name sort_order active created_at camera_url biz_meta project_type display_group'),
-  profiles: fields('user_id name role project_id status created_at biz_line discipline management_viewer'),
+  projects: fields('id name sort_order active created_at camera_url biz_meta project_type display_group reporting_professions'),
+  profiles: fields('user_id name role project_id status created_at biz_line discipline management_viewer viewer_scope viewer_access'),
   project_members: fields('user_id project_id role_in_project created_at'),
   org: fields('id name dept title org_level sort_order'),
   plan_versions: fields('id project_id version_name effective_date note created_at'),
@@ -207,6 +208,24 @@ export function reportWeekStart(label, reference = new Date()) {
   return candidates.length ? iso(candidates[0]) : '';
 }
 
+export async function lockWeeklyCollaborationWrite(client, projectId, line, week) {
+  await client.query('SELECT app_private.lock_weekly_collaboration_write($1,$2,$3::date)', [projectId,line,week]);
+}
+
+export async function reportDelay(client, projects, nodes = []) {
+  const baseline = (await client.query('SELECT plan_date,forecast_date FROM public.milestones WHERE project_id=ANY($1::text[]) AND NOT done', [projects])).rows;
+  const deltas = [...nodes.map(node => ({plan_date:node.plan,forecast_date:node.forecast})), ...baseline]
+    .filter(node => node.plan_date && node.forecast_date).map(node => {
+      const date = value => value instanceof Date ? value.getTime() : Date.parse(String(value).slice(0, 10) + 'T00:00:00Z');
+      return Math.round((date(node.forecast_date) - date(node.plan_date)) / 86400000);
+    }).filter(Number.isFinite);
+  return deltas.length ? Math.max(...deltas) : 0;
+}
+
+export function reportStatus(delay) {
+  return delay >= 15 ? '异常' : delay >= 5 ? '关注' : '正常';
+}
+
 async function syncReportMeetingProgress(client, user, row, existing) {
   if (!row.biz || !Object.hasOwn(row.biz, 'followups')) return;
   const report = { ...existing, ...row }, now = new Date();
@@ -367,6 +386,9 @@ export async function prepareMutation(client, user, request) {
   for (const source of inputRows) {
     if (!source || typeof source !== 'object' || Array.isArray(source)) throw new HttpError(400, '保存内容不正确');
     for (const field of Object.keys(source)) assertColumn(table, field);
+    if (table === 'projects' && Object.hasOwn(source, 'reporting_professions')) {
+      throw new HttpError(403, '请通过汇报专业设置维护项目专业', 'reporting_professions_forbidden');
+    }
     let row = { ...source };
     let richExisting, reportExisting;
     // Never trust identity, auditing, creation timestamps, or history from the browser.
@@ -384,8 +406,10 @@ export async function prepareMutation(client, user, request) {
         continue;
       }
       if (!ops || !['update'].includes(operation)) throw new HttpError(403, '成员管理仅限运营管理员');
-      if (Object.keys(row).some((c) => !['name', 'role', 'status', 'project_id', 'biz_line', 'discipline', 'management_viewer'].includes(c))) throw new HttpError(400, '不支持的成员字段');
+      if (Object.keys(row).some((c) => !['name', 'role', 'status', 'project_id', 'biz_line', 'discipline', 'management_viewer', 'viewer_scope', 'viewer_access'].includes(c))) throw new HttpError(400, '不支持的成员字段');
       if (row.management_viewer !== undefined && typeof row.management_viewer !== 'boolean') throw new HttpError(400, '管理查看权限格式不正确');
+      if (row.viewer_access !== undefined && !['full','materials'].includes(row.viewer_access)) throw new HttpError(400, '请选择完整只读或仅项目资料');
+      if (row.viewer_scope !== undefined && !['all','projects'].includes(row.viewer_scope)) throw new HttpError(400, '请选择全部项目或已分配项目的只读范围');
       if (row.role !== undefined && !roles.has(row.role)) throw new HttpError(400, '角色不正确');
       if (row.status !== undefined && !['pending', 'approved', 'rejected'].includes(row.status)) throw new HttpError(400, '审核状态不正确');
       if (row.biz_line !== undefined && ![null, '', '*', ...BUSINESS_MODULES].includes(row.biz_line)) throw new HttpError(400, '商业模块不正确');
@@ -416,10 +440,12 @@ export async function prepareMutation(client, user, request) {
       }
       const pid = existing?.project_id || row.project_id;
       if (!pid) throw new HttpError(400, '缺少项目');
-      const project = (await client.query('SELECT id,project_type FROM public.projects WHERE id=$1', [pid])).rows[0];
+      const project = (await client.query('SELECT id,project_type,to_jsonb(j)->\'reporting_professions\' AS reporting_professions FROM public.projects j WHERE id=$1', [pid])).rows[0];
       if (!project) throw new HttpError(403, '未分配此项目');
       const businessProfile=project.project_type==='com'?(await withBusinessModuleGrants(client,[profile],pid))[0]:profile;
-      const line = project.project_type === 'com' ? resolveWritableBusinessLine(businessProfile, existing?.line ?? row.line, pid) : resolveWritableResidentialLine(profile, existing?.line ?? row.line);
+      const requestedLine = existing?.line ?? row.line;
+      const custom = project.reporting_professions?.includes(requestedLine) && await hasProjectReportingGrant(client,user.id,pid,requestedLine);
+      const line = custom ? requestedLine : project.project_type === 'com' ? resolveWritableBusinessLine(businessProfile,requestedLine,pid) : resolveWritableResidentialLine(profile,requestedLine);
       if ((row.line && row.line !== line) || (existing && existing.line !== line)) throw new HttpError(403, '只能填报本人模块');
       const period = existing?.period || row.period;
       if (typeof period !== 'string' || !period.trim() || period.length > 100) throw new HttpError(400, '填报周期不正确');
@@ -427,6 +453,15 @@ export async function prepareMutation(client, user, request) {
         existing = (await client.query('SELECT * FROM public.reports WHERE project_id=$1 AND period=$2 AND line=$3 AND author_id=$4', [pid,period,line,user.id])).rows[0];
         if (existing && existing.author_id !== user.id) throw new HttpError(403, '只能修改本人提交的周报');
         if (existing) richExisting = existing;
+      }
+      if (line !== '综合') {
+        // Use the 039 lock identity before locking plan references or attachments.
+        // The existing week parser also supports preparing writes in older migration fixtures.
+        await client.query(String.raw`SELECT pg_advisory_xact_lock(hashtextextended('weekly-collaboration:'||
+          jsonb_build_array($1::text,$2::text,to_char(COALESCE(
+            app_private.report_week_start(regexp_replace($3::text,'第[[:space:]]*0*([0-9]{1,2})[[:space:]]*周','第\1周'),COALESCE($4::timestamptz,now())),
+            date_trunc('week',COALESCE($4::timestamptz,now()) AT TIME ZONE 'Asia/Shanghai')::date),'YYYY-MM-DD'))::text,0))`,
+          [pid,line,period,existing?.submitted_at ?? null]);
       }
       row.line = line;
       const scope = await resolveReportScope(client, user, row, existing, period, pid);
@@ -480,15 +515,8 @@ export async function prepareMutation(client, user, request) {
       await validateReportAttachmentReferences(client,user.id,profile,row,existing);
       if (operation !== 'update') row.author_id = user.id;
       row.updated_at = new Date().toISOString();
-      const nodes = row.node_items ?? existing?.node_items ?? [];
-      const baseline = (await client.query('SELECT plan_date,forecast_date FROM public.milestones WHERE project_id=ANY($1::text[]) AND NOT done', [row.scope_project_ids || existing?.scope_project_ids || [pid]])).rows;
-      const deltas = [...nodes.map((n) => ({ plan_date: n.plan, forecast_date: n.forecast })), ...baseline]
-        .filter((n) => n.plan_date && n.forecast_date).map((n) => {
-          const date = (x) => x instanceof Date ? x.getTime() : Date.parse(String(x).slice(0, 10) + 'T00:00:00Z');
-          return Math.round((date(n.forecast_date) - date(n.plan_date)) / 86400000);
-        }).filter(Number.isFinite);
-      const delay = deltas.length ? Math.max(...deltas) : 0;
-      row.status = delay >= 15 ? '异常' : delay >= 5 ? '关注' : '正常';
+      const delay = await reportDelay(client,row.scope_project_ids || existing?.scope_project_ids || [pid],row.node_items ?? existing?.node_items ?? []);
+      row.status = reportStatus(delay);
       row.self_speed = project.project_type === 'com' ? null : delay >= 5 ? '滞后' : delay <= -5 ? '领跑' : '达标';
       row.self_effect = null;
     } else if (['leader_reviews', 'leader_notes'].includes(table)) {
@@ -523,7 +551,7 @@ export async function prepareMutation(client, user, request) {
       row.updated_at = new Date().toISOString();
     } else if (table === 'project_members') {
       if (!ops) throw new HttpError(403, '项目分配仅限运营管理员');
-      if (row.role_in_project && row.role_in_project !== 'pm') throw new HttpError(400, '项目成员角色不正确');
+      if (row.role_in_project && !['pm','viewer'].includes(row.role_in_project)) throw new HttpError(400, '项目成员角色不正确');
     } else {
       if (!admin) throw new HttpError(403, '此操作仅限运营管理员或总裁');
       if (table === 'projects' && row.display_group != null && (typeof row.display_group !== 'string' || !row.display_group.trim() || row.display_group.length > 100 || row.display_group !== row.display_group.trim())) throw new HttpError(400, '项目展示分组不正确');
@@ -577,10 +605,14 @@ export async function executeDatabase(pool, user, request, options = {}) {
     const prepared = operation === 'select' ? request : await prepareMutation(client, user, { ...request, operation });
     const input = await preserveSchemeMaster(client, prepared, buildQuery);
     const schemeTable = ['project_master', 'project_drawings'].includes(input.table);
-    const result = await client.query(buildQuery(schemeTable ? { ...input, columns: '*' } : input));
+    const submitReport = input.table === 'reports' && ['insert','upsert','update'].includes(operation)
+      && [].concat(input.values || []).some(row => Object.hasOwn(row,'biz'));
+    const result = await client.query(buildQuery(schemeTable || submitReport ? { ...input, columns: '*' } : input));
     if (['update', 'delete'].includes(operation) && !result.rows.length) throw new HttpError(403, '记录不存在或无权修改');
-    const rows = await sanitizeSchemeRows(client, input.table, result.rows, options);
-    if (!schemeTable || request.columns == null || request.columns === '*') return rows;
+    if (submitReport) for (const row of result.rows) await completeFromReport(client,user,row);
+    const rows = input.table === 'reports' ? result.rows.map(annotateReportProgress)
+      : await sanitizeSchemeRows(client, input.table, result.rows, options);
+    if ((!schemeTable && !submitReport) || request.columns == null || request.columns === '*') return rows;
     const columns = Array.isArray(request.columns) ? request.columns : request.columns.split(',').map(column => column.trim());
     return rows.map(row => Object.fromEntries(columns.map(column => [column, row[column]])));
   });

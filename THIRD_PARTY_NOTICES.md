@@ -5,6 +5,7 @@
 | 随源码分发的内容 | 许可入口 |
 |---|---|
 | Quill 编辑器及样式 | [Quill 许可证](web/vendor/quill/LICENSE.txt) |
+| Yjs 与 Quill 协同编辑资源 | 构建产物 `web/vendor/weekly-collaboration.js` 中附带的许可证 |
 | Noto Sans SC 字体 | [SIL Open Font License](server/fonts/OFL.txt) |
 
 页面保留原系统标识与背景，以便接续开发时核对实际布局。MIT 许可证不授予“正弘”等名称、标识的商标权，也不表示权利人认可基于本项目的其他产品。另行部署自己的产品时，请替换品牌标识与展示素材。

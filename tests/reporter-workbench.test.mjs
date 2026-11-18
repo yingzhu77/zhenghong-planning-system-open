@@ -13,6 +13,7 @@ function harness(options = {}) {
   let failId;
   const sandbox = {
     console, setTimeout: () => 0, clearTimeout() {}, addEventListener() {}, removeEventListener() {},
+    localStorage: {getItem: () => null, setItem() {}, removeItem() {}},
     document: {
       getElementById: id => elements[id] || null,
       querySelectorAll: () => [], querySelector: () => null,
@@ -33,13 +34,13 @@ function harness(options = {}) {
       }
     } }) },
     ReporterTasks: { configure() {}, binding() { return null; }, capture() {}, prepare() {},
-      sourceItems: () => [], snapshotHtml: () => '', pendingHtml: pid => '<section class="card reporter-pending">统一待处理事项 ' + pid + '</section>' }
+      sourceItems: () => [], snapshotHtml: () => '', formHtml: () => '<section class="card reporter-followups">四、待处理事项清单</section>' }
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(richSource, sandbox);
   if (options.merged) for (const name of ['planning-windows.js','report-scopes.js']) vm.runInContext(readFileSync(new URL('../web/' + name, import.meta.url),'utf8'),sandbox);
-  vm.runInContext(source.slice(0, boundary) + '\nwindow.__workbench={S,App,viewMyLine,viewPMCenter,viewPMCenterRes,viewMyProjects,submittedThisWeek,reportHistoryHtml,planningNavItems,richBinding,currentPeriod,personalPriorityCard};\n})();', sandbox);
+  vm.runInContext(source.slice(0, boundary) + '\nwindow.__workbench={S,App,viewMyLine,viewReporterForm,viewMyProjects,submittedThisWeek,reportHistoryHtml,planningNavItems,richBinding,currentPeriod,personalPriorityCard,preparePM,inlineCollaborationKey,followupDraftScope};\n})();', sandbox);
   const h = sandbox.__workbench, S = h.S;
   S.uid = 'anonymous-pm';
   S.profile = { user_id: S.uid, role: 'pm', status: 'approved', project_id: 'a', name: '匿名填报人' };
@@ -96,7 +97,7 @@ test('capturing an unchanged node does not create a dirty draft or write request
   assert.equal(h.writes.length, 0);
 });
 
-test('workbench keeps residential node analysis, limits pending work to critical sources, and preserves monthly content in history', () => {
+test('reporting keeps residential node analysis, one pending list and monthly content in history', () => {
   const h = harness();
   h.S.reports = [{ id: 1, author_id: h.S.uid, project_id: 'a', period: h.S.pmPeriod,
     node_items: [{ name: '住宅研判节点', plan: '2027-01-01', forecast: '2027-01-20', reason: '匿名原因' }],
@@ -110,7 +111,8 @@ test('workbench keeps residential node analysis, limits pending work to critical
     {source_key: 'coord:' + pid + ':report-1:coord:item-1', source_type: 'coord', title: '他人需求', what: '他人指向本人的需求', due: '', progress: ''},
     {source_key: 'plan:' + pid + ':report-1:items:item-1', source_type: 'plan', title: '当月计划', what: '不可混入待处理的月度来源', due: '', progress: ''}
   ]).concat({source_key: 'meeting:private:meeting-2', source_type: 'meeting', title: '会议要求', what: '不可混入的其他项目事项', due: '', progress: ''});
-  const res = h.viewPMCenterRes('a');
+  Object.assign(h.S,{view:'form',pmReport:h.S.reports[0]});
+  const res = h.viewReporterForm();
   assert.match(res, /workgrid onecol/); assert.match(res, /住宅研判节点/); assert.match(res, /偏差 ≥15 天/);
   const pending = h.personalPriorityCard('a');
   assert.match(pending, /<span class="rt-red"><strong>明确会议重点<\/strong><\/span>/);
@@ -118,28 +120,29 @@ test('workbench keeps residential node analysis, limits pending work to critical
   assert.doesNotMatch(pending, /新版计划事项|住宅研判节点|不可混入待处理的月度来源|不可混入的其他项目事项/);
   assert.match(h.reportHistoryHtml(h.S.reports[0]), /<strong>新版计划事项<\/strong>/);
   assert.equal(h.S.reports[0].biz.items[0].prog, '推进中');
-  assert.doesNotMatch(res, /<aside|下周必须完成|我的近期台账|需要谁协调/);
-  assert.equal((res.match(/class="card reporter-pending"/g) || []).length,1);
+  assert.doesNotMatch(res, /<aside|我的近期台账/);
+  assert.equal((res.match(/class="card reporter-followups"/g) || []).length,1);
   assert.doesNotMatch(res,/他人向我提出的需求|会议跟踪事项|personal-priority-summary/);
   h.S.pmProject = 'b';
-  const biz = h.viewPMCenter();
+  h.S.pmReport = null;
+  const biz = h.viewReporterForm();
   assert.doesNotMatch(biz, /我的模块分布/);
   const commercialPending = h.personalPriorityCard('b');
   assert.match(commercialPending, /明确会议重点|他人指向本人的需求/);assert.doesNotMatch(commercialPending,/领导交办重点/);
   assert.doesNotMatch(commercialPending, /新版计划事项|住宅研判节点|不可混入待处理的月度来源|不可混入的其他项目事项/);
-  assert.equal((biz.match(/class="card reporter-pending"/g) || []).length,1);
+  assert.equal((biz.match(/class="card reporter-followups"/g) || []).length,1);
   assert.doesNotMatch(biz,/他人向我提出的需求|会议跟踪事项|personal-priority-summary/);
   const nav = h.planningNavItems();
-  assert.equal(nav[0].k, 'center'); assert.equal(nav[1].k, 'mline');
+  assert.equal(nav[0].k, 'form'); assert.equal(nav.find(item=>item.k==='mline').group, 'projects');
 });
 
-test('merged professional personal status and workbench ignore peer disciplines, peer authors and original comprehensive reports', () => {
+test('merged professional personal status and overview ignore peer disciplines, peer authors and original comprehensive reports', async () => {
   const h = harness({merged:true}), S = h.S, period = '2026-10-12';
   const scope = {id:'anonymous-professional-scope',name:'合并住宅',anchor_project_id:'a',project_ids:['a','phase'],
     reporting_mode:'professional',effective_week:'2026-10-19'};
   S.projects.push({id:'phase',name:'原二期',project_type:'res'});
   S.pms.push({user_id:S.uid,project_id:'phase'});
-  Object.assign(S,{pmReportScope:scope,pmScopeId:scope.id,pmPeriod:period,pmLine:'工程',view:'center',reportScopes:[scope]});
+  Object.assign(S,{pmReportScope:scope,pmScopeId:scope.id,pmPeriod:period,pmLine:'工程',view:'form',reportScopes:[scope]});
   S.profile.discipline = '工程';
   function report(id,name,extra={}) {return {id,project_id:'a',period,line:'工程',report_scope_id:scope.id,
     scope_project_ids:scope.project_ids.slice(),author_id:S.uid,author_name:'原作者',submitted_at:'2026-10-13T01:00:00Z',
@@ -153,19 +156,32 @@ test('merged professional personal status and workbench ignore peer disciplines,
   assert.equal(h.submittedThisWeek('a'),false,'他专业、他人作者、旧综合或旧范围不能标记本人已报');
   let projectRow = h.viewMyProjects().split('<tr>').find(row=>row.includes('<b>合并住宅</b>'));
   assert.ok(projectRow);assert.match(projectRow,/未填报/);assert.doesNotMatch(projectRow,/badge green">已填报/);
-  let center = h.viewPMCenterRes('a');
-  assert.match(center,/尚未填报/);
+  await h.preparePM();
+  let center = h.viewReporterForm();
+  assert.match(center,/本期未提交/);
   assert.doesNotMatch(center,/其他专业已提交|本人原综合|本人原分期综合|同专业另一作者|本人另一范围|本人原分期专业/);
   assert.match(h.reportHistoryHtml(S.reports[1]),/本人原综合/,'旧综合内容仍能通过原只读历史查看');
   S.reports.push(report(17,'本人本专业当前提交'));
   assert.equal(h.submittedThisWeek('a'),true);
   projectRow = h.viewMyProjects().split('<tr>').find(row=>row.includes('<b>合并住宅</b>'));
   assert.match(projectRow,/badge green">已填报/);
-  center = h.viewPMCenterRes('a');
+  await h.preparePM();
+  center = h.viewReporterForm();
   assert.match(center,/本人本专业当前提交/);
   assert.doesNotMatch(center,/其他专业已提交|本人原综合|本人原分期综合|同专业另一作者|本人另一范围|本人原分期专业/);
   assert.equal(JSON.stringify(S.reports.slice(0,-1)),before,'展示不得更改旧报告身份、内容或来源');
   assert.deepEqual(h.writes,[]);
+});
+
+test('a collaboration member sees the current room’s official status in the merged overview', () => {
+  const h=harness({merged:true}),S=h.S;
+  Object.assign(S,{view:'form',pmLine:'工程'});
+  S.inlineCollaboration={key:h.inlineCollaborationKey(),mode:'member'};
+  S.inlineCoordination={scope:h.followupDraftScope(),status:'published',submitter:'other',report:{author_id:'other',biz:{items:[{name:'已提交计划',prog:'已完成'}]}}};
+  const html=h.viewReporterForm();
+  assert.match(html,/个人概览 <span class="chip">专业周报已提交/);
+  assert.match(html,/协同组员 · 专业周报已提交/);
+  assert.doesNotMatch(html,/本期未提交/);
 });
 
 test('filter changes preserve unsaved dates and rich notes; save includes hidden authorized drafts and retains failures', async () => {

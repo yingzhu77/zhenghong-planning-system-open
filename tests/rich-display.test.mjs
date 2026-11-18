@@ -11,9 +11,9 @@ const appSource = fs.readFileSync(path.join(project, 'web/app.js'), 'utf8');
 const bootStart = appSource.indexOf('  (async function boot() {');
 assert.ok(bootStart > 0, 'app boot boundary must exist for isolated display tests');
 const hooks = ['S', 'currentPeriod', 'riskCell', 'nextCell', 'reportSnapshotHtml', 'reportHistoryHtml',
-  'myBizLedger', 'needsFromOthers', 'needTable', 'briefRowsHtml', 'leaderPmCard', 'ceoReviewHtml',
+  'needsFromOthers', 'needTable', 'briefRowsHtml', 'leaderPmCard', 'ceoReviewHtml',
   'pzoReviewHtml', 'coordBrief', 'allCoord', 'decisionItems', 'bizLeaderCard', 'viewPMHistory',
-  'viewBoard', 'viewPres', 'viewPMCenter', 'viewPMCenterRes', 'App', 'richBinding', 'richPartialUpdate',
+  'viewBoard', 'viewPres', 'App', 'richBinding', 'richPartialUpdate',
   'briefDraftRows', 'captureBriefDrafts', 'replaceLeaderNotes'];
 
 function harness(options = {}) {
@@ -129,11 +129,7 @@ test('commercial report, ledger projections and leader cards preserve item-speci
   const html = h.reportSnapshotHtml(r);
   assert.match(html, /<strong>相同文字<\/strong>/);
   assert.match(html, /<span class="rt-red">相同文字<\/span>/);
-  const group = h.myBizLedger('com').byPeriod[r.period];
-  assert.equal(h.rt.field(group.o.items[0], 'name'), '<strong>相同文字</strong>');
-  assert.equal(h.rt.field(group.o.items[1], 'name'), '<span class="rt-red">相同文字</span>');
-  assert.match(html, /<strong>进展二<\/strong>/, 'saved report display retains item-specific progress formatting');
-  assert.equal(h.rt.field(group.o.items[1], 'prog'), '<strong>进展二</strong>');
+  assert.match(html, /<strong>相同文字<\/strong>[^<]*(?:<[^>]+>[^<]*)*?进展一[\s\S]*?<span class="rt-red">相同文字<\/span>[\s\S]*?<strong>进展二<\/strong>/, 'saved report display retains each item’s own formatting and progress');
   assert.match(h.bizLeaderCard(h.S.projects[1]), /<span class="rt-red">第一行<br>第二行<\/span>/);
   assert.match(h.viewPMHistory(), /<span class="rt-red">移交资料<\/span>/);
 });

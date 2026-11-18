@@ -13,7 +13,9 @@ export const MAX_DRAFT_ATTACHMENTS = 100;
 export const MAX_DRAFT_ATTACHMENT_BYTES = 200 * 1024 * 1024;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const columns = 'a.id,a.project_id,a.period,a.line,a.owner_id,a.name,a.mime,a.size,a.created_at,a.report_scope_id,a.scope_project_ids,a.scope_week,EXISTS(SELECT 1 FROM public.report_attachment_links ref_link WHERE ref_link.attachment_id=a.id) AS referenced';
+const columns = `a.id,a.project_id,a.period,a.line,a.owner_id,a.name,a.mime,a.size,a.created_at,a.report_scope_id,a.scope_project_ids,a.scope_week,
+  (EXISTS(SELECT 1 FROM public.report_attachment_links ref_link WHERE ref_link.attachment_id=a.id)
+    OR app_private.owner_has_withdrawn_report_attachment(a.id)) AS referenced`;
 const inline = mime => mime.startsWith('image/') || mime === 'application/pdf';
 function metadata(row) { return { ...row, referenced: !!row.referenced, url: '/api/report-attachments/' + row.id, inline: inline(row.mime) }; }
 function storagePath(uploadDir, id, key) {
@@ -45,7 +47,7 @@ async function approvedProfile(client, userId,projectId) {
   return profile;
 }
 async function requireProject(client, pid) {
-  const project = (await client.query('SELECT id,project_type FROM public.projects WHERE id=$1', [pid])).rows[0];
+  const project = (await client.query("SELECT id,project_type,to_jsonb(j)->'reporting_professions' AS reporting_professions FROM public.projects j WHERE id=$1", [pid])).rows[0];
   if (!project) throw new HttpError(403, '未分配此项目或无权访问');
   return project;
 }
@@ -66,7 +68,7 @@ export async function uploadReportAttachment(pool, user, uploadDir, input, body,
       const profile = await approvedProfile(client, user.id,pid);
       if (profile.role !== 'pm') throw new HttpError(403, '仅填报人可上传本人的报告附件');
       const project = await requireProject(client, pid);
-      if (project.project_type === 'com') resolveWritableBusinessLine(profile, line, pid);
+      if (project.project_type === 'com' && !project.reporting_professions?.includes(line)) resolveWritableBusinessLine(profile, line, pid);
       const allowed = (await client.query('SELECT app_private.can_write_report($1,$2,$3) AS allowed', [pid,line,user.id])).rows[0]?.allowed;
       if (!allowed) throw new HttpError(403, '只能上传本人获授权项目和填报模块的附件');
       const scopeRow = { project_id: pid, line, ...(input.report_scope_id ? { report_scope_id: text(input.report_scope_id,'填报范围',200) } : {}) };
